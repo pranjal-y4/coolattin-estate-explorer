@@ -1,0 +1,570 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+/* ── Historic Landscape page — scoped hp- prefix ───────────────────────────── */
+
+.hp-band-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: rgba(255,255,255,0.72);
+  text-decoration: none;
+  margin-bottom: 10px;
+  transition: color .15s;
+}
+.hp-band-back:hover { color: #fff; }
+
+.hp-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 320px) minmax(420px, 1fr) minmax(320px, 360px);
+  height: calc(100vh - 132px);
+  min-height: 560px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 14%, rgba(176,141,87,.10), transparent 28%),
+    linear-gradient(180deg, #fbfaf7 0%, #f2ede3 100%);
+}
+
+/* LEFT PANEL */
+.hp-left {
+  background: var(--surface);
+  border-right: 1px solid var(--line-soft);
+  overflow-y: auto;
+  padding: 1.25rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+.hp-control-card {
+  background: linear-gradient(180deg, #fff, #fbfaf7);
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 10px 28px rgba(15,23,42,.05);
+}
+.hp-select {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid #d8d2c8;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 13px;
+  font-family: var(--font-ui);
+}
+.hp-select:focus {
+  outline: 2px solid rgba(35,75,58,.18);
+  border-color: var(--forest);
+}
+
+/* MAP CENTER */
+.hp-map-wrap {
+  position: relative;
+  min-width: 0;
+}
+#heritageMap {
+  width: 100%;
+  height: 100%;
+  background: #e8e0d0;
+}
+#hp-layer-switcher-container {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 850;
+  pointer-events: auto;
+}
+.hp-map-help {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 650;
+  max-width: 360px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.72);
+  background: rgba(255,255,255,.88);
+  box-shadow: 0 14px 34px rgba(15,23,42,.12);
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.45;
+  backdrop-filter: blur(8px);
+}
+
+/* RIGHT PANEL */
+.hp-right {
+  background: var(--surface);
+  border-left: 1px solid var(--line-soft);
+  overflow-y: auto;
+  padding: 1.25rem 1rem;
+}
+
+/* PHOTOS SECTION — below the 3-col layout */
+.hp-photos-section {
+  background: var(--bg);
+  border-top: 1px solid var(--line-soft);
+  padding: 1.5rem;
+}
+
+/* ── Left panel internals ─────────────────────────────────────────────── */
+
+.hp-townland-name {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1.2;
+  margin: 4px 0 6px;
+}
+
+.hp-radius-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hp-radio-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  color: var(--ink);
+  cursor: pointer;
+  padding: 5px 8px;
+  border-radius: 6px;
+  transition: background .12s;
+}
+.hp-radio-label:hover { background: rgba(35,75,58,.06); }
+.hp-radio-label input[type="radio"] { accent-color: var(--forest); }
+
+.hp-layer-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hp-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  color: var(--ink);
+  cursor: pointer;
+  padding: 5px 8px;
+  border-radius: 6px;
+  transition: background .12s;
+}
+.hp-toggle-label:hover { background: rgba(35,75,58,.06); }
+.hp-toggle-label input[type="checkbox"] { accent-color: var(--forest); }
+.hp-toggle-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.hp-gmaps-btns { display: flex; flex-direction: column; gap: 6px; }
+.hp-gmaps-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  background: rgba(176,141,87,.08);
+  border: 1px solid rgba(176,141,87,.28);
+  border-radius: 8px;
+  color: #7a5e2a;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background .15s;
+}
+.hp-gmaps-btn:hover { background: rgba(176,141,87,.16); }
+.hp-coordinate-readout {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #334155;
+  line-height: 1.45;
+}
+.hp-coordinate-readout code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+/* ── Right panel internals ────────────────────────────────────────────── */
+
+.hp-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+  color: var(--ink-muted, #64748b);
+  gap: 12px;
+  padding: 2rem 1rem;
+}
+.hp-empty-icon { font-size: 40px; line-height: 1; }
+
+.hp-stat-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+.hp-stat-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.hp-stat-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink);
+}
+.hp-stat-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.hp-stat-count {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--forest);
+}
+
+.hp-narrative {
+  background: rgba(35,75,58,.06);
+  border-left: 3px solid var(--forest);
+  padding: 10px 12px;
+  font-size: 13.5px;
+  color: var(--ink);
+  border-radius: 0 6px 6px 0;
+  line-height: 1.6;
+  margin: 10px 0;
+}
+
+.hp-feature-card {
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  padding: 14px;
+}
+.hp-feature-type {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1.1px;
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+.hp-feature-name {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1.25;
+  margin-bottom: 8px;
+}
+.hp-feature-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--ink-muted, #64748b);
+  margin-bottom: 12px;
+}
+.hp-feature-meta strong { color: var(--ink); }
+.hp-feature-notes {
+  font-size: 12.5px;
+  color: var(--ink);
+  line-height: 1.55;
+  max-height: 120px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+}
+.hp-feature-links { display: flex; flex-direction: column; gap: 6px; }
+
+/* ── Photos section ────────────────────────────────────────────────────── */
+
+.hp-photos-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.hp-photo-card {
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+  transition: box-shadow .15s;
+}
+.hp-photo-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.10); }
+.hp-photo-img {
+  width: 100%;
+  aspect-ratio: 4/3;
+  object-fit: cover;
+  display: block;
+}
+.hp-photo-body {
+  padding: 8px 10px;
+}
+.hp-photo-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.4;
+  margin-bottom: 3px;
+}
+.hp-photo-caption {
+  font-size: 11px;
+  color: var(--ink-muted, #64748b);
+  line-height: 1.4;
+}
+
+/* ── Loading overlay ─────────────────────────────────────────────────── */
+.hp-loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(247,244,238,.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 900;
+  backdrop-filter: blur(2px);
+}
+.hp-loading-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--forest);
+  background: var(--surface);
+  padding: 14px 22px;
+  border-radius: 10px;
+  border: 1px solid var(--line-soft);
+  box-shadow: 0 4px 20px rgba(0,0,0,.08);
+}
+@keyframes hp-spin { to { transform: rotate(360deg); } }
+.hp-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2.5px solid rgba(35,75,58,.2);
+  border-top-color: var(--forest);
+  border-radius: 50%;
+  animation: hp-spin .7s linear infinite;
+}
+
+/* ── No-selection state ───────────────────────────────────────────────── */
+.hp-no-sel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+  padding: 3rem 2rem;
+  gap: 14px;
+  color: var(--ink-muted, #64748b);
+  pointer-events: none;
+}
+.hp-no-sel-icon {
+  font-size: 3rem;
+  line-height: 1;
+  opacity: .5;
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────── */
+@media (max-width: 960px) {
+  .hp-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 400px auto;
+    height: auto;
+  }
+  .hp-left, .hp-right { overflow: visible; height: auto; }
+}
+</style>
+
+<!-- BAND HEADER -->
+<section class="band" style="padding: 2rem 0 1.75rem;">
+  <div class="container">
+    <a id="hp-back-link" href="/" class="hp-band-back">← Back to Townland Records</a>
+    <h1 class="band-title" style="margin-bottom: 4px;">Historic Landscape</h1>
+    <p class="band-sub">Explore the wider historic landscape of a Coolattin townland</p>
+  </div>
+</section>
+
+<!-- 3-COLUMN LAYOUT -->
+<div class="hp-layout">
+
+  <!-- ── LEFT: Filters & Controls ──────────────────────────────────── -->
+  <aside class="hp-left" aria-label="Filters and controls">
+
+    <!-- Townland summary -->
+    <div class="hp-control-card">
+      <div class="panel-title">Selected Townland</div>
+      <label for="hp-townland-select" class="note" style="display:block;margin:6px 0 0;">
+        Choose a townland, or click one of the outlines on the map.
+      </label>
+      <select id="hp-townland-select" class="hp-select" aria-label="Select a townland">
+        <option value="">Select a townland...</option>
+      </select>
+      <div id="hp-townland-name" class="hp-townland-name" aria-live="polite">No townland selected</div>
+      <div id="hp-county-label" style="font-size:11px;text-transform:uppercase;letter-spacing:1.1px;color:var(--brass);font-weight:600;display:none;">County Wicklow</div>
+      <p id="hp-no-sel-hint" class="note" style="margin:8px 0 4px;">
+        Start by selecting a townland above.
+      </p>
+      <a href="/" class="btn ghost" style="width:100%;text-align:center;margin-top:4px;font-size:13px;">← Return to Home</a>
+    </div>
+
+    <!-- Radius selector -->
+    <div id="hp-radius-section" class="hp-control-card" style="display:none;" aria-label="Nearby radius">
+      <div class="panel-title">Nearby Radius</div>
+      <div class="hp-radius-group" role="radiogroup" aria-label="Select search radius">
+        <label class="hp-radio-label">
+          <input type="radio" name="hp-radius" value="0">
+          Inside townland only
+        </label>
+        <label class="hp-radio-label">
+          <input type="radio" name="hp-radius" value="2000" checked>
+          Inside + 2 km
+        </label>
+        <label class="hp-radio-label">
+          <input type="radio" name="hp-radius" value="5000">
+          Inside + 5 km
+        </label>
+      </div>
+    </div>
+
+    <!-- Layer toggles -->
+    <div id="hp-layers-section" class="hp-control-card" style="display:none;" aria-label="Heritage layers">
+      <div class="panel-title">Heritage Layers</div>
+      <div class="hp-layer-toggles">
+        <label class="hp-toggle-label">
+          <input type="checkbox" class="hp-layer-cb" data-layer="asi" checked aria-label="Archaeological Sites">
+          <span class="hp-toggle-dot" style="background:#9c8a6e;"></span>
+          Archaeological Sites
+        </label>
+        <label class="hp-toggle-label">
+          <input type="checkbox" class="hp-layer-cb" data-layer="holywells" checked aria-label="Holy Wells">
+          <span class="hp-toggle-dot" style="background:#3a8fb5;"></span>
+          Holy Wells
+        </label>
+        <label class="hp-toggle-label">
+          <input type="checkbox" class="hp-layer-cb" data-layer="monuments" checked aria-label="Monuments to Visit">
+          <span class="hp-toggle-dot" style="background:#7e60a0;"></span>
+          Monuments to Visit
+        </label>
+      </div>
+      <button id="hp-reset-btn" class="btn ghost" style="width:100%;margin-top:10px;font-size:13px;">Reset Filters</button>
+    </div>
+
+    <!-- Google Maps links for selected townland -->
+    <div id="hp-gmaps-section" class="hp-control-card" style="display:none;" aria-label="Open in Google Maps">
+      <div class="panel-title">Open in Google Maps</div>
+      <div id="hp-coordinate-readout" class="hp-coordinate-readout"></div>
+      <div class="hp-gmaps-btns">
+        <a id="hp-gmaps-view" href="#" target="_blank" rel="noopener noreferrer" class="hp-gmaps-btn">
+          <span>View Exact Coordinates</span>
+          <span aria-hidden="true">↗</span>
+        </a>
+        <a id="hp-gmaps-directions" href="#" target="_blank" rel="noopener noreferrer" class="hp-gmaps-btn">
+          <span>Get Directions</span>
+          <span aria-hidden="true">↗</span>
+        </a>
+        <a id="hp-gmaps-sv" href="#" target="_blank" rel="noopener noreferrer" class="hp-gmaps-btn">
+          <span>Street View</span>
+          <span aria-hidden="true">↗</span>
+        </a>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ── CENTER: Map ────────────────────────────────────────────────── -->
+  <div class="hp-map-wrap" aria-label="Historic landscape map">
+    <div id="heritageMap"></div>
+    <div id="hp-layer-switcher-container"></div>
+    <div id="hp-map-help" class="hp-map-help">
+      All townlands are visible by default. Use the map format buttons to switch Standard, Satellite, or Terrain, then click any outline to focus a townland.
+    </div>
+    <div id="hp-loading" class="hp-loading-overlay" style="display:none;" role="status" aria-live="polite">
+      <div class="hp-loading-inner">
+        <span class="hp-spinner" aria-hidden="true"></span>
+        Loading heritage data…
+      </div>
+    </div>
+    <!-- Legacy no-townland state; kept hidden because the page now starts in all-townlands mode. -->
+    <div id="hp-map-no-sel" class="hp-no-sel" style="display:none;position:absolute;inset:0;background:rgba(247,244,238,.88);z-index:500;">
+      <div class="hp-no-sel-icon" aria-hidden="true">🗺</div>
+      <p style="font-size:15px;font-weight:600;color:var(--ink);margin:0;">No townland selected</p>
+      <p class="note" style="max-width:300px;margin:0;">
+        Choose a townland from the selector on the left, or click one of the townland outlines on the map.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── RIGHT: Contextual panel ───────────────────────────────────── -->
+  <aside class="hp-right" aria-label="Heritage context" aria-live="polite">
+
+    <!-- Default empty state -->
+    <div id="hp-right-empty" class="hp-empty-state">
+      <div class="hp-empty-icon" aria-hidden="true">🏛</div>
+      <p style="font-size:14px;font-weight:600;color:var(--ink);margin:0;">Historic Landscape</p>
+      <p class="note" style="margin:0;">Select a townland to see heritage context for this place.</p>
+    </div>
+
+    <!-- Townland summary (shown when townland is selected, no feature clicked) -->
+    <div id="hp-right-townland" style="display:none;">
+      <div class="panel-title" id="hp-right-tl-title">Townland Overview</div>
+      <div id="hp-right-tl-name" class="hp-townland-name" style="margin-bottom:6px;"></div>
+      <div id="hp-narrative" class="hp-narrative" style="display:none;"></div>
+      <div id="hp-stat-row" class="hp-stat-row"></div>
+      <div style="margin-top:14px;" id="hp-right-gmaps-links"></div>
+      <div style="margin-top:14px;">
+        <a id="hp-right-census-link" href="#" class="btn soft" style="width:100%;text-align:center;font-size:13px;display:block;">View Census Data</a>
+        <a id="hp-right-home-link" href="#" class="btn ghost" style="width:100%;text-align:center;font-size:13px;display:block;margin-top:6px;">← Family Records</a>
+      </div>
+    </div>
+
+    <!-- Feature detail (shown when a heritage marker is clicked) -->
+    <div id="hp-right-feature" style="display:none;">
+      <button id="hp-feature-back" class="btn ghost" style="font-size:12px;margin-bottom:12px;padding:5px 10px;">← Back to Townland</button>
+      <div id="hp-feature-content"></div>
+    </div>
+
+  </aside>
+</div>
+
+<!-- PHOTOS SECTION -->
+<div id="hp-photos-section" class="hp-photos-section" style="display:none;">
+  <div class="container" style="max-width:1400px;">
+    <div class="panel-title" style="margin-bottom:4px;">Area Photos</div>
+    <p class="note" id="hp-photos-sub" style="margin-bottom:12px;"></p>
+    <div id="hp-photos-grid" class="hp-photos-grid">
+      <p class="note" id="hp-photos-loading">Searching for photos of this area…</p>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/heritage.js') }}?v=3"></script>
+{% endblock %}

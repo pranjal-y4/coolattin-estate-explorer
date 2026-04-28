@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 app.py)",
+      "Bash(python3 -m py_compile *)",
+      "Bash(python3 -c *)",
+      "Bash(python3 backend/jobs/*.py)",
+      "Bash(python3 scripts/*.py)",
+      "Bash(flask --app app run *)",
+      "Bash(pip install *)",
+      "Bash(pip3 install *)",
+      "Bash(pip show *)",
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git add *)",
+      "Bash(find . -type f *)",
+      "Bash(grep -r * --include=*.py *)",
+      "Bash(ls *)"
+    ],
+    "deny": [
+      "Bash(git push --force *)",
+      "Bash(rm -rf *)",
+      "Bash(DROP *)",
+      "Bash(sqlite3 coolattin.db *)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/py_lint.py"
+          }
+        ]
+      }
+    ]
+  }
+}

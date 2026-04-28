@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  @keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
+</style>
+<section class="section">
+  <div class="container" style="max-width:1180px;">
+
+    <h1 class="section-title" style="margin-bottom:6px;">Ask the Archive</h1>
+    <p class="section-sub" style="max-width:920px;">
+      Ask in plain English. The page shows the actual database result first, then the configured
+      OpenRouter LLM rewrite when the connection is available.
+    </p>
+
+    <!-- LLM status badge -->
+    <div id="llmStatus" style="margin-top:8px;min-height:24px;"></div>
+
+    <!-- Input panel -->
+    <div class="panel soft" style="margin-top:14px;padding:18px;">
+      <label for="askQuestion" style="display:block;font-weight:700;color:#0f172a;margin-bottom:8px;">
+        Your question
+      </label>
+      <textarea id="askQuestion" rows="3"
+        placeholder="e.g. how many people emigrated from this townland?"
+        style="width:100%;resize:vertical;padding:12px 14px;border:1px solid #d8d2c8;border-radius:10px;background:#fff;color:#0f172a;font-size:14px;"></textarea>
+
+      <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:12px;align-items:end;">
+        <div>
+          <label for="askTownlandHint" style="display:block;font-size:12px;font-weight:700;color:#475467;margin-bottom:6px;">
+            Townland context hint (optional)
+          </label>
+          <input id="askTownlandHint" type="text" placeholder="e.g. BALLINACOR"
+            autocomplete="off"
+            style="width:100%;padding:10px 12px;border:1px solid #d8d2c8;border-radius:10px;background:#fff;color:#0f172a;" />
+          <div id="askTownlandSuggest" style="display:none;margin-top:6px;gap:6px;flex-wrap:wrap;"></div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:end;">
+          <button id="askSubmit" class="btn btn-primary" style="min-width:120px;">Ask</button>
+        </div>
+      </div>
+
+      <!-- Example questions -->
+      <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap;">
+        <span style="font-size:11px;color:#64748b;align-self:center;font-weight:600;">Examples:</span>
+        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="how many people have emigrated from this townland?">Townland emigration count</button>
+        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="how many people have emigrated from 20km around this townland?">20 km radius</button>
+        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="how many people in total have emigrated?">Total emigration</button>
+        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="how many parishes are there and what all people have been in this townland">Parishes + people</button>
+        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="how many evictions happened per year?">Evictions by year</button>
+        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="what was the population of this townland in 1851?">Census 1851</button>
+        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="list all emigrants with their ship names">Emigrants + ships</button>
+        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="show me the estate summary statistics">Estate summary</button>
+      </div>
+    </div>
+
+    <!-- Status + progress -->
+    <div id="askStatus" style="margin-top:10px;font-size:12px;color:#64748b;font-weight:600;"></div>
+    <div id="askProgress" style="margin-top:6px;display:grid;gap:4px;"></div>
+    <div id="askError"
+         style="margin-top:8px;display:none;padding:10px 12px;border-radius:10px;background:#fff1f2;border:1px solid #fecdd3;color:#9f1239;font-size:13px;"></div>
+
+    <!-- Result panel -->
+    <section id="askResult" class="panel" style="display:none;margin-top:16px;padding:18px;">
+
+      <!-- Header -->
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:20px;color:#0f172a;">Result</h2>
+        <a id="askPdfLink" class="btn btn-ghost" href="#" target="_blank" rel="noopener" style="display:none;">
+          ↓ Download PDF
+        </a>
+      </div>
+
+      <!-- Actual data answer -->
+      <div style="margin-top:12px;">
+        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">Actual Data Answer</div>
+        <div id="askActualAnswer" style="margin-top:4px;color:#0f172a;font-size:16px;font-weight:700;"></div>
+      </div>
+
+      <!-- LLM answer -->
+      <div style="margin-top:12px;">
+        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">LLM Rephrased Answer</div>
+        <div id="askLlmAnswer" style="margin-top:6px;padding:12px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:10px;color:#14532d;font-size:14px;line-height:1.6;"></div>
+      </div>
+
+      <!-- LLM connection metadata -->
+      <div style="margin-top:10px;">
+        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">LLM Connection + Data Workflow</div>
+        <div id="askLlmMeta" style="margin-top:6px;display:grid;gap:5px;font-size:12px;color:#475467;"></div>
+      </div>
+
+      <!-- Townland resolution -->
+      <div id="askTownlandResolution" style="display:none;margin-top:10px;"></div>
+
+      <!-- Warnings -->
+      <div id="askWarnings" style="margin-top:8px;"></div>
+
+      <!-- Generated SQL -->
+      <div style="margin-top:14px;">
+        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">Generated Queries</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;">
+          <div style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+            <div style="padding:7px 10px;background:#f8fafc;font-size:11px;font-weight:700;color:#334155;">SQLite — Local Database</div>
+            <pre id="askSqliteQuery" style="margin:0;padding:10px;background:#0f172a;color:#e2e8f0;overflow:auto;font-size:11px;line-height:1.5;max-height:180px;"></pre>
+          </div>
+          <div style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+            <div style="padding:7px 10px;background:#f8fafc;font-size:11px;font-weight:700;color:#334155;">PostgreSQL — VRTI Warehouse Model</div>
+            <pre id="askVrtiPgQuery" style="margin:0;padding:10px;background:#111827;color:#e5e7eb;overflow:auto;font-size:11px;line-height:1.5;max-height:180px;"></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- VRTI Townland Context -->
+      <div id="askKgBlock" style="margin-top:14px;display:none;">
+        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">VRTI Townland Context</div>
+        <div id="askKgContent" style="margin-top:6px;display:grid;gap:6px;"></div>
+      </div>
+
+      <!-- Local DB table -->
+      <div style="margin-top:14px;">
+        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">Processed Table — Local Database</div>
+        <div style="margin-top:6px;overflow:auto;border:1px solid #e2e8f0;border-radius:10px;max-height:320px;">
+          <table id="askTable" style="width:100%;border-collapse:collapse;background:#fff;"></table>
+        </div>
+      </div>
+
+      <!-- VRTI graph table -->
+      <div style="margin-top:14px;">
+        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">Processed Table — VRTI Graph</div>
+        <div style="margin-top:6px;overflow:auto;border:1px solid #e2e8f0;border-radius:10px;max-height:240px;">
+          <table id="askVrtiTable" style="width:100%;border-collapse:collapse;background:#fff;"></table>
+        </div>
+      </div>
+
+      <!-- Summary -->
+      <div style="margin-top:14px;">
+        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">Summarised Output</div>
+        <div id="askSummary" style="margin-top:6px;padding:12px 14px;border:1px solid #dbeafe;background:#eff6ff;border-radius:10px;color:#1e3a8a;font-size:13px;line-height:1.6;"></div>
+      </div>
+
+      <!-- Supporting context -->
+      <div id="askSupportContextBlock" style="display:none;margin-top:14px;">
+        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">Supporting Context Used By LLM</div>
+        <div id="askSupportContext" style="margin-top:6px;display:grid;gap:6px;"></div>
+      </div>
+
+    </section>
+  </div>
+</section>
+
+<script src="{{ url_for('static', filename='js/ask.js') }}?v=7"></script>
+{% endblock %}

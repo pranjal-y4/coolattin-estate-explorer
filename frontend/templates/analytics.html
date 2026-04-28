@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="section">
+  <div class="container">
+    <h1 class="section-title">Analytics</h1>
+    <p class="section-sub">
+      This dashboard is now functional. We can progressively add charts.
+    </p>
+
+    <div class="kpi-grid" style="margin-top:18px;">
+      <div class="kpi-card">
+        <div class="kpi-value">{{ kpis.townlands }}</div>
+        <div class="kpi-label">Townlands Loaded</div>
+        <div class="kpi-hint">From townlands.json</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-value">{{ kpis.tenancies_rows }}</div>
+        <div class="kpi-label">Tenancy Rows</div>
+        <div class="kpi-hint">From tenancies.csv</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-value">{{ kpis.evictions_rows }}</div>
+        <div class="kpi-label">Eviction Rows</div>
+        <div class="kpi-hint">From evictions_records.csv</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-value">{{ kpis.emigrations_rows }}</div>
+        <div class="kpi-label">Emigration Rows</div>
+        <div class="kpi-hint">From emigrations_records.csv</div>
+      </div>
+    </div>
+
+    <div class="kpi-grid" style="margin-top:14px;">
+      <div class="kpi-card">
+        <div class="kpi-value">{{ kpis.records_matched }}</div>
+        <div class="kpi-label">Fuzzy-Matched Records</div>
+        <div class="kpi-hint">Townland matched ≥ threshold</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-value">{{ kpis.records_unmatched }}</div>
+        <div class="kpi-label">Unmatched Records</div>
+        <div class="kpi-hint">Needs cleaning or lower threshold</div>
+      </div>
+    </div>
+
+    <div class="section-text" style="margin-top:18px;">
+      Next we can add:
+      <ul>
+        <li>Top townlands by activity (tenancies/evictions/emigrations)</li>
+        <li>Top surnames per townland</li>
+        <li>Timeline charts (if year/date columns exist)</li>
+        <li>Destination maps for emigration (if destination present)</li>
+      </ul>
+    </div>
+
+  </div>
+</section>
+
+{% endblock %}

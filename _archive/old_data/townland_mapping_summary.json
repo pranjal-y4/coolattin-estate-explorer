@@ -1,0 +1,51 @@
+{
+  "generated_date": "2026-03-16 16:45:22",
+  "geojson_file": "/Users/pranjal/Desktop/Masters/Dissertation/Coolattin-app/coolattin/static/data/townlands.json",
+  "geojson_townland_count": 152,
+  "source_files": {
+    "unified_census.csv": {
+      "record_count": 165,
+      "townland_count": 143,
+      "columns_used": [
+        "Townland"
+      ]
+    },
+    "aggregated_records.csv": {
+      "record_count": 15077,
+      "townland_count": 1133,
+      "columns_used": [
+        "townland_clean",
+        "townland_norm"
+      ]
+    },
+    "tenancies.csv": {
+      "record_count": 4695,
+      "townland_count": 380,
+      "columns_used": [
+        "townland",
+        "townland_clean"
+      ]
+    },
+    "wicklow-census-data.csv": {
+      "record_count": 1539,
+      "townland_count": 1344,
+      "columns_used": [
+        "Townland",
+        "Townland_Name"
+      ]
+    },
+    "workhouse_data_final.xlsx": {
+      "record_count": 0,
+      "townland_count": 0,
+      "columns_used": [
+        "Townland"
+      ]
+    }
+  },
+  "consolidated_summary": {
+    "total_unique_townlands": 2491,
+    "exact_matches": 410,
+    "fuzzy_matches": 311,
+    "unmatched": 1770
+  }
+}

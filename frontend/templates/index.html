@@ -1,0 +1,447 @@
+{# coolattin/templates/index.html #}
+{% extends "base.html" %}
+{% block content %}
+
+<section class="hero" id="home">
+  <!-- YouTube video background (plays from 2:26 to end, muted) -->
+  <div class="hero-video-bg">
+    <div id="yt-hero-bg"></div>
+  </div>
+  <div class="hero-video-overlay"></div>
+
+  <!-- Centred text overlay only — no widgets -->
+  <div class="hero-centre">
+    <div class="hero-eyebrow">
+      <span class="hero-dot"></span>
+      County Wicklow · Coolattin Estate
+    </div>
+    <h1 class="hero-title" data-i18n="heroTitle">
+      Discover Your Irish Ancestry<br>Through the Coolattin Estate Records
+    </h1>
+    <p class="hero-subtitle" data-i18n="heroSubtitle">
+      Explore a comprehensive genealogical archive spanning tenant histories, landholdings,
+      evictions, and assisted emigration records — brought together with modern geospatial
+      alignment for meaningful exploration.
+    </p>
+    <div class="hero-actions">
+      <a class="btn btn-primary hero-btn-primary" href="#explore">
+        <span class="icon">🔎</span>
+        <span data-i18n="exploreOnMap">Explore on the Map</span>
+      </a>
+      <a class="btn hero-btn-ghost" href="{{ url_for('main.about') }}" data-i18n="learnMore">Learn More</a>
+    </div>
+  </div>
+
+  <!-- Scroll indicator -->
+  <div class="hero-scroll-hint">
+    <svg width="20" height="20" fill="none" stroke="rgba(255,255,255,0.55)" stroke-width="2" viewBox="0 0 24 24">
+      <path d="M12 5v14M5 12l7 7 7-7"/>
+    </svg>
+  </div>
+</section>
+
+<!-- ── Photo strip + record mini-cards (below the fold) ── -->
+<section class="section section-below-hero">
+  <div class="container" style="max-width:960px;">
+    <!-- Wicklow photo strip -->
+    <div class="photo-strip" style="margin-bottom:40px;">
+      <a class="photo" href="https://en.wikipedia.org/wiki/County_Wicklow" target="_blank" rel="noreferrer">
+        <img loading="lazy" src="{{ url_for('static', filename='images/wick1.jpg') }}" alt="Wicklow landscape" />
+      </a>
+      <a class="photo" href="https://en.wikipedia.org/wiki/Wicklow_Mountains" target="_blank" rel="noreferrer">
+        <img loading="lazy" src="{{ url_for('static', filename='images/wick2.jpg') }}" alt="Wicklow Mountains" />
+      </a>
+      <a class="photo" href="https://en.wikipedia.org/wiki/Glendalough" target="_blank" rel="noreferrer">
+        <img loading="lazy" src="{{ url_for('static', filename='images/wick1.jpg') }}" alt="Glendalough" />
+      </a>
+    </div>
+
+    <!-- Record type mini-cards -->
+    <div class="hero-cards">
+      <div class="mini-card">
+        <div class="mini-icon blue">📜</div>
+        <div>
+          <div class="mini-title" data-i18n="estateRecords">Estate Records</div>
+          <div class="mini-desc" data-i18n="estateRecordsDesc">Tenant lists, leases, and property records across 18th–19th centuries.</div>
+        </div>
+      </div>
+      <div class="mini-card">
+        <div class="mini-icon amber">🧳</div>
+        <div>
+          <div class="mini-title" data-i18n="emigrationRecords">Emigration Records</div>
+          <div class="mini-desc" data-i18n="emigrationRecordsDesc">Assisted emigration documents tracking families who left for new opportunities.</div>
+        </div>
+      </div>
+      <div class="mini-card">
+        <div class="mini-icon rose">🏠</div>
+        <div>
+          <div class="mini-title" data-i18n="evictionRecords">Eviction Records</div>
+          <div class="mini-desc" data-i18n="evictionRecordsDesc">Historical documentation of evictions and disputes during challenging times.</div>
+        </div>
+      </div>
+      <div class="mini-card">
+        <div class="mini-icon" style="background:#f3e8ff; color:#6b21a8;">🏥</div>
+        <div>
+          <div class="mini-title" data-i18n="workhouseRecords">Workhouse Records</div>
+          <div class="mini-desc" data-i18n="workhouseRecordsDesc">Workhouse admission and discharge records linked by name and electoral division context.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" style="padding-top:0;">
+  <div class="container" style="max-width:900px;">
+    <h2 class="section-title" style="text-align:center; margin-bottom:40px;" data-i18n="understandingRecords">Understanding the Records</h2>
+    
+    <div class="cards-3">
+      <article class="record-card">
+        <div class="record-head">
+          <div class="record-title" data-i18n="estateTenancyRecords">Estate / Tenancy Records</div>
+          <span class="tag blue">1841–1886</span>
+        </div>
+        <p class="record-desc" data-i18n="estateTenancyRecordsDesc">Estate and tenancy records document the relationship between landlords and tenants across the Fitzwilliam estate in County Wicklow. These records include tenant lists showing the head of household, townland location, landholding size, and rental terms.</p>
+        <div class="record-meta">
+          <div><span data-i18n="source">Source:</span> Fitzwilliam Papers</div>
+          <div><span data-i18n="keyDetails">Key Details:</span> <span data-i18n="keyDetailsNames">Names, townlands, land size, rent amounts</span></div>
+        </div>
+      </article>
+
+      <article class="record-card">
+        <div class="record-head">
+          <div class="record-title" data-i18n="evictionRecordsTitle">Eviction Records</div>
+          <span class="tag rose">1845–1860</span>
+        </div>
+        <p class="record-desc" data-i18n="evictionRecordsDesc2">Eviction records (also called Ejectment Books) document tenants who failed to pay their rent and faced the threat of losing their homes. These records include Notices to Quit, court proceedings at Tinahely Court House, and details of arrears owed.</p>
+        <div class="record-meta">
+          <div><span data-i18n="source">Source:</span> Fitzwilliam Papers MS 4972</div>
+          <div><span data-i18n="keyDetails">Key Details:</span> <span data-i18n="keyDetailsArrears">Arrears amounts, court dates, outcomes</span></div>
+        </div>
+      </article>
+
+      <article class="record-card">
+        <div class="record-head">
+          <div class="record-title" data-i18n="emigrationRecordsTitle">Emigration Records</div>
+          <span class="tag amber">1847–1856</span>
+        </div>
+        <p class="record-desc" data-i18n="emigrationRecordsDesc2">Emigration records document the assisted migration scheme operated by the Fitzwilliam estate during and after the Great Famine. These records include names, ages, family relationships, ship names, departure dates, and arrival ports in Canada.</p>
+        <div class="record-meta">
+          <div><span data-i18n="source">Source:</span> Fitzwilliam Papers MS 4974-5</div>
+          <div><span data-i18n="keyDetails">Key Details:</span> <span data-i18n="keyDetailsShip">Ship names, departure/arrival dates, destinations</span></div>
+        </div>
+      </article>
+    </div>
+
+    <div style="margin-top:24px;">
+      <article class="record-card" style="max-width:700px; margin:0 auto;">
+        <div class="record-head">
+          <div class="record-title" data-i18n="workhouseRecordsTitle">Workhouse Records</div>
+          <span class="tag blue">1840s–1900s</span>
+        </div>
+        <p class="record-desc" data-i18n="workhouseRecordsDesc2">Workhouse records document individuals and families who sought refuge in the local workhouse (the "Poor House") during times of extreme poverty, particularly during and after the Great Famine. These records include admissions, births, deaths, and discharges from the workhouse.</p>
+        <div class="record-meta">
+          <div><span data-i18n="source">Source:</span> National Archives, Workhouse Registers</div>
+          <div><span data-i18n="keyDetails">Key Details:</span> <span data-i18n="keyDetailsAdmission">Admission dates, family connections, outcomes</span></div>
+        </div>
+      </article>
+    </div>
+
+    <p class="section-text" style="margin-top:40px; text-align:center;" data-i18n="recordsTogether">
+      Together, these records provide a comprehensive picture of life in County Wicklow during one of Ireland's most turbulent periods.
+    </p>
+  </div>
+</section>
+
+<section class="section" id="about-teaser">
+  <div class="container panel soft" style="display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap;">
+    <div>
+      <div class="panel-title" style="margin-bottom:4px;" data-i18n="aboutCoolattinLives">About Coolattin Lives</div>
+      <div style="font-size:14px; color:#475467;" data-i18n="readProjectBackground">Read project background, source record sets, references and partner links on the dedicated About page.</div>
+    </div>
+    <a class="btn btn-primary" href="{{ url_for('main.about') }}" data-i18n="openAboutPage">Open About Page</a>
+  </div>
+</section>
+
+<section class="section muted" id="research">
+  <div class="container center-head">
+    <h2 class="section-title" data-i18n="research">Research</h2>
+    <p class="section-sub" data-i18n="researchDesc">
+      Our primary goal is to explore families spatially—by townland and time—using an interactive map interface.
+    </p>
+  </div>
+
+  <div class="container split">
+    <div>
+      <p class="section-text" data-i18n="researchText">
+        The map is the core research surface. Filters connect directly to records (tenancies,
+        evictions, emigration, and census) so you can trace families across the estate through time.
+      </p>
+
+      <div class="cred-list">
+        <div class="cred-item"><span class="cred-dot"></span><span data-i18n="townlandFirstGis">Townland-first exploration (GIS-ready)</span></div>
+        <div class="cred-item"><span class="cred-dot"></span><span data-i18n="timeBasedFiltering">Time-based filtering (1750–1920)</span></div>
+        <div class="cred-item"><span class="cred-dot"></span><span data-i18n="unifiedRecordsClean">Unified single-source records with clean person-level drilldown</span></div>
+      </div>
+
+      <div style="margin-top:16px;">
+        <a class="btn btn-primary" href="#explore"><span class="icon">🗺️</span><span data-i18n="openMapExplorer">Open Map Explorer</span></a>
+        <a class="btn btn-ghost" href="#records" style="margin-left:10px;" data-i18n="seeExampleRecords">See Example Records</a>
+      </div>
+    </div>
+
+    <div class="panel soft">
+      <div class="panel-title" data-i18n="howYoullUseIt">How you'll use it</div>
+      <div class="record-meta" style="margin:0;">
+        <div><span>1)</span><span data-i18n="chooseTownlandSurname">Choose a townland or a surname</span></div>
+        <div><span>2)</span><span data-i18n="openTenantsFamilies">Open Tenants or Families for the selected townland</span></div>
+        <div><span>3)</span><span data-i18n="clickPinsLinkedFamily">Click pins to see linked family narratives</span></div>
+        <div><span>4)</span><span data-i18n="traceLineagesMapsTimelines">Trace lineages through maps and timelines</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ===========================
+     OLD RECORD MODAL
+=========================== -->
+<div id="oldRecordModal" class="modal-overlay">
+  <div class="old-record-modal">
+    <div class="modal-header">
+      <span class="close-modal" id="closeModal">&times;</span>
+      <div class="modal-title" id="modalSurname">Surname</div>
+      <div class="modal-sub" data-i18n="historicalFamilyRecord">Historical Family Record • Coolattin Estate</div>
+    </div>
+    <div class="modal-body" id="modalBody">
+      <!-- Dynamic Content -->
+    </div>
+
+  </div>
+</div>
+
+<!-- ===========================
+     SINGLE RECORD MODAL
+=========================== -->
+<div id="recordDetailModal" class="modal-overlay">
+  <div class="old-record-modal" style="max-width: 1100px; width: min(1100px, 100%);">
+    <div class="modal-header">
+      <span class="close-modal" id="closeRecordModal">&times;</span>
+      <div class="modal-title" id="recordModalTitle" data-i18n="recordDetails">Record Details</div>
+      <div class="modal-sub" data-i18n="specificEntry">Specific Entry • Coolattin Estate</div>
+    </div>
+    <div class="modal-body" id="recordModalBody">
+      <!-- Dynamic Scope -->
+    </div>
+  </div>
+</div>
+
+<!-- ===========================
+     GLOSSARY MODAL
+=========================== -->
+<div id="glossaryModal" class="modal-overlay">
+  <div class="old-record-modal" style="max-width: 600px; width: min(600px, 100%);">
+    <div class="modal-header">
+      <span class="close-modal" id="closeGlossaryModal">&times;</span>
+      <div class="modal-title" data-i18n="termsDefinitions">Terms & Definitions</div>
+      <div class="modal-sub" data-i18n="glossarySubtitle">Glossary of Historical & Data Fields</div>
+    </div>
+    <div class="modal-body" id="glossaryModalBody" style="max-height: 60vh; overflow-y: auto;">
+      <!-- Populated dynamically by JS -->
+    </div>
+  </div>
+</div>
+
+<!-- ===========================
+     MAP EXPLORER (UPDATED)
+=========================== -->
+<section class="band" id="explore">
+  <div class="container band-head">
+    <h2 class="band-title" data-i18n="mapExplorer">Map Explorer · County Wicklow</h2>
+    <p class="band-sub" data-i18n="mapExplorerSub">
+      Townland boundaries are drawn from <code>townlands.json</code>. Family pins come from linked records
+      (default: Tenancies).
+    </p>
+  </div>
+
+  <div class="container explore-layout">
+    <!-- FILTER PANEL -->
+    <aside class="panel filters-panel">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <div class="panel-title" style="margin: 0;" data-i18n="searchFilters">Search Filters</div>
+        <button id="openGlossaryBtn" class="btn btn-ghost" style="padding: 4px 8px; font-size: 12px; display: flex; align-items: center; gap: 4px;">
+          <span class="icon">📖</span> <span data-i18n="glossary">Glossary</span>
+        </button>
+      </div>
+
+      <label class="label" for="townlandSelect" data-i18n="townland">Townland</label>
+      <select id="townlandSelect" class="select">
+        <option value="" data-i18n="allTownlands">All townlands</option>
+      </select>
+
+      <label class="label" for="surnameInput" data-i18n="surname">Surname</label>
+      <input id="surnameInput" class="input" list="surnameSuggestions" autocomplete="off" data-i18n-placeholder="typeSurname" placeholder="Type surname (e.g., Byrne)" />
+      <datalist id="surnameSuggestions"></datalist>
+      <div id="surnameError" style="display:none; margin-top:6px; font-size:12px; color:#b42318;"></div>
+
+      <button class="btn btn-primary btn-block" id="applyFiltersBtn" style="margin-top:14px;" data-i18n="applyFilters">
+        Apply Filters
+      </button>
+
+      <div class="note" style="margin-top:12px;" data-i18n="unifiedDatasetOnly">
+        Unified dataset only. Select a townland to view tenants and families, then open full person-level records.
+      </div>
+
+      <!-- Quick help -->
+      <div class="panel soft" style="margin-top:14px;">
+        <div class="panel-title" data-i18n="tip">Tip</div>
+        <div style="font-size:13px; color:#475467;" data-i18n="tipPinsPlacedTownland">
+          Pins are placed at townland centroids (computed from GeoJSON).
+          Click a pin to load the full linked story in the right panel.
+        </div>
+      </div>
+    </aside>
+
+    <!-- MAP + STORY + STATS -->
+    <div class="panel map-panel">
+      <div class="panel-title" data-i18n="countyWicklowMap">County Wicklow — Townlands & Families</div>
+
+      <!-- Map + Story -->
+      <div style="display:grid; grid-template-columns: 3fr 1.2fr; gap:14px;">
+        <div style="position:relative;">
+          <div id="wicklowMap" class="map-container" style="height:540px;"></div>
+          <!-- Layer switcher — populated by map.js on DOMContentLoaded -->
+          <div id="wicklow-map-layer-switcher" style="position:absolute;top:10px;right:10px;z-index:1000;"></div>
+        </div>
+
+        <aside class="panel soft" style="height:540px; overflow:auto;">
+          <div class="panel-title" data-i18n="familyStory">Family Story</div>
+          <div id="detailsContent" style="font-size:14px; color:#475467;" data-i18n="clickTownlandPolygon">
+            Click a townland polygon or a family pin to view linked records.
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="records">
+  <div class="container center-head">
+    <h2 class="section-title" data-i18n="featuredFamilyRecords">Featured Family Records</h2>
+    <p class="section-sub" data-i18n="realFamiliesRealHistories">Real families, real histories, preserved for generations.</p>
+  </div>
+
+  <div class="container cards-3">
+    <article class="record-card" data-kind="tenants">
+      <div class="record-head">
+        <div class="record-title">Byrne Family · Aghold</div>
+        <span class="tag blue" data-i18n="tenancyWorkhouse">Tenancy + Workhouse</span>
+      </div>
+      <p class="record-desc">High-density family group with tenancy entries and multiple relevant workhouse links in the same locality.</p>
+      <div class="record-meta">
+        <div><span data-i18n="townland">Townland:</span> Aghold</div>
+        <div><span data-i18n="exampleRecord">Example Record:</span> CL45 (James Byrne)</div>
+        <div><span data-i18n="sources">Sources:</span> <span data-i18n="sourcesTenancyWorkhouse">Tenancy + Workhouse + Eviction flags</span></div>
+      </div>
+      <button class="btn btn-soft btn-block" onclick="document.location='#explore'" data-i18n="goToMapExplorer">Go to Map Explorer</button>
+    </article>
+
+    <article class="record-card" data-kind="evictions">
+      <div class="record-head">
+        <div class="record-title">Fox Family · Coolboy</div>
+        <span class="tag rose" data-i18n="evictionLegal">Eviction/Legal-action traces</span>
+      </div>
+      <p class="record-desc">Representative family with clear eviction/legal-action traces alongside tenant history in a single townland.</p>
+      <div class="record-meta">
+        <div><span data-i18n="townland">Townland:</span> Coolboy</div>
+        <div><span data-i18n="profile">Profile:</span> <span data-i18n="familyLevel">Family-level eviction footprint</span></div>
+        <div><span data-i18n="sources">Sources:</span> <span data-i18n="sourcesEviction">Eviction + Emigration + Tenancy (where available)</span></div>
+      </div>
+      <button class="btn btn-soft btn-block" onclick="document.location='#explore'" data-i18n="exploreFamilyInMap">Explore Family in Map</button>
+    </article>
+
+    <article class="record-card" data-kind="emigrations">
+      <div class="record-head">
+        <div class="record-title">Healy Family · Killinure</div>
+        <span class="tag amber" data-i18n="emigrationDeparture">Emigration</span>
+      </div>
+      <p class="record-desc">Strong emigration pattern with ship/departure traces and overlap with tenancy/eviction context.</p>
+      <div class="record-meta">
+        <div><span data-i18n="townland">Townland:</span> Killinure</div>
+        <div><span data-i18n="pattern">Pattern:</span> <span data-i18n="multiYearMovement">Multi-year movement evidence</span></div>
+        <div><span data-i18n="sources">Sources:</span> <span data-i18n="sourcesEmigration">Emigration + Tenancy + Eviction traces</span></div>
+      </div>
+      <button class="btn btn-soft btn-block" onclick="document.location='#explore'" data-i18n="exploreFamilyInMap">Explore Family in Map</button>
+    </article>
+  </div>
+</section>
+
+<section class="section muted" id="faq">
+  <div class="container center-head">
+    <h2 class="section-title" data-i18n="faq">FAQ</h2>
+    <p class="section-sub" data-i18n="faqSubtitle">Common questions about the archive.</p>
+  </div>
+
+  <div class="container faq">
+    <details class="faq-item">
+      <summary data-i18n="whyUseTownlands">Why use townlands?</summary>
+      <p data-i18n="whyUseTownlandsAns">
+        Townlands are stable geographic units used consistently across Irish historical records, enabling linkage and
+        map-based exploration.
+      </p>
+    </details>
+    <details class="faq-item">
+      <summary data-i18n="whatSurnamesAppear">What surnames appear in the dropdown?</summary>
+      <p data-i18n="whatSurnamesAppearAns">
+        Suggestions come directly from the unified records currently in scope. If a townland is selected,
+        only surnames present in that townland are shown.
+      </p>
+    </details>
+  </div>
+</section>
+
+<!-- YouTube IFrame API for hero background video -->
+<script>
+(function () {
+  var tag = document.createElement('script');
+  tag.src = 'https://www.youtube.com/iframe_api';
+  document.head.appendChild(tag);
+
+  var START_TIME = 146; // 2:26
+
+  window.onYouTubeIframeAPIReady = function () {
+    new YT.Player('yt-hero-bg', {
+      videoId: '9oWChmnZHaY',
+      playerVars: {
+        autoplay: 1,
+        mute: 1,
+        start: START_TIME,
+        controls: 0,
+        disablekb: 1,
+        fs: 0,
+        modestbranding: 1,
+        rel: 0,
+        showinfo: 0,
+        iv_load_policy: 3,
+        playsinline: 1,
+        loop: 0,
+        origin: window.location.origin
+      },
+      events: {
+        onReady: function (e) {
+          e.target.mute();
+          e.target.playVideo();
+        },
+        onStateChange: function (e) {
+          // Loop back to 2:26 when video ends
+          if (e.data === YT.PlayerState.ENDED) {
+            e.target.seekTo(START_TIME, true);
+            e.target.playVideo();
+          }
+        }
+      }
+    });
+  };
+})();
+</script>
+
+{% endblock %}
