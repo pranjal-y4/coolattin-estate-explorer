@@ -19,8 +19,7 @@ bp = Blueprint("unified_api", __name__)
 
 @bp.get("/records")
 def api_unified_records():
-    from backend.services.unified_service import search_records, get_unified
-    from backend.services.workhouse_service import get_match_index
+    from backend.services.unified_service import search_records
 
     surname = (request.args.get("surname") or "").strip()
     forename = (request.args.get("forename") or "").strip()
@@ -34,12 +33,11 @@ def api_unified_records():
         year=year, estate=estate, limit=limit,
     )
 
-    match_index = get_match_index()
+    # Workhouse match data is expensive to compute across 13k+ records and is
+    # loaded on-demand per record via /api/workhouse/match/<id> instead.
     for r in recs:
-        rid = str(r.get("record_id") or "")
-        matches = match_index.get(rid, [])
-        r["has_workhouse_record"] = bool(matches)
-        r["workhouse_record_count"] = len(matches)
+        r["has_workhouse_record"] = False
+        r["workhouse_record_count"] = 0
 
     return jsonify(recs)
 

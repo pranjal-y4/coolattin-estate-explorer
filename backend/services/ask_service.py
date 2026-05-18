@@ -5,11 +5,12 @@ Natural-language Q&A over local SQLite using LLM-generated SQL.
 
 Design
 ------
-- 100+ pre-built SQL templates matched by keyword scoring — instant results, no LLM needed.
-- The configured LLM provider rewrites the verified data answer for readability.
-- Parallel LLM calls (SQLite SQL + VRTI PostgreSQL) via ThreadPoolExecutor.
-- VRTI parish data cached in-process (TTL 1 h).
-- Parallel VRTI townland detail lookups.
+- Verified SQL templates handle high-risk research questions where statistical accuracy matters most.
+- The configured LLM generates read-only SQL only after receiving live schema, sampled categories, and approved query memory.
+- Approved thumbs-up feedback can store trusted SQL for future reuse.
+- Any failed or semantically invalid SQL is repaired or rejected before results are shown.
+- The configured LLM rewrites the verified data answer for readability.
+- VRTI parish data is cached in-process (TTL 1 h).
 - SSE streaming: each pipeline stage emits a progress event as it starts and completes.
 - Read-only SQL guardrails before execution.
 - PDF export of all relevant entries.
@@ -31,6 +32,10 @@ from pathlib import Path
 from typing import Any, Generator
 
 import requests
+try:
+    from rapidfuzz import fuzz
+except Exception:  # pragma: no cover - optional fallback for environments without rapidfuzz
+    fuzz = None
 
 from config import ActiveConfig
 from extensions import get_db_conn
@@ -81,6 +86,9 @@ OPENROUTER_APP_TITLE = os.environ.get("OPENROUTER_APP_TITLE", "Coolattin Archive
 ASK_GENERATE_VRTI_SQL_WITH_LLM = os.environ.get(
     "ASK_GENERATE_VRTI_SQL_WITH_LLM", ""
 ).strip().lower() in {"1", "true", "yes", "on"}
+ASK_ALLOW_HEURISTIC_FALLBACK = os.environ.get(
+    "ASK_ALLOW_HEURISTIC_FALLBACK", ""
+).strip().lower() in {"1", "true", "yes", "on"}
 
 _OPENROUTER_FREE_MODELS = [
     "openai/gpt-oss-20b:free",
@@ -117,6 +125,11 @@ OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "10m")
 # ── CSV seed ──────────────────────────────────────────────────────────────────
 UNIFIED_SEED_KEY = "ask_unified_seed"
 UNIFIED_CSV_PATH = ActiveConfig.STATIC_DATA_DIR / "unified_processed.csv"
+UNIFIED_SEED_SCHEMA_VERSION = "v2"
+HERITAGE_SEED_KEY = "ask_heritage_seed"
+HOLYWELLS_GEOJSON_PATH = ActiveConfig.STATIC_DATA_DIR / "holywells_wicklow.geojson"
+ASI_GEOJSON_PATH = ActiveConfig.STATIC_DATA_DIR / "asi_wicklow.geojson"
+HERITAGE_SEED_SCHEMA_VERSION = "v1"
 
 # ── SQL safety ────────────────────────────────────────────────────────────────
 FORBIDDEN_SQL = re.compile(
@@ -148,6 +161,57 @@ _OLLAMA_MODEL_CACHE: dict[str, Any] = {
 # ── Schema compatibility cache ───────────────────────────────────────────────
 _schema_cache_lock: threading.Lock = threading.Lock()
 _SCHEMA_COMPAT_CACHE: dict[str, Any] = {"clearances_count_column": None}
+
+_prompt_schema_cache_lock: threading.Lock = threading.Lock()
+_PROMPT_SCHEMA_CACHE: dict[str, Any] = {"expires_at": 0.0, "value": None}
+_PROMPT_SCHEMA_CACHE_TTL = 300
+
+_query_memory_cache_lock: threading.Lock = threading.Lock()
+_QUERY_MEMORY_CACHE: dict[str, Any] = {"expires_at": 0.0, "rows": []}
+_QUERY_MEMORY_CACHE_TTL = 60
+
+QUERY_MEMORY_SCHEMA_VERSION = "v1"
+QUERY_MEMORY_TABLE = "ask_query_memory"
+QUERY_FEEDBACK_TABLE = "ask_query_feedback"
+
+VERIFIED_ANALYSIS_TEMPLATE_IDS: set[str] = {
+    "tenant_land_gender_average",
+    "widows_with_children_proportion",
+    "widows_eviction_proportion",
+    "widows_count",
+    "children_emigrated",
+    "eviction_family_size_range",
+    "most_populous_1841_vs_1861",
+    "population_trend_1841_1861",
+    "emigration_population_townland_trend",
+    "largest_latest_tenant_holdings",
+    "smallest_townland_plots",
+    "holy_well_population_relationship",
+    "ring_fort_population_relationship",
+    "canada_emigration_peak_period",
+    "ship_most_families_canada",
+}
+
+VERIFIED_ANALYSIS_CHART_HINTS: dict[str, str] = {
+    "tenant_land_gender_average": "bar",
+    "most_populous_1841_vs_1861": "bar",
+    "population_trend_1841_1861": "line",
+    "holy_well_population_relationship": "bar",
+    "ring_fort_population_relationship": "bar",
+    "canada_emigration_peak_period": "line",
+    "smallest_townland_plots": "bar",
+}
+
+_PROMPT_CATEGORY_COLUMNS: dict[str, list[str]] = {
+    "unified_record": [
+        "month", "role", "legal_action", "estate", "parish", "gender",
+        "occupation", "is_widow", "is_canada_destination",
+    ],
+    "townland": ["civil_parish", "barony", "county", "electoral_division", "placename_theme", "source"],
+    "census_record": ["year", "source"],
+    "clearances_record": ["year", "source"],
+    "heritage_feature": ["feature_group", "source_dataset", "monument_class"],
+}
 
 # ── Townland catalog cache ───────────────────────────────────────────────────
 _townland_catalog_lock: threading.Lock = threading.Lock()
@@ -182,6 +246,20 @@ Table: unified_record  — family/people records (emigration, eviction, tenancy)
   parish TEXT                — civil parish
   estate TEXT                — estate (usually 'Coolattin')
   role TEXT                  — e.g. 'Head of Household'
+  gender TEXT                — gender when recorded
+  age INTEGER                — age when recorded
+  occupation TEXT            — occupation when recorded
+  acres REAL                 — holding size from source rows
+  acres_irish REAL           — Irish acres when present
+  acres_english REAL         — English acres when present
+  holding_acres REAL         — derived best-available holding size for land queries
+  sons INTEGER               — recorded sons in household
+  daughters INTEGER          — recorded daughters in household
+  children_count INTEGER     — derived sons + daughters
+  family_size_estimate INTEGER — derived estimate from household count fields
+  is_widow INTEGER           — derived flag from widow-labelled names/notes
+  is_canada_destination INT  — derived flag from arrival text mentioning Quebec / St Andrews / Grosse Isle / Canada
+  family_key TEXT            — family grouping key when supplied in CSV
   ship_name TEXT             — ship for emigration
   departure TEXT             — departure place + date
   arrival TEXT               — arrival place + date
@@ -191,13 +269,16 @@ Table: unified_record  — family/people records (emigration, eviction, tenancy)
   has_tenancy_record INT     — 1=tenant     0=not
   JOIN: UPPER(townland.name) = unified_record.townland_norm
 
-Table: townland  — 152 Coolattin estate townlands
+Table: townland  — local townland reference table used by the app
   id INTEGER
   name TEXT              — canonical name e.g. 'Ballinacor'
   name_gaelic TEXT       — Irish name
   civil_parish TEXT      — e.g. 'Knockrath', 'Moyacomb'
   barony TEXT            — e.g. 'Shillelagh'
   county TEXT            — e.g. 'Wicklow'
+  electoral_division TEXT
+  placename_theme TEXT
+  description TEXT
   centroid_lat REAL      — latitude ~52.x
   centroid_lon REAL      — longitude ~-6.x
   kg_uri TEXT
@@ -214,7 +295,13 @@ Table: census_record  — census data per townland per year
 Table: clearances_record  — eviction counts per townland per year
   townland_id INTEGER    — FK → townland.id
   year INTEGER           — 1847–1856
-  count INTEGER          — eviction count (some older prompts may call this eviction_count)
+  count INTEGER          — eviction count; this live database uses count as the metric column
+
+Table: heritage_feature  — seeded from local heritage GeoJSON for Ask comparisons
+  townland_norm TEXT     — normalised townland name used for joins to townland
+  feature_group TEXT     — e.g. 'holy_well', 'ring_fort'
+  monument_class TEXT    — source class label such as 'Ritual site - holy well'
+  source_dataset TEXT    — 'holywells' or 'asi'
 
 Function: distance_km(lat1, lon1, lat2, lon2) → REAL  (great-circle km)
   Radius query example:
@@ -670,6 +757,107 @@ QUESTION_TEMPLATES: list[dict[str, Any]] = [
      "optional_keywords": ["compare", "versus", "vs", "census", "relation"],
      "sql_template": "SELECT c.year, SUM(c.total) AS census_population, (SELECT COUNT(DISTINCT record_id) FROM unified_record WHERE has_emigration_record=1 AND year<=c.year) AS cumulative_emigrants FROM census_record c GROUP BY c.year ORDER BY c.year"},
 
+    {"id": "tenant_land_gender_average",
+     "category": "tenancy", "description": "Average landholding for male and female tenants",
+     "required_keywords": ["tenant", "land"],
+     "optional_keywords": ["average", "male", "female", "acres", "mean"],
+     "sql_template": "SELECT CASE WHEN UPPER(gender) IN ('M','MALE') THEN 'Male' WHEN UPPER(gender) IN ('F','FEMALE') THEN 'Female' ELSE 'Unknown' END AS gender_group, ROUND(AVG(holding_acres),2) AS average_holding_acres, COUNT(DISTINCT record_id) AS tenant_records FROM unified_record WHERE has_tenancy_record=1 AND holding_acres IS NOT NULL AND UPPER(COALESCE(gender,'')) IN ('M','MALE','F','FEMALE') GROUP BY gender_group ORDER BY gender_group"},
+
+    {"id": "widows_with_children_proportion",
+     "category": "people", "description": "Proportion of widows with recorded children",
+     "required_keywords": ["widow"],
+     "optional_keywords": ["proportion", "children", "child", "how many", "percent", "percentage"],
+     "sql_template": "SELECT COUNT(DISTINCT record_id) AS widow_records, COUNT(DISTINCT CASE WHEN children_count > 0 THEN record_id END) AS widows_with_children, ROUND(100.0 * COUNT(DISTINCT CASE WHEN children_count > 0 THEN record_id END) / NULLIF(COUNT(DISTINCT record_id),0), 1) AS pct_widows_with_children FROM unified_record WHERE is_widow=1",
+     "warning": "Widows are identified from widow-labelled names or notes in the source rows, and children are counted from recorded sons + daughters fields."},
+
+    {"id": "widows_eviction_proportion",
+     "category": "people", "description": "Proportion of widows appearing on eviction records",
+     "required_keywords": ["widow"],
+     "optional_keywords": ["proportion", "eviction", "evicted", "percent", "percentage"],
+     "sql_template": "SELECT COUNT(DISTINCT record_id) AS widow_records, COUNT(DISTINCT CASE WHEN has_eviction_record=1 THEN record_id END) AS widows_on_eviction_records, ROUND(100.0 * COUNT(DISTINCT CASE WHEN has_eviction_record=1 THEN record_id END) / NULLIF(COUNT(DISTINCT record_id),0), 1) AS pct_widows_on_eviction_records FROM unified_record WHERE is_widow=1",
+     "warning": "Widows are identified from widow-labelled names or notes in the source rows."},
+
+    {"id": "widows_count",
+     "category": "people", "description": "Count widows in the records",
+     "required_keywords": ["widow"],
+     "optional_keywords": ["how many", "count", "appear", "records", "total"],
+     "sql_template": "SELECT COUNT(DISTINCT record_id) AS widow_records FROM unified_record WHERE is_widow=1",
+     "warning": "Widows are identified from widow-labelled names or notes in the source rows."},
+
+    {"id": "children_emigrated",
+     "category": "emigration", "description": "Count child emigrants based on recorded age",
+     "required_keywords": ["emigra"],
+     "optional_keywords": ["children", "child", "under 18", "age", "how many"],
+     "sql_template": "SELECT COUNT(DISTINCT record_id) AS child_emigrant_records, COUNT(DISTINCT CASE WHEN age IS NOT NULL THEN record_id END) AS emigrant_records_with_known_age FROM unified_record WHERE has_emigration_record=1 AND age IS NOT NULL AND age < 18",
+     "warning": "Child emigrants are counted here as emigration records with a recorded age under 18."},
+
+    {"id": "eviction_family_size_range",
+     "category": "eviction", "description": "Range of estimated family sizes in eviction records",
+     "required_keywords": ["family", "size"],
+     "optional_keywords": ["range", "eviction", "evicted", "records", "household"],
+     "sql_template": "WITH eviction_families AS (SELECT DISTINCT family_key FROM unified_record WHERE has_eviction_record=1 AND family_key IS NOT NULL AND TRIM(family_key) <> '' AND INSTR(family_key,'|') > 0 AND TRIM(SUBSTR(family_key, INSTR(family_key,'|') + 1)) <> ''), family_sizes AS (SELECT family_key, MAX(family_size_estimate) AS family_size_estimate FROM unified_record WHERE family_key IS NOT NULL AND TRIM(family_key) <> '' AND INSTR(family_key,'|') > 0 AND TRIM(SUBSTR(family_key, INSTR(family_key,'|') + 1)) <> '' AND family_size_estimate IS NOT NULL GROUP BY family_key), matched AS (SELECT e.family_key, f.family_size_estimate FROM eviction_families e JOIN family_sizes f ON f.family_key = e.family_key) SELECT (SELECT COUNT(*) FROM eviction_families) AS eviction_families_with_keys, COUNT(*) AS matched_eviction_families, ROUND(100.0 * COUNT(*) / NULLIF((SELECT COUNT(*) FROM eviction_families),0), 1) AS pct_eviction_families_with_estimated_size, MIN(family_size_estimate) AS smallest_estimated_family, MAX(family_size_estimate) AS largest_estimated_family, ROUND(AVG(family_size_estimate),2) AS average_estimated_family_size FROM matched",
+     "warning": "Eviction rows rarely include household counts directly, so this uses linked family keys where an estimated family size exists elsewhere in the database."},
+
+    {"id": "most_populous_1841_vs_1861",
+     "category": "census", "description": "Compare the most populous townlands in 1841 and 1861",
+     "required_keywords": ["1841", "1861"],
+     "optional_keywords": ["populous", "most populous", "still", "census"],
+     "sql_template": "WITH pop_1841 AS (SELECT t.name AS townland, c.total AS population FROM census_record c JOIN townland t ON c.townland_id=t.id WHERE c.year=1841 ORDER BY c.total DESC LIMIT 1), pop_1861 AS (SELECT t.name AS townland, c.total AS population FROM census_record c JOIN townland t ON c.townland_id=t.id WHERE c.year=1861 ORDER BY c.total DESC LIMIT 1) SELECT pop_1841.townland AS most_populous_1841, pop_1841.population AS population_1841, pop_1861.townland AS most_populous_1861, pop_1861.population AS population_1861, CASE WHEN pop_1841.townland = pop_1861.townland THEN 'yes' ELSE 'no' END AS same_townland FROM pop_1841 CROSS JOIN pop_1861"},
+
+    {"id": "population_trend_1841_1861",
+     "category": "census", "description": "Estate-wide population trend for available early census years",
+     "required_keywords": ["population", "trend"],
+     "optional_keywords": ["estate", "overall", "1841", "1851", "1861", "1821"],
+     "sql_template": "SELECT year, SUM(total) AS estate_population FROM census_record WHERE year IN (1841,1851,1861) GROUP BY year ORDER BY year",
+     "warning": "The Ask census table begins in 1841, so this trend uses 1841, 1851, and 1861 rather than 1821."},
+
+    {"id": "emigration_population_townland_trend",
+     "category": "overview", "description": "Top emigration townlands compared with 1841 to 1861 population change",
+     "required_keywords": ["emigra", "population", "townland"],
+     "optional_keywords": ["trend", "relationship", "relation", "1841", "1861", "most"],
+     "sql_template": "WITH emigrants AS (SELECT townland_norm, townland, COUNT(DISTINCT record_id) AS emigrated_people FROM unified_record WHERE has_emigration_record=1 AND townland_norm IS NOT NULL GROUP BY townland_norm, townland), pop_1841 AS (SELECT t.name AS townland, c.total AS pop_1841 FROM census_record c JOIN townland t ON c.townland_id=t.id WHERE c.year=1841), pop_1861 AS (SELECT t.name AS townland, c.total AS pop_1861 FROM census_record c JOIN townland t ON c.townland_id=t.id WHERE c.year=1861) SELECT e.townland, e.emigrated_people, p41.pop_1841, p61.pop_1861, (p61.pop_1861 - p41.pop_1841) AS population_change, ROUND(100.0 * (p61.pop_1861 - p41.pop_1841) / NULLIF(p41.pop_1841,0), 1) AS pct_population_change FROM emigrants e LEFT JOIN pop_1841 p41 ON UPPER(p41.townland)=e.townland_norm LEFT JOIN pop_1861 p61 ON UPPER(p61.townland)=e.townland_norm ORDER BY e.emigrated_people DESC LIMIT 30",
+     "warning": "Population change is based on 1841 to 1861 because the Ask census table does not include 1821."},
+
+    {"id": "largest_latest_tenant_holdings",
+     "category": "tenancy", "description": "Tenants with the largest holdings in their latest recorded year",
+     "required_keywords": ["tenant", "land"],
+     "optional_keywords": ["latest", "end", "final", "record dates", "largest", "more"],
+     "sql_template": "WITH tenancy AS (SELECT COALESCE(NULLIF(TRIM(canonical_name),''), NULLIF(TRIM(COALESCE(forename,'') || ' ' || COALESCE(surname,'')), ''), NULLIF(TRIM(COALESCE(chief_tenant_forename,'') || ' ' || COALESCE(chief_tenant_surname,'')), '')) AS person_name, townland, year, holding_acres FROM unified_record WHERE has_tenancy_record=1 AND holding_acres IS NOT NULL), latest AS (SELECT person_name, MAX(year) AS latest_year FROM tenancy WHERE person_name IS NOT NULL GROUP BY person_name) SELECT t.person_name, t.townland, t.year AS latest_year, ROUND(t.holding_acres,2) AS holding_acres FROM tenancy t JOIN latest l ON t.person_name=l.person_name AND t.year=l.latest_year ORDER BY t.holding_acres DESC, t.person_name LIMIT 50"},
+
+    {"id": "smallest_townland_plots",
+     "category": "tenancy", "description": "Townlands with the smallest tenant plots",
+     "required_keywords": ["townland", "smallest"],
+     "optional_keywords": ["plot", "plots", "land", "tenant", "acres"],
+     "sql_template": "SELECT townland, ROUND(MIN(holding_acres),2) AS smallest_plot_acres, ROUND(AVG(holding_acres),2) AS average_plot_acres, COUNT(DISTINCT record_id) AS tenancy_records FROM unified_record WHERE has_tenancy_record=1 AND holding_acres IS NOT NULL GROUP BY townland_norm, townland ORDER BY smallest_plot_acres ASC, average_plot_acres ASC LIMIT 30"},
+
+    {"id": "holy_well_population_relationship",
+     "category": "heritage", "description": "Compare census populations for townlands with and without holy wells",
+     "required_keywords": ["holy", "well"],
+     "optional_keywords": ["population", "relationship", "statistical", "high", "figures"],
+     "sql_template": "WITH holy AS (SELECT DISTINCT townland_norm FROM heritage_feature WHERE feature_group='holy_well' AND townland_norm IS NOT NULL), census AS (SELECT t.name AS townland, c.year, c.total FROM census_record c JOIN townland t ON c.townland_id=t.id) SELECT CASE WHEN UPPER(census.townland) IN (SELECT townland_norm FROM holy) THEN 'Has holy well' ELSE 'No holy well' END AS holy_well_group, COUNT(*) AS census_rows, ROUND(AVG(census.total),2) AS average_population, MAX(census.total) AS max_population FROM census GROUP BY holy_well_group ORDER BY average_population DESC",
+     "warning": "This compares average recorded census populations for townlands with and without holy wells; it is a descriptive comparison rather than a formal significance test."},
+
+    {"id": "ring_fort_population_relationship",
+     "category": "heritage", "description": "Compare census populations for townlands with and without ring forts",
+     "required_keywords": ["ring"],
+     "optional_keywords": ["fort", "ring fort", "ringfort", "population", "relationship", "statistical", "high"],
+     "sql_template": "WITH ringfort AS (SELECT DISTINCT townland_norm FROM heritage_feature WHERE feature_group='ring_fort' AND townland_norm IS NOT NULL), census AS (SELECT t.name AS townland, c.year, c.total FROM census_record c JOIN townland t ON c.townland_id=t.id) SELECT CASE WHEN UPPER(census.townland) IN (SELECT townland_norm FROM ringfort) THEN 'Has ring fort' ELSE 'No ring fort' END AS ring_fort_group, COUNT(*) AS census_rows, ROUND(AVG(census.total),2) AS average_population, MAX(census.total) AS max_population FROM census GROUP BY ring_fort_group ORDER BY average_population DESC",
+     "warning": "This compares average recorded census populations for townlands with and without ring forts; it is a descriptive comparison rather than a formal significance test."},
+
+    {"id": "canada_emigration_peak_period",
+     "category": "emigration", "description": "Peak years for emigration to Canada",
+     "required_keywords": ["emigra", "canada"],
+     "optional_keywords": ["peak", "period", "year", "when"],
+     "sql_template": "SELECT year, COUNT(DISTINCT record_id) AS canada_emigrant_records FROM unified_record WHERE has_emigration_record=1 AND is_canada_destination=1 AND year IS NOT NULL GROUP BY year ORDER BY canada_emigrant_records DESC, year",
+     "warning": "Canada-focused emigration is identified from arrival text such as Quebec, St Andrews, Grosse Isle, or Canada."},
+
+    {"id": "ship_most_families_canada",
+     "category": "emigration", "description": "Ship carrying the most Coolattin families to Canada",
+     "required_keywords": ["ship", "canada"],
+     "optional_keywords": ["family", "families", "most", "carried", "coolattin"],
+     "sql_template": "SELECT ship_name, COUNT(DISTINCT COALESCE(NULLIF(TRIM(family_key),''), UPPER(COALESCE(surname,'')) || '|' || UPPER(COALESCE(townland_norm,'')))) AS family_count, COUNT(DISTINCT record_id) AS emigrant_records FROM unified_record WHERE has_emigration_record=1 AND is_canada_destination=1 AND ship_name IS NOT NULL AND TRIM(ship_name) <> '' GROUP BY ship_name ORDER BY family_count DESC, emigrant_records DESC, ship_name LIMIT 20",
+     "warning": "Canada-focused emigration is identified from arrival text, and family counts use family_key when available or a surname+townland fallback."},
+
     {"id": "estate_summary",
      "category": "overview", "description": "Full estate summary statistics",
      "required_keywords": ["estate"],
@@ -832,6 +1020,160 @@ def _analysis_prompt_block(analysis: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _live_sqlite_schema_prompt_block() -> str:
+    now = time.time()
+    with _prompt_schema_cache_lock:
+        cached = _PROMPT_SCHEMA_CACHE.get("value")
+        if cached and float(_PROMPT_SCHEMA_CACHE.get("expires_at") or 0.0) > now:
+            return str(cached)
+
+    clear_col = _clearances_count_column()
+    conn = get_db_conn()
+    try:
+        payload: dict[str, Any] = {
+            "actual_clearances_metric_column": clear_col,
+            "tables": {},
+            "relationships": [
+                "unified_record.townland_norm joins to UPPER(townland.name)",
+                "census_record.townland_id joins to townland.id",
+                f"clearances_record.townland_id joins to townland.id and uses {clear_col} as the eviction metric column",
+            ],
+            "query_rules": [
+                "Use COUNT(DISTINCT unified_record.record_id) for people counts.",
+                "Use census_record for population, inhabited houses, and uninhabited houses.",
+                "Use unified_record for person lists, surnames, ships, departures, arrivals, roles, tenancy, emigration, and eviction person flags.",
+                "Use unified_record.holding_acres for landholding analysis when acreage is requested.",
+                "Use unified_record.is_widow, unified_record.children_count, and unified_record.family_size_estimate for widow/children/family-size questions when available.",
+                "Use unified_record.is_canada_destination for Canada-focused emigration questions when available.",
+                "Use heritage_feature for holy-well and ring-fort comparisons by townland.",
+                "For townland filters, prefer unified_record.townland_norm='NAME' or UPPER(townland.name)='NAME'.",
+                "For radius queries, use distance_km() with townland centroids.",
+            ],
+        }
+
+        for table in ("unified_record", "townland", "census_record", "clearances_record", "heritage_feature"):
+            pragma_rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            if not pragma_rows:
+                continue
+            column_names = [str(row["name"]) for row in pragma_rows]
+            payload["tables"][table] = {
+                "row_count": conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"],
+                "columns": [
+                    f"{row['name']} {row['type'] or 'TEXT'}" + (" PRIMARY KEY" if row["pk"] else "")
+                    for row in pragma_rows
+                ],
+            }
+
+            category_examples = _prompt_category_examples(conn, table, column_names)
+            if category_examples:
+                payload["tables"][table]["categorical_examples"] = category_examples
+
+            if table == "unified_record":
+                flag_rows = conn.execute(
+                    """
+                    SELECT has_emigration_record, has_eviction_record, has_tenancy_record, COUNT(*) AS row_count
+                    FROM unified_record
+                    GROUP BY has_emigration_record, has_eviction_record, has_tenancy_record
+                    ORDER BY row_count DESC
+                    LIMIT 6
+                    """
+                ).fetchall()
+                payload["tables"][table]["flag_combinations"] = [
+                    (
+                        f"emigration={row['has_emigration_record']}, "
+                        f"eviction={row['has_eviction_record']}, "
+                        f"tenancy={row['has_tenancy_record']} (rows={row['row_count']})"
+                    )
+                    for row in flag_rows
+                ]
+            elif table == "census_record":
+                year_rows = conn.execute(
+                    """
+                    SELECT year, COUNT(*) AS townland_rows, SUM(total) AS estate_population
+                    FROM census_record
+                    GROUP BY year
+                    ORDER BY year
+                    LIMIT 12
+                    """
+                ).fetchall()
+                payload["tables"][table]["year_summary"] = [
+                    f"{row['year']} (rows={row['townland_rows']}, population={row['estate_population']})"
+                    for row in year_rows
+                ]
+            elif table == "clearances_record":
+                year_rows = conn.execute(
+                    f"""
+                    SELECT year, SUM({clear_col}) AS event_count
+                    FROM clearances_record
+                    GROUP BY year
+                    ORDER BY year
+                    LIMIT 20
+                    """
+                ).fetchall()
+                payload["tables"][table]["year_summary"] = [
+                    f"{row['year']} (events={row['event_count']})"
+                    for row in year_rows
+                ]
+            elif table == "heritage_feature":
+                group_rows = conn.execute(
+                    """
+                    SELECT feature_group, COUNT(*) AS feature_count, COUNT(DISTINCT townland_norm) AS townland_count
+                    FROM heritage_feature
+                    GROUP BY feature_group
+                    ORDER BY feature_count DESC
+                    """
+                ).fetchall()
+                payload["tables"][table]["group_summary"] = [
+                    f"{row['feature_group']} (features={row['feature_count']}, townlands={row['townland_count']})"
+                    for row in group_rows
+                ]
+
+        block = json.dumps(payload, ensure_ascii=False, default=str, indent=2)
+    except Exception as exc:
+        log.warning("ask_service.live_sqlite_schema_prompt_failed error=%s", exc)
+        block = "{}"
+    finally:
+        conn.close()
+
+    with _prompt_schema_cache_lock:
+        _PROMPT_SCHEMA_CACHE["expires_at"] = now + _PROMPT_SCHEMA_CACHE_TTL
+        _PROMPT_SCHEMA_CACHE["value"] = block
+    return block
+
+
+def _prompt_category_examples(
+    conn,
+    table: str,
+    column_names: list[str],
+    limit: int = 6,
+) -> dict[str, list[str]]:
+    available = set(column_names)
+    out: dict[str, list[str]] = {}
+    for column in _PROMPT_CATEGORY_COLUMNS.get(table, []):
+        if column not in available:
+            continue
+        rows = conn.execute(
+            f"""
+            SELECT CAST({column} AS TEXT) AS value, COUNT(*) AS row_count
+            FROM {table}
+            WHERE {column} IS NOT NULL
+              AND TRIM(CAST({column} AS TEXT)) <> ''
+            GROUP BY {column}
+            ORDER BY row_count DESC, value
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        examples = [
+            f"{row['value']} (rows={row['row_count']})"
+            for row in rows
+            if row["value"] is not None
+        ]
+        if examples:
+            out[column] = examples
+    return out
+
+
 def _database_profile_prompt_block() -> str:
     try:
         profile = _database_profile_context()
@@ -842,6 +1184,8 @@ def _database_profile_prompt_block() -> str:
             "emigrated_people": profile.get("emigrated_people"),
             "evicted_people": profile.get("evicted_people"),
             "tenant_people": profile.get("tenant_people"),
+            "townlands_with_holy_wells": profile.get("townlands_with_holy_wells"),
+            "townlands_with_ring_forts": profile.get("townlands_with_ring_forts"),
             "record_year_range": [profile.get("first_record_year"), profile.get("last_record_year")],
             "clearance_events": profile.get("clearance_events"),
             "top_townlands_by_people_records": profile.get("top_townlands_by_people_records", [])[:6],
@@ -903,11 +1247,549 @@ def _match_and_build_template(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Verified analysis layer
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _try_verified_analysis(
+    question: str,
+    canonical_townland: str | None,
+    analysis: dict[str, Any],
+) -> dict[str, Any] | None:
+    surname = analysis.get("surname")
+    if surname and analysis.get("primary_intent") == "people":
+        if analysis.get("output_mode") == "count":
+            sql = f"SELECT COUNT(DISTINCT record_id) AS matching_people FROM unified_record WHERE UPPER(surname)='{_sql_escape(str(surname))}'"
+            return {
+                "sql": sql,
+                "meta": {
+                    "provider": "verified_analysis",
+                    "model": "curated_sql",
+                    "mode": "verified_analysis",
+                    "analysis_id": "people_named_surname_count",
+                    "description": "Verified surname count query",
+                },
+                "chart_hint": None,
+            }
+        if analysis.get("output_mode") == "list":
+            sql = (
+                "SELECT DISTINCT "
+                "COALESCE(NULLIF(TRIM(canonical_name),''),TRIM(COALESCE(forename,'')||' '||COALESCE(surname,''))) AS person_name,"
+                "surname,forename,townland,parish,year,has_emigration_record,has_eviction_record,has_tenancy_record "
+                f"FROM unified_record WHERE UPPER(surname)='{_sql_escape(str(surname))}' "
+                "ORDER BY year, person_name LIMIT 200"
+            )
+            return {
+                "sql": sql,
+                "meta": {
+                    "provider": "verified_analysis",
+                    "model": "curated_sql",
+                    "mode": "verified_analysis",
+                    "analysis_id": "people_named_surname_list",
+                    "description": "Verified surname list query",
+                },
+                "chart_hint": None,
+            }
+
+    tmpl, tmpl_sql = _match_and_build_template(question, canonical_townland)
+    if tmpl and tmpl_sql and tmpl.get("id") in VERIFIED_ANALYSIS_TEMPLATE_IDS:
+        template_id = str(tmpl.get("id"))
+        return {
+            "sql": tmpl_sql,
+            "meta": {
+                "provider": "verified_analysis",
+                "model": "curated_sql",
+                "mode": "verified_analysis",
+                "analysis_id": template_id,
+                "description": tmpl.get("description"),
+            },
+            "chart_hint": VERIFIED_ANALYSIS_CHART_HINTS.get(template_id),
+        }
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Approved query memory + feedback
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _question_signature(question: str) -> str:
+    tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]{1,}", (question or "").lower())
+    stopwords = {
+        "the", "a", "an", "of", "for", "to", "in", "on", "at", "by", "from",
+        "this", "that", "these", "those", "is", "are", "was", "were", "be",
+        "do", "does", "did", "what", "which", "who", "how", "many", "much",
+        "there", "any", "all", "with", "and", "or", "than", "then", "into",
+        "about", "around", "within", "across", "over", "under", "show", "list",
+        "tell", "me", "please", "records", "record",
+    }
+    cleaned = [token for token in tokens if token not in stopwords]
+    if not cleaned:
+        cleaned = tokens[:8]
+    return " ".join(cleaned[:18]).strip()
+
+
+def _ensure_query_memory_schema() -> None:
+    conn = get_db_conn()
+    try:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {QUERY_MEMORY_TABLE} (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              question_text TEXT NOT NULL,
+              question_signature TEXT NOT NULL,
+              townland_norm TEXT,
+              analysis_json TEXT,
+              sql_text TEXT NOT NULL,
+              vrti_postgres_sql TEXT,
+              sample_answer TEXT,
+              summary_json TEXT,
+              source_mode TEXT,
+              llm_provider TEXT,
+              llm_model TEXT,
+              approved_count INTEGER NOT NULL DEFAULT 0,
+              rejected_count INTEGER NOT NULL DEFAULT 0,
+              reuse_count INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              last_approved_at TEXT,
+              last_used_at TEXT,
+              feedback_note TEXT
+            )
+            """
+        )
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {QUERY_FEEDBACK_TABLE} (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              question_text TEXT NOT NULL,
+              question_signature TEXT NOT NULL,
+              townland_hint TEXT,
+              townland_norm TEXT,
+              sql_text TEXT,
+              vrti_postgres_sql TEXT,
+              feedback TEXT NOT NULL,
+              note TEXT,
+              result_row_count INTEGER,
+              availability_state TEXT,
+              llm_provider TEXT,
+              llm_model TEXT,
+              llm_mode TEXT,
+              reused_memory_id INTEGER,
+              created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{QUERY_MEMORY_TABLE}_signature ON {QUERY_MEMORY_TABLE}(question_signature)"
+        )
+        conn.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{QUERY_MEMORY_TABLE}_townland ON {QUERY_MEMORY_TABLE}(townland_norm)"
+        )
+        conn.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{QUERY_FEEDBACK_TABLE}_signature ON {QUERY_FEEDBACK_TABLE}(question_signature)"
+        )
+        conn.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{QUERY_FEEDBACK_TABLE}_created_at ON {QUERY_FEEDBACK_TABLE}(created_at)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _clear_query_memory_cache() -> None:
+    with _query_memory_cache_lock:
+        _QUERY_MEMORY_CACHE["expires_at"] = 0.0
+        _QUERY_MEMORY_CACHE["rows"] = []
+
+
+def _load_approved_query_memory() -> list[dict[str, Any]]:
+    now = time.time()
+    with _query_memory_cache_lock:
+        cached_rows = _QUERY_MEMORY_CACHE.get("rows") or []
+        if cached_rows and now < float(_QUERY_MEMORY_CACHE.get("expires_at") or 0):
+            return [dict(row) for row in cached_rows]
+
+    _ensure_query_memory_schema()
+    conn = get_db_conn()
+    try:
+        rows = [
+            dict(row) for row in conn.execute(
+                f"""
+                SELECT *
+                FROM {QUERY_MEMORY_TABLE}
+                WHERE approved_count > rejected_count
+                ORDER BY approved_count DESC, updated_at DESC, id DESC
+                LIMIT 250
+                """
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+    with _query_memory_cache_lock:
+        _QUERY_MEMORY_CACHE["rows"] = [dict(row) for row in rows]
+        _QUERY_MEMORY_CACHE["expires_at"] = time.time() + _QUERY_MEMORY_CACHE_TTL
+    return rows
+
+
+def _memory_similarity_score(
+    question: str,
+    analysis: dict[str, Any],
+    townland_norm: str | None,
+    candidate: dict[str, Any],
+) -> float:
+    source = _question_signature(question)
+    target = candidate.get("question_signature") or _question_signature(candidate.get("question_text") or "")
+    if fuzz is not None:
+        base = float(fuzz.token_sort_ratio(source, target))
+    else:
+        base = difflib.SequenceMatcher(None, source, target).ratio() * 100.0
+
+    candidate_analysis: dict[str, Any] = {}
+    try:
+        candidate_analysis = json.loads(candidate.get("analysis_json") or "{}")
+    except Exception:
+        candidate_analysis = {}
+
+    score = base
+    if candidate_analysis.get("primary_intent") == analysis.get("primary_intent"):
+        score += 8
+    if candidate_analysis.get("output_mode") == analysis.get("output_mode"):
+        score += 5
+    if candidate_analysis.get("group_by") == analysis.get("group_by"):
+        score += 3
+    if candidate_analysis.get("year") and candidate_analysis.get("year") == analysis.get("year"):
+        score += 4
+
+    candidate_townland = _norm_townland(candidate.get("townland_norm"))
+    if townland_norm and candidate_townland:
+        if townland_norm == candidate_townland:
+            score += 10
+        else:
+            score -= 16
+    elif townland_norm or candidate_townland:
+        score -= 4
+
+    approvals = int(candidate.get("approved_count") or 0)
+    rejections = int(candidate.get("rejected_count") or 0)
+    score += min(6.0, approvals * 1.5)
+    score -= min(8.0, rejections * 2.0)
+    return round(max(0.0, min(score, 100.0)), 2)
+
+
+def _find_similar_approved_queries(
+    question: str,
+    analysis: dict[str, Any],
+    townland_norm: str | None,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for row in _load_approved_query_memory():
+        score = _memory_similarity_score(question, analysis, townland_norm, row)
+        if score < 55:
+            continue
+        item = dict(row)
+        item["match_score"] = score
+        matches.append(item)
+    matches.sort(
+        key=lambda row: (
+            float(row.get("match_score") or 0.0),
+            int(row.get("approved_count") or 0),
+            -int(row.get("rejected_count") or 0),
+            row.get("updated_at") or "",
+        ),
+        reverse=True,
+    )
+    return matches[:limit]
+
+
+def _can_reuse_memory_directly(
+    question: str,
+    analysis: dict[str, Any],
+    townland_norm: str | None,
+    match: dict[str, Any] | None,
+) -> bool:
+    if not match:
+        return False
+    score = float(match.get("match_score") or 0.0)
+    if score < 92:
+        return False
+    candidate_townland = _norm_townland(match.get("townland_norm"))
+    if townland_norm and candidate_townland and townland_norm != candidate_townland:
+        return False
+    candidate_analysis: dict[str, Any] = {}
+    try:
+        candidate_analysis = json.loads(match.get("analysis_json") or "{}")
+    except Exception:
+        candidate_analysis = {}
+    return (
+        candidate_analysis.get("primary_intent") == analysis.get("primary_intent")
+        and candidate_analysis.get("output_mode") == analysis.get("output_mode")
+    )
+
+
+def _approved_query_examples_block(matches: list[dict[str, Any]]) -> str:
+    if not matches:
+        return "No previously approved queries matched this question closely."
+    lines = ["Approved user-validated SQL examples for similar questions:"]
+    for row in matches[:3]:
+        lines.extend([
+            f"- similarity_score: {row.get('match_score')}",
+            f"  question: {row.get('question_text')}",
+            f"  townland_scope: {row.get('townland_norm') or 'global'}",
+            f"  approvals: {row.get('approved_count') or 0}",
+            "  SQL:",
+            *[f"    {line}" for line in str(row.get("sql_text") or "").splitlines()],
+        ])
+    lines.append("Reuse the structure only if it truly matches the new question.")
+    return "\n".join(lines)
+
+
+def _mark_query_memory_used(memory_id: int | None) -> None:
+    if not memory_id:
+        return
+    _ensure_query_memory_schema()
+    conn = get_db_conn()
+    try:
+        conn.execute(
+            f"""
+            UPDATE {QUERY_MEMORY_TABLE}
+            SET reuse_count = COALESCE(reuse_count, 0) + 1,
+                last_used_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (_utcnow_iso(), _utcnow_iso(), memory_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    _clear_query_memory_cache()
+
+
+def record_query_feedback(
+    *,
+    question: str,
+    townland_hint: str | None,
+    sql_text: str | None,
+    vrti_postgres_sql: str | None,
+    feedback: str,
+    note: str | None,
+    result_row_count: int,
+    availability_state: str | None,
+    llm_meta: dict[str, Any] | None,
+    reused_memory_id: int | None,
+    sample_answer: str | None,
+    summary_json: dict[str, Any] | None,
+) -> dict[str, Any]:
+    feedback_value = (feedback or "").strip().lower()
+    if feedback_value not in {"up", "down"}:
+        raise ValueError("feedback must be 'up' or 'down'.")
+
+    _ensure_query_memory_schema()
+    analysis = _analyse_question(question, townland_hint)
+    question_signature = _question_signature(question)
+    townland_norm = _norm_townland(townland_hint)
+    now = _utcnow_iso()
+    clean_sql = _sanitize_and_validate_sql(sql_text) if sql_text else None
+    llm_meta = llm_meta or {}
+
+    conn = get_db_conn()
+    try:
+        conn.execute(
+            f"""
+            INSERT INTO {QUERY_FEEDBACK_TABLE} (
+              question_text, question_signature, townland_hint, townland_norm,
+              sql_text, vrti_postgres_sql, feedback, note, result_row_count,
+              availability_state, llm_provider, llm_model, llm_mode,
+              reused_memory_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                question,
+                question_signature,
+                townland_hint,
+                townland_norm,
+                clean_sql,
+                vrti_postgres_sql,
+                feedback_value,
+                (note or "").strip() or None,
+                int(result_row_count or 0),
+                availability_state,
+                llm_meta.get("provider"),
+                llm_meta.get("model"),
+                llm_meta.get("mode"),
+                reused_memory_id,
+                now,
+            ),
+        )
+
+        stored_in_memory = False
+        memory_id = reused_memory_id
+        if feedback_value == "up" and clean_sql:
+            if memory_id:
+                conn.execute(
+                    f"""
+                    UPDATE {QUERY_MEMORY_TABLE}
+                    SET approved_count = COALESCE(approved_count, 0) + 1,
+                        feedback_note = COALESCE(?, feedback_note),
+                        sample_answer = COALESCE(?, sample_answer),
+                        summary_json = COALESCE(?, summary_json),
+                        source_mode = ?,
+                        llm_provider = ?,
+                        llm_model = ?,
+                        sql_text = ?,
+                        vrti_postgres_sql = COALESCE(?, vrti_postgres_sql),
+                        last_approved_at = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        (note or "").strip() or None,
+                        sample_answer,
+                        json.dumps(summary_json or {}, ensure_ascii=True),
+                        llm_meta.get("mode"),
+                        llm_meta.get("provider"),
+                        llm_meta.get("model"),
+                        clean_sql,
+                        vrti_postgres_sql,
+                        now,
+                        now,
+                        memory_id,
+                    ),
+                )
+            else:
+                existing = conn.execute(
+                    f"""
+                    SELECT id
+                    FROM {QUERY_MEMORY_TABLE}
+                    WHERE question_signature = ? AND COALESCE(townland_norm, '') = COALESCE(?, '')
+                    ORDER BY approved_count DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (question_signature, townland_norm),
+                ).fetchone()
+                if existing:
+                    memory_id = int(existing["id"])
+                    conn.execute(
+                        f"""
+                        UPDATE {QUERY_MEMORY_TABLE}
+                        SET approved_count = COALESCE(approved_count, 0) + 1,
+                            question_text = ?,
+                            analysis_json = ?,
+                            sql_text = ?,
+                            vrti_postgres_sql = ?,
+                            feedback_note = COALESCE(?, feedback_note),
+                            sample_answer = COALESCE(?, sample_answer),
+                            summary_json = COALESCE(?, summary_json),
+                            source_mode = ?,
+                            llm_provider = ?,
+                            llm_model = ?,
+                            last_approved_at = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            question,
+                            json.dumps(analysis, ensure_ascii=True),
+                            clean_sql,
+                            vrti_postgres_sql,
+                            (note or "").strip() or None,
+                            sample_answer,
+                            json.dumps(summary_json or {}, ensure_ascii=True),
+                            llm_meta.get("mode"),
+                            llm_meta.get("provider"),
+                            llm_meta.get("model"),
+                            now,
+                            now,
+                            memory_id,
+                        ),
+                    )
+                else:
+                    cur = conn.execute(
+                        f"""
+                        INSERT INTO {QUERY_MEMORY_TABLE} (
+                          question_text, question_signature, townland_norm, analysis_json,
+                          sql_text, vrti_postgres_sql, sample_answer, summary_json,
+                          source_mode, llm_provider, llm_model,
+                          approved_count, rejected_count, reuse_count,
+                          created_at, updated_at, last_approved_at, feedback_note
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 0, ?, ?, ?, ?)
+                        """,
+                        (
+                            question,
+                            question_signature,
+                            townland_norm,
+                            json.dumps(analysis, ensure_ascii=True),
+                            clean_sql,
+                            vrti_postgres_sql,
+                            sample_answer,
+                            json.dumps(summary_json or {}, ensure_ascii=True),
+                            llm_meta.get("mode"),
+                            llm_meta.get("provider"),
+                            llm_meta.get("model"),
+                            now,
+                            now,
+                            now,
+                            (note or "").strip() or None,
+                        ),
+                    )
+                    memory_id = int(cur.lastrowid or 0)
+            stored_in_memory = bool(memory_id)
+        elif feedback_value == "down" and reused_memory_id:
+            conn.execute(
+                f"""
+                UPDATE {QUERY_MEMORY_TABLE}
+                SET rejected_count = COALESCE(rejected_count, 0) + 1,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (now, reused_memory_id),
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    _clear_query_memory_cache()
+    return {
+        "ok": True,
+        "feedback": feedback_value,
+        "stored_in_memory": stored_in_memory,
+        "memory_id": memory_id,
+    }
+
+
+def _memory_matches_for_display(matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in matches[:5]:
+        out.append({
+            "id": row.get("id"),
+            "question_text": row.get("question_text"),
+            "townland_norm": row.get("townland_norm"),
+            "match_score": row.get("match_score"),
+            "approved_count": row.get("approved_count"),
+            "rejected_count": row.get("rejected_count"),
+            "source_mode": row.get("source_mode"),
+        })
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SSE streaming entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sse(type_: str, **kw: Any) -> str:
     return f"data: {json.dumps({'type': type_, **kw})}\n\n"
+
+
+def _extract_tables(sql: str) -> list[str]:
+    """Return deduplicated table names referenced in a SQL query."""
+    raw = re.findall(r'(?:FROM|JOIN)\s+([a-z_][a-z_0-9]*)', sql, re.IGNORECASE)
+    return list(dict.fromkeys(t.lower() for t in raw))
 
 
 def answer_question(
@@ -966,52 +1848,90 @@ def answer_question_stream(
 
     try:
         _ensure_unified_table_seeded()
+        _ensure_heritage_feature_seeded()
+        _ensure_query_memory_schema()
     except Exception as exc:
         yield _sse("error", message=f"Database not ready: {exc}")
         return
 
     townland_resolution = _resolve_townland_context(clean_q, townland_hint)
     canonical_townland = townland_resolution.get("name_norm")
+    analysis = _analyse_question(clean_q, canonical_townland or townland_hint)
     warnings: list[str] = []
     if townland_resolution.get("warning"):
         warnings.append(str(townland_resolution["warning"]))
+    warnings.extend(_question_data_coverage_warnings(clean_q))
+    verified_analysis = _try_verified_analysis(clean_q, canonical_townland, analysis)
+    approved_matches = _find_similar_approved_queries(clean_q, analysis, canonical_townland)
+    direct_memory_match = approved_matches[0] if _can_reuse_memory_directly(clean_q, analysis, canonical_townland, approved_matches[0] if approved_matches else None) else None
 
-    # ── Stage 1 — Contacting LLM / Template match ─────────────────────────
+    # ── Stage 1 — Contacting LLM / Query memory match ─────────────────────
     t0 = time.perf_counter()
     yield _sse("progress", stage="contacting_llm", status="started", label="Contacting LLM",
-               detail="Checking pre-built templates…")
+               detail="Checking approved query memory and preparing schema-aware SQL…")
 
     sql: str
     llm_meta: dict[str, Any]
     vrti_postgres_sql: str
     vrti_query_meta: dict[str, Any]
-    if not force_llm:
-        tmpl, tmpl_sql = _match_and_build_template(clean_q, canonical_townland)
-    else:
-        tmpl, tmpl_sql = None, None
+    chart_hint: str | None = None
+    query_provenance: dict[str, Any] = {
+        "used_approved_memory": False,
+        "reused_memory_id": None,
+        "direct_memory_reuse": False,
+        "execution_mode": "executed_as_generated",
+        "strategy": "llm_sql",
+        "approved_query_candidates": _memory_matches_for_display(approved_matches),
+    }
 
-    if tmpl_sql:
-        sql = tmpl_sql
-        llm_meta = {
-            "provider": "template",
-            "model": "pre_built",
-            "mode": "template",
-            "template_id": tmpl["id"],
-            "description": tmpl["description"],
-        }
+    if verified_analysis and not force_llm:
+        sql = str(verified_analysis.get("sql") or "")
+        llm_meta = dict(verified_analysis.get("meta") or {})
         vrti_postgres_sql = _fallback_vrti_postgres_sql(clean_q, canonical_townland)
-        vrti_query_meta = {"provider": "template", "model": "pre_built", "mode": "template"}
+        vrti_query_meta = {"provider": "verified_analysis", "model": "curated_sql", "mode": "verified_analysis"}
+        chart_hint = verified_analysis.get("chart_hint")
+        query_provenance.update({
+            "strategy": "verified_analysis",
+        })
         ms = int((time.perf_counter() - t0) * 1000)
         yield _sse("progress", stage="contacting_llm", status="completed", label="Contacting LLM",
-                   detail=f"Template: {tmpl['description']}", duration_ms=ms)
+                   detail=f"Using verified analysis SQL ({llm_meta.get('analysis_id')})", duration_ms=ms)
+    elif direct_memory_match and not force_llm:
+        sql = str(direct_memory_match.get("sql_text") or "")
+        llm_meta = {
+            "provider": "query_memory",
+            "model": "approved_sql",
+            "mode": "approved_memory_reuse",
+            "memory_id": direct_memory_match.get("id"),
+            "memory_similarity": direct_memory_match.get("match_score"),
+            "description": "Reused a previously approved SQL query for a highly similar question",
+        }
+        vrti_postgres_sql = _fallback_vrti_postgres_sql(clean_q, canonical_townland)
+        vrti_query_meta = {"provider": "query_memory", "model": "approved_sql", "mode": "approved_memory_reuse"}
+        query_provenance.update({
+            "used_approved_memory": True,
+            "reused_memory_id": direct_memory_match.get("id"),
+            "direct_memory_reuse": True,
+            "strategy": "approved_query_memory",
+        })
+        ms = int((time.perf_counter() - t0) * 1000)
+        yield _sse("progress", stage="contacting_llm", status="completed", label="Contacting LLM",
+                   detail=f"Reused approved query memory (similarity {direct_memory_match.get('match_score')})", duration_ms=ms)
     else:
         yield _sse("progress", stage="contacting_llm", status="started", label="Contacting LLM",
-                   detail="Sending schema + question to the configured LLM...")
+                   detail="Sending schema, live database context, and approved-query examples to the LLM…")
         try:
             # Run sequentially to avoid overloading small/free LLM providers
             # with concurrent generations on the same request.
-            sql, llm_meta = _generate_sql(clean_q, _ANNOTATED_SCHEMA, canonical_townland)
+            sql, llm_meta = _generate_sql(
+                clean_q,
+                _ANNOTATED_SCHEMA,
+                canonical_townland,
+                analysis=analysis,
+                approved_examples=approved_matches,
+            )
             vrti_postgres_sql, vrti_query_meta = _generate_vrti_postgres_query(clean_q, canonical_townland)
+            query_provenance["strategy"] = "validated_sql_unavailable" if llm_meta.get("mode") == "no_validated_sql" else "llm_sql"
             ms = int((time.perf_counter() - t0) * 1000)
             yield _sse("progress", stage="contacting_llm", status="completed", label="Contacting LLM",
                        detail=(
@@ -1022,12 +1942,28 @@ def answer_question_stream(
                        duration_ms=ms)
         except Exception as exc:
             ms = int((time.perf_counter() - t0) * 1000)
-            sql = _fallback_sql(clean_q, canonical_townland)
-            llm_meta = {"provider": "local_fallback", "model": "rule_template", "mode": "fallback_rule"}
+            if ASK_ALLOW_HEURISTIC_FALLBACK:
+                sql = _fallback_sql(clean_q, canonical_townland)
+                llm_meta = {"provider": "local_fallback", "model": "rule_template", "mode": "fallback_rule"}
+                query_provenance["strategy"] = "emergency_fallback"
+                detail = f"LLM unavailable ({exc}) - fallback template used"
+            else:
+                sql = _diagnostic_message_sql(
+                    "I could not build a validated SQL query for this question from the current schema. "
+                    "Please rephrase with a clearer townland, surname, year, ship, record type, or measure."
+                )
+                llm_meta = {
+                    "provider": "validation_guard",
+                    "model": "validated_sql_only",
+                    "mode": "no_validated_sql",
+                    "error": str(exc),
+                }
+                query_provenance["strategy"] = "validated_sql_unavailable"
+                detail = f"LLM unavailable ({exc}) - returning safe guidance instead of guessed SQL"
             vrti_postgres_sql = _fallback_vrti_postgres_sql(clean_q, canonical_townland)
             vrti_query_meta = {"provider": "local_fallback", "model": "rule_template", "mode": "fallback_rule"}
             yield _sse("progress", stage="contacting_llm", status="completed", label="Contacting LLM",
-                       detail=f"LLM unavailable ({exc}) - fallback template used", duration_ms=ms)
+                       detail=detail, duration_ms=ms)
 
     # ── Stage 2 — Framing Query ───────────────────────────────────────────
     t0 = time.perf_counter()
@@ -1036,23 +1972,53 @@ def answer_question_stream(
     try:
         safe_sql = _sanitize_and_validate_sql(sql)
     except ValueError:
-        safe_sql = _sanitize_and_validate_sql(_fallback_sql(clean_q, canonical_townland))
+        if ASK_ALLOW_HEURISTIC_FALLBACK:
+            safe_sql = _sanitize_and_validate_sql(_fallback_sql(clean_q, canonical_townland))
+        else:
+            safe_sql = _sanitize_and_validate_sql(_diagnostic_message_sql(
+                "I could not validate a safe SQL query for this question. Please rephrase it with a clearer entity, year, townland, surname, ship, record type, or measure."
+            ))
+            llm_meta = {
+                "provider": "validation_guard",
+                "model": "validated_sql_only",
+                "mode": "no_validated_sql",
+                "error": "sql_validation_failed",
+            }
+            query_provenance["strategy"] = "validated_sql_unavailable"
     ms = int((time.perf_counter() - t0) * 1000)
     yield _sse("progress", stage="framing_query", status="completed", label="Framing Query",
                detail="Read-only query validated", duration_ms=ms)
 
     # ── Stage 3 — Querying Database ───────────────────────────────────────
     t0 = time.perf_counter()
-    yield _sse("progress", stage="querying_database", status="started", label="Querying Database",
+    yield _sse("progress", stage="querying_database", status="started", label="Querying SQLite",
                detail="Running SQL against local SQLite database…")
-    safe_sql, columns, rows, query_warning = _execute_with_recovery(
-        question=clean_q, townland_hint=canonical_townland, sql=safe_sql,
+    safe_sql, columns, rows, query_warning, execution_meta = _execute_with_recovery(
+        question=clean_q,
+        townland_hint=canonical_townland,
+        sql=safe_sql,
+        approved_examples=approved_matches,
     )
     if query_warning:
         warnings.append(query_warning)
-    ms = int((time.perf_counter() - t0) * 1000)
-    yield _sse("progress", stage="querying_database", status="completed", label="Querying Database",
-               detail=f"{len(rows)} row{'s' if len(rows)!=1 else ''} returned", duration_ms=ms)
+    if execution_meta:
+        query_provenance["execution_mode"] = execution_meta.get("mode") or "recovered"
+        if execution_meta.get("mode") == "fallback_rule":
+            warnings.append("The system had to use an emergency local heuristic because the generated SQL could not be executed safely.")
+            query_provenance["strategy"] = "emergency_fallback"
+        elif execution_meta.get("mode") == "no_validated_sql":
+            warnings.append("No validated SQL query could be produced safely, so the system returned guidance instead of guessing.")
+            query_provenance["strategy"] = "validated_sql_unavailable"
+        else:
+            warnings.append("The system repaired the generated SQL after SQLite reported an execution issue.")
+        if llm_meta.get("mode") != "approved_memory_reuse":
+            llm_meta = execution_meta
+    if direct_memory_match:
+        _mark_query_memory_used(int(direct_memory_match.get("id") or 0))
+    sql_execution_ms = int((time.perf_counter() - t0) * 1000)
+    yield _sse("progress", stage="querying_database", status="completed", label="Querying SQLite",
+               detail=f"{len(rows)} row{'s' if len(rows)!=1 else ''} returned · {sql_execution_ms} ms",
+               duration_ms=sql_execution_ms)
 
     # ── Stage 4 — Querying VRTI Graph ─────────────────────────────────────
     t0 = time.perf_counter()
@@ -1069,15 +2035,148 @@ def answer_question_stream(
     yield _sse("progress", stage="querying_vrti_graph", status="completed", label="Querying VRTI Graph",
                detail=vrti_detail, duration_ms=ms)
 
+    # ── Stage 4.5 — Querying GraphDB (RDF/KG comparison) ─────────────────
+    from backend.integrations import graphdb_sparql as _gdb
+    graph_comparison: dict[str, Any] = {
+        "sparql_query": "",
+        "sql_query": safe_sql,
+        "columns": [],
+        "rows": [],
+        "row_count": 0,
+        "graphdb_available": False,
+        "triple_count": -1,
+        "data_loaded": False,
+        "error": None,
+        "setup_hint": None,
+        "timing": {
+            "sql_ms": sql_execution_ms,
+            "sparql_gen_ms": 0,
+            "graphdb_ms": 0,
+        },
+    }
+    if ActiveConfig.GRAPHDB_ENABLED:
+        t0_stage = time.perf_counter()
+        yield _sse("progress", stage="querying_graphdb", status="started", label="Querying GraphDB",
+                   detail="Generating SPARQL query via LLM…")
+
+        # Sub-step 1: LLM generates the SPARQL
+        t0 = time.perf_counter()
+        sparql_text = ""
+        try:
+            sparql_text, _sparql_meta = _generate_graphdb_sparql(clean_q, safe_sql)
+            graph_comparison["sparql_query"] = sparql_text
+        except Exception as exc:
+            graph_comparison["error"] = f"SPARQL generation failed: {exc}"
+            log.warning("ask_service.graphdb_sparql_gen_failed error=%s", exc)
+        graph_comparison["timing"]["sparql_gen_ms"] = int((time.perf_counter() - t0) * 1000)
+
+        # Sub-step 2: probe + execute against GraphDB
+        if sparql_text:
+            yield _sse("progress", stage="querying_graphdb", status="started", label="Querying GraphDB",
+                       detail="Executing SPARQL against local RDF graph…")
+            t0 = time.perf_counter()
+            try:
+                graphdb_ok = _gdb.probe()
+                graph_comparison["graphdb_available"] = graphdb_ok
+                if graphdb_ok:
+                    tc = _gdb.triple_count()
+                    graph_comparison["triple_count"] = tc
+                    graph_comparison["data_loaded"] = tc > 0
+                    if tc == 0:
+                        graph_comparison["setup_hint"] = (
+                            "GraphDB is running but the repository is empty. "
+                            "Load data with: python3 scripts/rdf_uplift.py --import"
+                        )
+                    g_cols, g_rows = _gdb.query(sparql_text)
+                    graph_comparison["columns"] = g_cols
+                    graph_comparison["rows"] = g_rows
+                    graph_comparison["row_count"] = len(g_rows)
+            except Exception as exc:
+                graph_comparison["error"] = str(exc)
+                log.warning("ask_service.graphdb_execute_failed error=%s", exc)
+            graph_comparison["timing"]["graphdb_ms"] = int((time.perf_counter() - t0) * 1000)
+
+        # Generate mismatch explanation when GraphDB has data but results differ.
+        # Checks row-count difference AND single-row value difference (e.g. two
+        # COUNT queries returning 1 row each but with different totals).
+        graph_comparison["mismatch_explanation"] = None
+        _gdb_available = graph_comparison["graphdb_available"]
+        _gdb_loaded    = graph_comparison["data_loaded"]
+        if _gdb_available and _gdb_loaded and sparql_text:
+            _sql_n  = len(rows)
+            _gdb_n  = graph_comparison["row_count"]
+            _row_count_differs = _sql_n != _gdb_n
+            _value_differs = False
+            if not _row_count_differs and _sql_n == 1 and _gdb_n == 1:
+                _sv = _first_numeric(rows[0])
+                _gv = _first_numeric(graph_comparison["rows"][0])
+                _value_differs = (
+                    _sv is not None and _gv is not None and _sv != _gv
+                )
+            if _row_count_differs or _value_differs:
+                graph_comparison["mismatch_explanation"] = _explain_result_mismatch(
+                    question=clean_q,
+                    sql=safe_sql,
+                    sparql=sparql_text,
+                    sql_rows=rows,
+                    sparql_rows=graph_comparison["rows"],
+                )
+
+        total_ms = int((time.perf_counter() - t0_stage) * 1000)
+        tc = graph_comparison["triple_count"]
+        if graph_comparison["graphdb_available"]:
+            tc_label = f" · {tc:,} triples loaded" if tc >= 0 else ""
+            gdb_detail = (
+                f"{graph_comparison['row_count']} row(s){tc_label} · "
+                f"SPARQL gen {graph_comparison['timing']['sparql_gen_ms']} ms · "
+                f"query {graph_comparison['timing']['graphdb_ms']} ms"
+            )
+        else:
+            gdb_detail = (
+                "GraphDB offline — SPARQL generated, not executed"
+                if sparql_text
+                else "SPARQL generation failed"
+            )
+        yield _sse("progress", stage="querying_graphdb", status="completed", label="Querying GraphDB",
+                   detail=gdb_detail, duration_ms=total_ms)
+
     # ── Stage 5 — Preparing Output ────────────────────────────────────────
     t0 = time.perf_counter()
     yield _sse("progress", stage="preparing_output", status="started", label="Preparing Output",
                detail="Building data tables, LLM rewrite, and PDF report...")
 
-    actual_answer = _build_answer_text(clean_q, columns, rows, canonical_townland, kg_context)
+    availability = _build_availability_payload(
+        question=clean_q,
+        analysis=analysis,
+        columns=columns,
+        rows=rows,
+        townland_resolution=townland_resolution,
+    )
+    related_insights = _build_related_insights(
+        question=clean_q,
+        analysis=analysis,
+        rows=rows,
+        townland_norm=canonical_townland,
+    )
+    chart_spec = _build_chart_spec(
+        question=clean_q,
+        columns=columns,
+        rows=rows,
+        availability=availability,
+        chart_hint=chart_hint,
+    )
+    actual_answer = _build_answer_text(
+        clean_q,
+        columns,
+        rows,
+        canonical_townland,
+        kg_context,
+        availability=availability,
+    )
     summary_block = _build_structured_summary(
         question=clean_q, local_columns=columns, local_rows=rows,
         vrti_columns=vrti_columns, vrti_rows=vrti_rows, kg_context=kg_context,
+        availability=availability, related_insights=related_insights,
     )
     supporting_context = _build_supporting_context(
         question=clean_q,
@@ -1086,6 +2185,7 @@ def answer_question_stream(
         primary_columns=columns,
         primary_rows=rows,
         kg_context=kg_context,
+        related_insights=related_insights,
     )
     llm_data_context = _build_llm_data_context(
         local_columns=columns, local_rows=rows,
@@ -1125,6 +2225,10 @@ def answer_question_stream(
         },
         "summary": summary_block,
         "supporting_context": _supporting_context_for_display(supporting_context),
+        "availability": availability,
+        "related_insights": related_insights,
+        "chart": chart_spec,
+        "query_provenance": query_provenance,
     }
 
     pdf_path = _write_pdf_report(
@@ -1138,6 +2242,10 @@ def answer_question_stream(
 
     if llm_meta.get("mode") == "fallback_rule":
         warnings.append("LLM SQL generation unavailable - fallback SQL template used.")
+    elif llm_meta.get("mode") == "no_validated_sql":
+        warnings.append("The system did not find a validated SQL query for this request and returned safe guidance instead.")
+
+    warnings.extend(_null_rate_warnings(columns, rows))
 
     ms = int((time.perf_counter() - t0) * 1000)
     yield _sse("progress", stage="preparing_output", status="completed", label="Preparing Output",
@@ -1158,9 +2266,16 @@ def answer_question_stream(
         "townland_context": canonical_townland,
         "townland_resolution": townland_resolution,
         "kg_context": kg_context,
+        "availability": availability,
+        "related_insights": related_insights,
+        "chart": chart_spec,
+        "query_provenance": query_provenance,
+        "suggestions": availability.get("suggestions", []),
         "structured_output": structured_output,
         "pdf_url": f"/api/ask/pdf/{pdf_path.name}",
         "warnings": warnings,
+        "source_tables": _extract_tables(safe_sql) if safe_sql else [],
+        "graph_comparison": graph_comparison,
     }
     if include_sql:
         payload["sql"] = safe_sql
@@ -1297,12 +2412,36 @@ def _openrouter_status() -> dict[str, Any]:
         })
     except Exception as exc:
         log.warning("ask_service.openrouter_status_failed error=%s", exc)
+        friendly_hint, technical_detail = _friendly_openrouter_connection_issue(exc)
         return cache_status({
             **base_status,
             "available": False,
             "connection_state": "unreachable",
-            "hint": f"OpenRouter key is configured, but the live connection check failed: {exc}",
+            "hint": friendly_hint,
+            "detail": technical_detail,
         })
+
+
+def _friendly_openrouter_connection_issue(exc: Exception) -> tuple[str, str]:
+    detail = str(exc)
+    lower = detail.lower()
+    if any(token in lower for token in ["nameresolutionerror", "failed to resolve", "nodename nor servname"]):
+        return (
+            "OpenRouter is configured, but this server could not resolve openrouter.ai. "
+            "The Ask page will still show the database answer, but the LLM rewrite is temporarily unavailable.",
+            detail,
+        )
+    if "timed out" in lower or "timeout" in lower:
+        return (
+            "OpenRouter is configured, but the connection timed out. "
+            "The Ask page will still show the database answer, but the LLM rewrite is temporarily unavailable.",
+            detail,
+        )
+    return (
+        "OpenRouter is configured, but the live connection check failed. "
+        "The Ask page will still show the database answer, but the LLM rewrite is temporarily unavailable.",
+        detail,
+    )
 
 
 def check_ollama_status() -> dict[str, Any]:
@@ -1357,31 +2496,27 @@ def _ensure_unified_table_seeded() -> None:
     if not UNIFIED_CSV_PATH.exists():
         raise RuntimeError(f"Unified CSV not found: {UNIFIED_CSV_PATH}")
 
-    fingerprint = f"{UNIFIED_CSV_PATH.stat().st_mtime_ns}:{UNIFIED_CSV_PATH.stat().st_size}"
+    fingerprint = (
+        f"{UNIFIED_SEED_SCHEMA_VERSION}:"
+        f"{UNIFIED_CSV_PATH.stat().st_mtime_ns}:{UNIFIED_CSV_PATH.stat().st_size}"
+    )
     from backend.repositories import refresh_state_repository
     state = refresh_state_repository.get(UNIFIED_SEED_KEY, stale_after_days=36500)
 
     conn = get_db_conn()
     try:
-        conn.execute(
-            """CREATE TABLE IF NOT EXISTS unified_record (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                record_id TEXT, unique_id_no TEXT, year INTEGER, month TEXT,
-                surname TEXT, forename TEXT, canonical_name TEXT,
-                townland TEXT, townland_norm TEXT, parish TEXT, estate TEXT,
-                role TEXT, legal_action TEXT, ship_name TEXT,
-                departure TEXT, arrival TEXT, household_list TEXT,
-                has_emigration_record INTEGER DEFAULT 0,
-                has_eviction_record INTEGER DEFAULT 0,
-                has_tenancy_record INTEGER DEFAULT 0)"""
-        )
+        schema_changed = _ensure_unified_record_schema(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_unified_townland_norm ON unified_record(townland_norm)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_unified_has_emigration ON unified_record(has_emigration_record)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_unified_has_eviction ON unified_record(has_eviction_record)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_unified_has_tenancy ON unified_record(has_tenancy_record)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_unified_record_id ON unified_record(record_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_unified_year ON unified_record(year)")
         conn.commit()
 
         existing_count = conn.execute("SELECT COUNT(*) FROM unified_record").fetchone()[0]
-        if state and state.query_hash == fingerprint and existing_count > 0:
+        needs_reload = schema_changed or not state or state.query_hash != fingerprint or existing_count <= 0
+        if not needs_reload:
             return
 
         conn.execute("DELETE FROM unified_record")
@@ -1396,15 +2531,50 @@ def _ensure_unified_table_seeded() -> None:
                 batch.append((
                     record_id, _clean_text(row.get("unique_id_no")),
                     _to_int(row.get("year")), _clean_text(row.get("month")),
+                    _clean_text(row.get("nli_ref")), _clean_text(row.get("court_session")),
+                    _clean_text(row.get("vol")) or _clean_text(row.get("volume")),
+                    _clean_text(row.get("page")), _clean_text(row.get("estate_reference_no")),
+                    _clean_text(row.get("townland_as_shown")),
+                    _clean_text(row.get("townland_official_name")),
                     _clean_text(row.get("surname")), _clean_text(row.get("forename")),
                     _clean_text(row.get("canonical_name")),
                     townland, _norm_townland(townland),
                     _clean_text(row.get("parish")), _clean_text(row.get("estate")),
+                    _clean_text(row.get("occupation")), _to_int(row.get("age")),
+                    _clean_text(row.get("gender")),
                     _clean_text(row.get("role")), _clean_text(row.get("legal_action")),
+                    _to_float(row.get("acres")), _to_float(row.get("acres_2")),
+                    _to_float(row.get("acres_irish")), _to_float(row.get("acres_english")),
+                    _best_holding_acres(row),
+                    _to_int(row.get("sons")), _to_int(row.get("daughters")),
+                    _to_int(row.get("servants_male")), _to_int(row.get("servants_female")),
+                    _to_int(row.get("other_males_in_household")), _to_int(row.get("other_famales_in_household")),
+                    _derived_children_count(row), _derived_family_size_estimate(row),
+                    _to_int(row.get("age_head_of_household")),
+                    _to_int(row.get("age_wife_widow_of_head_of_household")),
+                    _clean_text(row.get("relationship_to_head_of_household")),
+                    _to_float(row.get("rent_owed")), _to_float(row.get("arrears")),
+                    _clean_text(row.get("chief_tenant_surname_original")),
+                    _clean_text(row.get("chief_tenant_forename_original")),
+                    _clean_text(row.get("under_tenant_surname_original")),
+                    _clean_text(row.get("under_tenant_forename_original")),
+                    _clean_text(row.get("chief_tenant_surname")),
+                    _clean_text(row.get("chief_tenant_forename")),
+                    _clean_text(row.get("under_tenant_surname")),
+                    _clean_text(row.get("under_tenant_forename")),
                     _clean_text(row.get("ship_name")) or _clean_text(row.get("name_of_ship")),
                     _clean_text(row.get("departure")) or _clean_text(row.get("place_and_date_of_departure")),
                     _clean_text(row.get("arrival"))   or _clean_text(row.get("place_and_date_of_arrival")),
                     _clean_text(row.get("household_list")) or _clean_text(row.get("household_list_in_emigration_records")),
+                    _clean_text(row.get("holding_on_fitzw_estate")),
+                    _clean_text(row.get("holding_on_estate")),
+                    _clean_text(row.get("mountains_in_common")),
+                    _clean_text(row.get("comments")),
+                    _clean_text(row.get("family_key")),
+                    _derived_is_widow(row),
+                    _derived_is_canada_destination(
+                        _clean_text(row.get("arrival")) or _clean_text(row.get("place_and_date_of_arrival"))
+                    ),
                     _to_bool_int(row.get("has_emigration_record")),
                     _to_bool_int(row.get("has_eviction_record")),
                     _to_bool_int(row.get("has_tenancy_record")),
@@ -1424,25 +2594,283 @@ def _ensure_unified_table_seeded() -> None:
         conn.close()
 
 
+def _ensure_unified_record_schema(conn) -> bool:
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS unified_record (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_id TEXT,
+            unique_id_no TEXT,
+            year INTEGER,
+            month TEXT
+        )"""
+    )
+    required_columns = {
+        "nli_ref": "TEXT",
+        "court_session": "TEXT",
+        "vol": "TEXT",
+        "page": "TEXT",
+        "estate_reference_no": "TEXT",
+        "estate": "TEXT",
+        "townland_as_shown": "TEXT",
+        "townland_official_name": "TEXT",
+        "surname": "TEXT",
+        "forename": "TEXT",
+        "canonical_name": "TEXT",
+        "townland": "TEXT",
+        "townland_norm": "TEXT",
+        "parish": "TEXT",
+        "occupation": "TEXT",
+        "age": "INTEGER",
+        "gender": "TEXT",
+        "role": "TEXT",
+        "legal_action": "TEXT",
+        "acres": "REAL",
+        "acres_2": "REAL",
+        "acres_irish": "REAL",
+        "acres_english": "REAL",
+        "holding_acres": "REAL",
+        "sons": "INTEGER",
+        "daughters": "INTEGER",
+        "servants_male": "INTEGER",
+        "servants_female": "INTEGER",
+        "other_males_in_household": "INTEGER",
+        "other_famales_in_household": "INTEGER",
+        "children_count": "INTEGER",
+        "family_size_estimate": "INTEGER",
+        "age_head_of_household": "INTEGER",
+        "age_wife_widow_of_head_of_household": "INTEGER",
+        "relationship_to_head_of_household": "TEXT",
+        "rent_owed": "REAL",
+        "arrears": "REAL",
+        "chief_tenant_surname_original": "TEXT",
+        "chief_tenant_forename_original": "TEXT",
+        "under_tenant_surname_original": "TEXT",
+        "under_tenant_forename_original": "TEXT",
+        "chief_tenant_surname": "TEXT",
+        "chief_tenant_forename": "TEXT",
+        "under_tenant_surname": "TEXT",
+        "under_tenant_forename": "TEXT",
+        "ship_name": "TEXT",
+        "departure": "TEXT",
+        "arrival": "TEXT",
+        "household_list": "TEXT",
+        "holding_on_fitzw_estate": "TEXT",
+        "holding_on_estate": "TEXT",
+        "mountains_in_common": "TEXT",
+        "comments": "TEXT",
+        "family_key": "TEXT",
+        "is_widow": "INTEGER DEFAULT 0",
+        "is_canada_destination": "INTEGER DEFAULT 0",
+        "has_emigration_record": "INTEGER DEFAULT 0",
+        "has_eviction_record": "INTEGER DEFAULT 0",
+        "has_tenancy_record": "INTEGER DEFAULT 0",
+    }
+    rows = conn.execute("PRAGMA table_info(unified_record)").fetchall()
+    existing = {row["name"] for row in rows}
+    changed = False
+    for column, ddl in required_columns.items():
+        if column in existing:
+            continue
+        conn.execute(f"ALTER TABLE unified_record ADD COLUMN {column} {ddl}")
+        changed = True
+    return changed
+
+
 def _bulk_insert(conn, batch: list[tuple]) -> None:
     conn.executemany(
         """INSERT INTO unified_record (
-            record_id,unique_id_no,year,month,surname,forename,canonical_name,
-            townland,townland_norm,parish,estate,role,legal_action,ship_name,
-            departure,arrival,household_list,
+            record_id,unique_id_no,year,month,nli_ref,court_session,vol,page,estate_reference_no,
+            townland_as_shown,townland_official_name,surname,forename,canonical_name,
+            townland,townland_norm,parish,estate,occupation,age,gender,role,legal_action,
+            acres,acres_2,acres_irish,acres_english,holding_acres,
+            sons,daughters,servants_male,servants_female,other_males_in_household,other_famales_in_household,
+            children_count,family_size_estimate,age_head_of_household,age_wife_widow_of_head_of_household,
+            relationship_to_head_of_household,rent_owed,arrears,
+            chief_tenant_surname_original,chief_tenant_forename_original,
+            under_tenant_surname_original,under_tenant_forename_original,
+            chief_tenant_surname,chief_tenant_forename,under_tenant_surname,under_tenant_forename,
+            ship_name,departure,arrival,household_list,
+            holding_on_fitzw_estate,holding_on_estate,mountains_in_common,comments,family_key,
+            is_widow,is_canada_destination,
             has_emigration_record,has_eviction_record,has_tenancy_record
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         batch,
     )
+
+
+def _ensure_heritage_feature_seeded() -> None:
+    files = [path for path in (HOLYWELLS_GEOJSON_PATH, ASI_GEOJSON_PATH) if path.exists()]
+    if not files:
+        return
+
+    fingerprint = HERITAGE_SEED_SCHEMA_VERSION + "|" + "|".join(
+        f"{path.name}:{path.stat().st_mtime_ns}:{path.stat().st_size}" for path in files
+    )
+    from backend.repositories import refresh_state_repository
+    state = refresh_state_repository.get(HERITAGE_SEED_KEY, stale_after_days=36500)
+
+    conn = get_db_conn()
+    try:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS heritage_feature (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_dataset TEXT,
+                feature_group TEXT,
+                monument_class TEXT,
+                townland_raw TEXT,
+                townland_norm TEXT,
+                feature_name TEXT,
+                source_link TEXT
+            )"""
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_heritage_townland_norm ON heritage_feature(townland_norm)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_heritage_feature_group ON heritage_feature(feature_group)")
+        conn.commit()
+
+        existing_count = conn.execute("SELECT COUNT(*) FROM heritage_feature").fetchone()[0]
+        if state and state.query_hash == fingerprint and existing_count > 0:
+            return
+
+        conn.execute("DELETE FROM heritage_feature")
+        batch: list[tuple[str | None, ...]] = []
+
+        if HOLYWELLS_GEOJSON_PATH.exists():
+            data = json.loads(HOLYWELLS_GEOJSON_PATH.read_text(encoding="utf-8"))
+            for feature in data.get("features", []):
+                props = feature.get("properties") or {}
+                townland_raw = _clean_text(props.get("townland"))
+                batch.append((
+                    "holywells",
+                    "holy_well",
+                    _clean_text(props.get("monument_type")) or "Ritual site - holy well",
+                    townland_raw,
+                    _heritage_townland_norm(townland_raw),
+                    _clean_text(props.get("latest_edit")) or _clean_text(props.get("id")),
+                    _clean_text(props.get("source_link")),
+                ))
+
+        if ASI_GEOJSON_PATH.exists():
+            data = json.loads(ASI_GEOJSON_PATH.read_text(encoding="utf-8"))
+            for feature in data.get("features", []):
+                props = feature.get("properties") or {}
+                monument_class = _clean_text(props.get("monument_class"))
+                if not _is_ring_fort_class(monument_class):
+                    continue
+                townland_raw = _clean_text(props.get("townland"))
+                batch.append((
+                    "asi",
+                    "ring_fort",
+                    monument_class,
+                    townland_raw,
+                    _heritage_townland_norm(townland_raw),
+                    _clean_text(props.get("smrs")) or _clean_text(props.get("id")),
+                    _clean_text(props.get("source_link")),
+                ))
+
+        if batch:
+            conn.executemany(
+                """
+                INSERT INTO heritage_feature (
+                    source_dataset, feature_group, monument_class, townland_raw, townland_norm, feature_name, source_link
+                ) VALUES (?,?,?,?,?,?,?)
+                """,
+                batch,
+            )
+        conn.commit()
+        refresh_state_repository.upsert(
+            HERITAGE_SEED_KEY, source="geojson_seed", query_hash=fingerprint, record_count=len(batch),
+        )
+    finally:
+        conn.close()
+
+
+def _template_notes(template: dict[str, Any] | None) -> list[str]:
+    if not template:
+        return []
+    notes = template.get("warnings") or template.get("warning") or []
+    if isinstance(notes, str):
+        return [notes]
+    return [str(note) for note in notes if note]
+
+
+def _question_data_coverage_warnings(question: str) -> list[str]:
+    q = (question or "").lower()
+    warnings: list[str] = []
+    if "1821" in q and any(token in q for token in ["population", "census", "trend"]):
+        warnings.append(
+            "The Ask census table begins in 1841, so any population trend answer uses 1841–1861 rather than 1821–1861."
+        )
+    return warnings
+
+
+# Key columns that, when >60% null across result rows, indicate sparse data
+_SPARSE_FIELD_LABELS: dict[str, str] = {
+    "forename":     "first name",
+    "surname":      "surname",
+    "year":         "year",
+    "townland":     "townland",
+    "ship_name":    "ship name",
+    "destination":  "destination",
+    "occupation":   "occupation",
+    "county":       "county",
+    "age":          "age",
+}
+_SPARSE_MIN_ROWS = 5     # only warn when result has enough rows to be meaningful
+_SPARSE_THRESHOLD = 0.60  # 60% null → warn
+
+
+def _null_rate_warnings(columns: list[str], rows: list[dict]) -> list[str]:
+    """
+    Return user-facing warnings for result columns that are mostly null.
+    Only fires when the result has >= _SPARSE_MIN_ROWS rows.
+    """
+    if not rows or len(rows) < _SPARSE_MIN_ROWS:
+        return []
+    warnings: list[str] = []
+    col_set = set(c.lower() for c in columns)
+    for col_key, col_label in _SPARSE_FIELD_LABELS.items():
+        # Find the actual column name (case-insensitive match)
+        actual = next((c for c in columns if c.lower() == col_key), None)
+        if actual is None:
+            continue
+        null_count = sum(
+            1 for row in rows
+            if row.get(actual) is None or str(row.get(actual, "")).strip() in {"", "None", "null"}
+        )
+        rate = null_count / len(rows)
+        if rate >= _SPARSE_THRESHOLD:
+            pct = int(rate * 100)
+            warnings.append(
+                f"Sparse field — '{col_label}' is empty in {pct}% of the result rows. "
+                "This field may not be recorded for all historical entries."
+            )
+    return warnings
+
+
+def _diagnostic_message_sql(message: str) -> str:
+    clean = " ".join((message or "").split()).strip() or "No validated SQL query could be produced."
+    return f"SELECT '{_sql_escape(clean)}' AS message"
+
+
+def _clean_message_result_text(text: str | None) -> str:
+    clean = " ".join(str(text or "").split()).strip()
+    clean = re.sub(r"\s*diagnostic\.?\s*$", "", clean, flags=re.IGNORECASE).strip()
+    return clean
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LLM SQL generation
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _generate_sql(question: str, schema: str, townland_hint: str | None) -> tuple[str, dict]:
-    analysis = _analyse_question(question, townland_hint)
-    prompt = _build_sql_prompt(question, schema, analysis)
+def _generate_sql(
+    question: str,
+    schema: str,
+    townland_hint: str | None,
+    analysis: dict[str, Any] | None = None,
+    approved_examples: list[dict[str, Any]] | None = None,
+) -> tuple[str, dict]:
+    analysis = analysis or _analyse_question(question, townland_hint)
+    prompt = _build_sql_prompt(question, schema, analysis, approved_examples or [])
     fallback_sql = _fallback_sql(question, townland_hint)
     try:
         sql, meta, mode = _llm_generate_validated_sql(
@@ -1450,11 +2878,34 @@ def _generate_sql(question: str, schema: str, townland_hint: str | None) -> tupl
             purpose="sqlite_sql",
             dialect_label="SQLite",
         )
+        if _requires_verified_fallback(question, sql):
+            repair_prompt = _build_sql_semantic_repair_prompt(
+                question=question,
+                schema=schema,
+                analysis=analysis,
+                invalid_sql=sql,
+                approved_examples=approved_examples or [],
+            )
+            sql, meta, mode = _llm_generate_validated_sql(
+                prompt=repair_prompt,
+                purpose="sqlite_sql_semantic_repair",
+                dialect_label="SQLite",
+            )
         return sql, {**meta, "mode": mode}
     except Exception as exc:
         log.warning("ask_service.llm_sql_unavailable error=%s", exc)
-        return fallback_sql, {
-            "provider": "local_fallback", "model": "rule_template", "mode": "fallback_rule"
+        if ASK_ALLOW_HEURISTIC_FALLBACK:
+            return fallback_sql, {
+                "provider": "local_fallback", "model": "rule_template", "mode": "fallback_rule"
+            }
+        return _diagnostic_message_sql(
+            "I could not build a validated SQL query for this question from the current schema. "
+            "Please rephrase with a clearer townland, surname, year, ship, record type, or measure."
+        ), {
+            "provider": "validation_guard",
+            "model": "validated_sql_only",
+            "mode": "no_validated_sql",
+            "error": str(exc),
         }
 
 
@@ -1483,7 +2934,465 @@ def _generate_vrti_postgres_query(question: str, townland_hint: str | None) -> t
         }
 
 
-def _build_sql_prompt(question: str, schema: str, analysis: dict[str, Any]) -> str:
+def _load_kg_context() -> str:
+    """
+    Load data/kg_context.yaml and format it as a compact text block for
+    inclusion in the SPARQL generation prompt.  Returns a cached string.
+    """
+    if not hasattr(_load_kg_context, "_cache"):
+        try:
+            import yaml
+            ctx_path = Path(__file__).resolve().parent.parent.parent / "data" / "kg_context.yaml"
+            with open(ctx_path, encoding="utf-8") as fh:
+                ctx = yaml.safe_load(fh)
+
+            lines: list[str] = []
+
+            # ── Prefixes ──────────────────────────────────────────
+            lines.append("PREFIXES (pre-declared — omit from queries):")
+            for pfx, uri in ctx.get("prefixes", {}).items():
+                lines.append(f"  {pfx}  <{uri}>")
+
+            # ── Classes ───────────────────────────────────────────
+            lines.append("\nCLASSES AND PROPERTIES (derived from live GraphDB — 143,209 triples):")
+            for cls, cdata in ctx.get("classes", {}).items():
+                lines.append(f"\n{cls}  ({cdata.get('description', '')}  total={cdata.get('total', '?')})")
+                for prop, pdata in cdata.get("properties", {}).items():
+                    req = "REQUIRED" if pdata.get("required") else "OPTIONAL"
+                    cov = pdata.get("coverage", "")
+                    note = pdata.get("note", "").strip().replace("\n", " ")
+                    vals = pdata.get("values")
+                    if isinstance(vals, dict):
+                        vstr = ", ".join(f'"{k}"={v}' for k, v in vals.items())
+                    elif isinstance(vals, list):
+                        vstr = ", ".join(f'"{v}"' for v in vals)
+                    else:
+                        vstr = ""
+                    ex = pdata.get("example_values", [])
+                    ex_str = f"  e.g. {ex[:4]}" if ex else ""
+                    val_part = f"  values={{{vstr}}}" if vstr else ex_str
+                    lines.append(f"  {prop}  [{req}]  cov={cov}{val_part}")
+                    if note:
+                        lines.append(f"    → {note}")
+
+            # ── OPTIONAL rules ────────────────────────────────────
+            lines.append("\nOPTIONAL RULES:")
+            lines.append("  NEVER OPTIONAL: co:eventType, co:estate")
+            lines.append("  ALWAYS OPTIONAL: schema:familyName, schema:givenName, co:parish, co:occupation")
+            lines.append("  co:townland: OPTIONAL when projecting; no OPTIONAL when used as a WHERE filter")
+            lines.append("  co:year: OPTIONAL only when projecting in listing queries; omit OPTIONAL in GROUP BY / COUNT")
+
+            # ── Canonical patterns ────────────────────────────────
+            lines.append("\nCANONICAL SPARQL PATTERNS (copy the closest match):")
+            for name, sparql in ctx.get("patterns", {}).items():
+                lines.append(f"\n# {name}")
+                lines.append(sparql.strip())
+
+            # ── Mistakes ──────────────────────────────────────────
+            lines.append("\nCOMMON MISTAKES — DO NOT REPEAT:")
+            for m in ctx.get("mistakes", []):
+                lines.append(f"  ✗ {m}")
+
+            _load_kg_context._cache = "\n".join(lines)
+        except Exception as exc:
+            log.warning("ask_service.kg_context_load_failed error=%s", exc)
+            _load_kg_context._cache = ""
+    return _load_kg_context._cache
+
+
+# Properties that exist in SQLite but NOT in the RDF graph.  If the LLM
+# hallucinates any of these as RDF predicates the generated SPARQL will
+# silently return 0 rows.
+_SPARQL_FORBIDDEN_PROPS = {
+    "co:hasemigrationrecord", "co:hasevictionrecord", "co:hastenancyrecord",
+    "co:has_emigration_record", "co:has_eviction_record", "co:has_tenancy_record",
+    "co:totalfamilysize", "co:total_family_size", "co:adults", "co:children",
+    "co:ship", "co:destination", "co:chief_tenant", "co:townland_id",
+    "co:county", "co:barony", "co:record_id",
+}
+
+
+def _sparql_uses_forbidden_props(sparql: str) -> bool:
+    lower = sparql.lower()
+    return any(p in lower for p in _SPARQL_FORBIDDEN_PROPS)
+
+
+def _match_sparql_template(question: str, sql: str) -> str | None:
+    """
+    Try to map the question to a canonical SPARQL pattern before calling the LLM.
+    Returns a ready-to-execute SPARQL string (with any townland/year/surname
+    substitutions applied), or None if no template matches confidently.
+    """
+    q = question.lower()
+    s = sql.lower()
+
+    # Extract a townland name from the SQL WHERE clause (case-sensitive, from SQL)
+    townland_m = re.search(r"townland\s*(?:LIKE\s*'%?|=\s*'|ILIKE\s*'%?)([^'%]+)", sql, re.I)
+    townland = townland_m.group(1).strip().rstrip("%'") if townland_m else None
+
+    # Extract year filters from SQL
+    year_m = re.search(r"year\s*=\s*(\d{4})", s)
+    year = year_m.group(1) if year_m else None
+    year_range_m = re.search(r"year\s*between\s*(\d{4})\s+and\s*(\d{4})", s)
+    year_from = year_range_m.group(1) if year_range_m else None
+    year_to   = year_range_m.group(2) if year_range_m else None
+    if not year_from:
+        yr_ge = re.search(r"year\s*>=\s*(\d{4})", s)
+        yr_le = re.search(r"year\s*<=\s*(\d{4})", s)
+        if yr_ge and yr_le:
+            year_from, year_to = yr_ge.group(1), yr_le.group(1)
+
+    # Extract a surname from the SQL
+    surname_m = re.search(r"(?:surname|family_?name)\s*(?:LIKE\s*'%?|=\s*'|ILIKE\s*'%?)([^'%]+)", sql, re.I)
+    surname = surname_m.group(1).strip().rstrip("%'") if surname_m else None
+
+    is_count = any(k in q for k in ("how many", "count", "total number", "number of"))
+    is_emigr = any(k in q for k in ("emigrat", "left", "depart"))
+    is_evict = any(k in q for k in ("evict", "clearance", "cleared"))
+    is_tenant = any(k in q for k in ("tenant", "tenancy", "rent"))
+    is_list   = any(k in q for k in ("list", "show", "who", "names", "people"))
+    by_year   = any(k in q for k in ("per year", "each year", "by year", "yearly", "annual"))
+    by_townland = any(k in q for k in ("per townland", "by townland", "each townland", "breakdown by townland"))
+    by_parish = any(k in q for k in ("per parish", "by parish", "each parish"))
+
+    # ── COUNT emigration (total or from a townland) ──────────────────────
+    if is_count and is_emigr and not by_year:
+        if townland:
+            return (
+                f'SELECT (COUNT(DISTINCT ?person) AS ?emigrantCount)\n'
+                f'WHERE {{\n'
+                f'  ?person a co:Person ;\n'
+                f'          co:townland "{townland}" ;\n'
+                f'          co:hasEvent ?event .\n'
+                f'  ?event co:eventType "emigration" .\n'
+                f'}}'
+            )
+        return (
+            'SELECT (COUNT(DISTINCT ?person) AS ?emigrantCount)\n'
+            'WHERE {\n'
+            '  ?person a co:Person ; co:hasEvent ?event .\n'
+            '  ?event co:eventType "emigration" .\n'
+            '}'
+        )
+
+    # ── COUNT evictions total ────────────────────────────────────────────
+    if is_count and is_evict and not by_year:
+        if townland:
+            return (
+                f'SELECT (COUNT(DISTINCT ?person) AS ?evictionCount)\n'
+                f'WHERE {{\n'
+                f'  ?person a co:Person ;\n'
+                f'          co:townland "{townland}" ;\n'
+                f'          co:hasEvent ?event .\n'
+                f'  ?event co:eventType "eviction" .\n'
+                f'}}'
+            )
+        return (
+            'SELECT (COUNT(DISTINCT ?person) AS ?evictionCount)\n'
+            'WHERE {\n'
+            '  ?person a co:Person ; co:hasEvent ?event .\n'
+            '  ?event co:eventType "eviction" .\n'
+            '}'
+        )
+
+    # ── COUNT tenants total ──────────────────────────────────────────────
+    if is_count and is_tenant and not by_year:
+        return (
+            'SELECT (COUNT(DISTINCT ?person) AS ?tenantCount)\n'
+            'WHERE {\n'
+            '  ?person a co:Person ; co:hasEvent ?event .\n'
+            '  ?event co:eventType "tenancy" .\n'
+            '}'
+        )
+
+    # ── Evictions per year ────────────────────────────────────────────────
+    if is_evict and by_year:
+        base = (
+            'SELECT ?year (COUNT(DISTINCT ?person) AS ?evictionCount)\n'
+            'WHERE {\n'
+            '  ?person a co:Person ; co:hasEvent ?event .\n'
+            '  ?event co:eventType "eviction" ; co:year ?year .\n'
+        )
+        if year_from and year_to:
+            base += f'  FILTER(?year >= {year_from} && ?year <= {year_to})\n'
+        elif year:
+            base += f'  FILTER(?year = {year})\n'
+        return base + '}\nGROUP BY ?year ORDER BY ?year'
+
+    # ── Emigrations per year ─────────────────────────────────────────────
+    if is_emigr and by_year:
+        base = (
+            'SELECT ?year (COUNT(DISTINCT ?person) AS ?emigrantCount)\n'
+            'WHERE {\n'
+            '  ?person a co:Person ; co:hasEvent ?event .\n'
+            '  ?event co:eventType "emigration" ; co:year ?year .\n'
+        )
+        if year_from and year_to:
+            base += f'  FILTER(?year >= {year_from} && ?year <= {year_to})\n'
+        return base + '}\nGROUP BY ?year ORDER BY ?year'
+
+    # ── Emigration breakdown by townland ─────────────────────────────────
+    if is_emigr and by_townland:
+        return (
+            'SELECT ?townland (COUNT(DISTINCT ?person) AS ?emigrants)\n'
+            'WHERE {\n'
+            '  ?person a co:Person ;\n'
+            '          co:townland ?townland ;\n'
+            '          co:hasEvent ?event .\n'
+            '  ?event co:eventType "emigration" .\n'
+            '}\nGROUP BY ?townland ORDER BY DESC(?emigrants) LIMIT 20'
+        )
+
+    # ── Emigration breakdown by parish ───────────────────────────────────
+    if is_emigr and by_parish:
+        return (
+            'SELECT ?parish (COUNT(DISTINCT ?person) AS ?emigrants)\n'
+            'WHERE {\n'
+            '  ?person a co:Person ;\n'
+            '          co:parish ?parish ;\n'
+            '          co:hasEvent ?event .\n'
+            '  ?event co:eventType "emigration" .\n'
+            '}\nGROUP BY ?parish ORDER BY DESC(?emigrants)'
+        )
+
+    # ── List emigrants from a specific townland ──────────────────────────
+    if is_list and is_emigr and townland:
+        return (
+            f'SELECT ?surname ?givenName ?year\n'
+            f'WHERE {{\n'
+            f'  ?person a co:Person ;\n'
+            f'          co:townland "{townland}" ;\n'
+            f'          co:hasEvent ?event .\n'
+            f'  ?event co:eventType "emigration" .\n'
+            f'  OPTIONAL {{ ?event co:year ?year . }}\n'
+            f'  OPTIONAL {{ ?person schema:familyName ?surname . }}\n'
+            f'  OPTIONAL {{ ?person schema:givenName ?givenName . }}\n'
+            f'}}\nORDER BY ?year ?surname LIMIT 50'
+        )
+
+    # ── People by surname ────────────────────────────────────────────────
+    if surname:
+        return (
+            f'SELECT ?givenName ?townland ?eventType ?year\n'
+            f'WHERE {{\n'
+            f'  ?person a co:Person ;\n'
+            f'          schema:familyName "{surname}" ;\n'
+            f'          co:hasEvent ?event .\n'
+            f'  ?event co:eventType ?eventType .\n'
+            f'  OPTIONAL {{ ?event co:year ?year . }}\n'
+            f'  OPTIONAL {{ ?person schema:givenName ?givenName . }}\n'
+            f'  OPTIONAL {{ ?person co:townland ?townland . }}\n'
+            f'}}\nORDER BY ?year LIMIT 50'
+        )
+
+    return None  # no template matched
+
+
+def _generate_graphdb_sparql(question: str, sql: str) -> tuple[str, dict[str, Any]]:
+    """
+    Translate the question + SQL into a SPARQL SELECT for the Coolattin GraphDB.
+
+    Steps:
+    1. Rule-based template matching (fast, deterministic, always-correct).
+    2. LLM generation with full kg_context.yaml schema context.
+    3. Post-validation: reject any query that uses SQLite column names as RDF
+       predicates, fall back to the listing template if validation fails.
+    """
+    fallback = (
+        "SELECT ?surname ?givenName ?townland ?eventType ?year\n"
+        "WHERE {\n"
+        "  ?person a co:Person ;\n"
+        "          co:hasEvent ?event .\n"
+        "  ?event co:eventType ?eventType .\n"
+        "  OPTIONAL { ?person schema:familyName ?surname . }\n"
+        "  OPTIONAL { ?person schema:givenName ?givenName . }\n"
+        "  OPTIONAL { ?person co:townland ?townland . }\n"
+        "  OPTIONAL { ?event co:year ?year . }\n"
+        "}\nORDER BY ?surname\nLIMIT 50"
+    )
+
+    # ── Step 1: Template matching ────────────────────────────────────────
+    template = _match_sparql_template(question, sql)
+    if template:
+        log.debug("ask_service.graphdb_sparql_template_matched | q=%s", question[:60])
+        return template, {"provider": "rule_template", "model": "local_rule", "mode": "template_match"}
+
+    # ── Step 2: LLM generation ───────────────────────────────────────────
+    kg_context_block = _load_kg_context()
+
+    prompt = f"""You are writing a SPARQL 1.1 SELECT query for the Coolattin estate RDF knowledge graph stored in GraphDB.
+Output ONLY the bare SPARQL query — no PREFIX declarations (they are pre-declared), no markdown code fences, no comments.
+
+════════════════════════════════════════════════════════════════
+AUTHORITATIVE KNOWLEDGE GRAPH SCHEMA
+(derived from the live GraphDB repository — 143,209 triples)
+════════════════════════════════════════════════════════════════
+{kg_context_block}
+
+════════════════════════════════════════════════════════════════
+STRICT RULES — VIOLATIONS WILL PRODUCE ZERO RESULTS
+════════════════════════════════════════════════════════════════
+R1. Use ONLY the RDF properties listed in the schema above.
+    FORBIDDEN (these are SQLite columns, NOT RDF properties — using them returns 0 rows):
+      co:hasEmigrationRecord  co:hasEvictionRecord  co:hasTenancyRecord
+      co:totalFamilySize  co:adults  co:children  co:ship  co:destination
+      co:chief_tenant  co:townland_id  co:county  co:barony
+
+R2. Event type MUST be one of exactly: "emigration"  "eviction"  "tenancy"
+    Pattern: ?event co:eventType "emigration" .   (not OPTIONAL, no variable)
+
+R3. co:year is on the EVENT node, not on the Person.
+    Pattern: ?event co:year ?year .   (NOT ?person co:year ?year)
+
+R4. Traverse via Person → hasEvent → Event (never co:forPerson).
+    Pattern: ?person a co:Person ; co:hasEvent ?event .
+
+R5. ALWAYS use OPTIONAL for: schema:familyName  schema:givenName  co:parish  co:occupation
+    NEVER use OPTIONAL for: co:eventType  co:estate
+
+R6. Never project raw ?person or ?event URI variables.
+    Project only literals (surname, givenName, townland, parish, eventType, year)
+    and aggregates (COUNT, MIN, MAX, AVG, etc.).
+
+R7. COUNT queries: use COUNT(DISTINCT ?person).
+    Descriptive alias required: ?emigrantCount  ?evictionCount  ?tenantCount  ?totalCount  ?personCount
+
+R8. GROUP BY: every non-aggregate SELECT variable must appear in GROUP BY.
+
+R9. Aggregate-only (COUNT/SUM etc.): omit LIMIT and ORDER BY.
+    Listing queries: include ORDER BY + LIMIT 50.
+
+R10. Choose the CLOSEST canonical pattern from the schema above, then adapt it minimally.
+
+════════════════════════════════════════════════════════════════
+SQLite query (shows the INTENT and any literal values like townland names or years):
+{sql}
+
+Question: {question}
+════════════════════════════════════════════════════════════════
+
+SPARQL:""".strip()
+
+    try:
+        text, meta = _llm_generate(prompt, purpose="graphdb_sparql", max_tokens=500, temperature=0.0)
+        text = text.strip()
+        # Strip markdown code fences
+        if text.startswith("```"):
+            lines_out = text.split("\n")
+            # Remove first line (``` or ```sparql) and any trailing ```
+            text = "\n".join(lines_out[1:] if len(lines_out) > 1 else lines_out)
+        text = text.rstrip("`").strip()
+        # Strip leading PREFIX lines (model sometimes adds them despite instructions)
+        text_lines = text.splitlines()
+        text_lines = [ln for ln in text_lines if not ln.lstrip().lower().startswith("prefix ")]
+        # Strip leading comment lines
+        text_lines = [ln for ln in text_lines if not ln.lstrip().startswith("#")]
+        text = "\n".join(text_lines).strip()
+
+        if not text.upper().lstrip().startswith("SELECT"):
+            log.warning("ask_service.graphdb_sparql_invalid | generated=%s", text[:120])
+            return fallback, {**meta, "mode": "llm_invalid_fallback"}
+
+        # ── Step 3: Post-validation ──────────────────────────────────────
+        if _sparql_uses_forbidden_props(text):
+            log.warning("ask_service.graphdb_sparql_forbidden_prop | generated=%s", text[:200])
+            # Try template matching one more time with a looser check
+            template_retry = _match_sparql_template(question, sql)
+            if template_retry:
+                return template_retry, {**meta, "mode": "llm_forbidden_fallback_template"}
+            return fallback, {**meta, "mode": "llm_forbidden_fallback"}
+
+        return text, {**meta, "mode": "llm_generated"}
+
+    except Exception as exc:
+        log.warning("ask_service.graphdb_sparql_generation_failed error=%s", exc)
+        return fallback, {"provider": "rule_template", "model": "local_rule", "mode": "fallback_rule"}
+
+
+def _first_numeric(row: dict) -> float | None:
+    """Return the first numeric value found in a result row, or None."""
+    for v in row.values():
+        if v is None:
+            continue
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
+def _explain_result_mismatch(
+    question: str,
+    sql: str,
+    sparql: str,
+    sql_rows: list,
+    sparql_rows: list,
+) -> str | None:
+    """
+    Ask the LLM to explain why SQLite and GraphDB results differ.
+    Handles both row-count differences and single-row value differences
+    (the common case where both systems return one COUNT row but with
+    different totals).
+    """
+    sql_count = len(sql_rows)
+    sparql_count = len(sparql_rows)
+
+    # Detect value mismatch for single-row aggregate results
+    sql_val = _first_numeric(sql_rows[0]) if sql_count == 1 else None
+    gdb_val = _first_numeric(sparql_rows[0]) if sparql_count == 1 else None
+    value_mismatch = (
+        sql_count == 1 and sparql_count == 1
+        and sql_val is not None and gdb_val is not None
+        and sql_val != gdb_val
+    )
+
+    if sql_count == sparql_count and not value_mismatch:
+        return None
+
+    if value_mismatch:
+        diff_desc = (
+            f"Both returned 1 row but values differ: "
+            f"SQLite={int(sql_val) if sql_val == int(sql_val) else sql_val}, "
+            f"GraphDB={int(gdb_val) if gdb_val == int(gdb_val) else gdb_val}."
+        )
+    else:
+        diff_desc = f"SQLite returned {sql_count} row(s); GraphDB returned {sparql_count} row(s)."
+
+    prompt = f"""Two systems answered the same historical-data question and produced different results.
+
+Question: {question}
+
+{diff_desc}
+
+SQLite query (Coolattin estate records, closed-world, relational):
+{sql}
+
+SPARQL query (Coolattin RDF/GraphDB graph, open-world):
+{sparql}
+
+In 2–3 sentences explain the most likely reason for the discrepancy. Consider:
+- Schema mismatch: the SPARQL query may be using a wrong property (e.g. a SQLite column name used as an RDF predicate when it does not exist in the graph).
+- Scope: both databases contain Coolattin estate data but may not be 100% synchronised.
+- Query semantics: COUNT(DISTINCT person) vs COUNT(*), different aggregation, OPTIONAL fields.
+- Data normalisation: case differences, missing optional properties, alternate spellings.
+
+Be direct and factual. If the SPARQL query uses a property that looks like a SQL column (e.g. co:hasEmigrationRecord), say so clearly."""
+
+    try:
+        text, _ = _llm_generate(prompt, purpose="mismatch_explanation", max_tokens=250, temperature=0.1)
+        return text.strip() or None
+    except Exception as exc:
+        log.debug("ask_service.mismatch_explanation_failed error=%s", exc)
+        return None
+
+
+def _build_sql_prompt(
+    question: str,
+    schema: str,
+    analysis: dict[str, Any],
+    approved_examples: list[dict[str, Any]] | None = None,
+) -> str:
+    clear_col = _clearances_count_column()
     return f"""Write ONE SQLite query for the question below.
 
 Return SQL only.
@@ -1499,24 +3408,54 @@ Use this plan exactly:
 Local database profile and high-signal examples:
 {_database_profile_prompt_block()}
 
+Live SQLite schema, row counts, and sampled categorical values:
+{_live_sqlite_schema_prompt_block()}
+
+Previously approved queries for similar user questions:
+{_approved_query_examples_block(approved_examples or [])}
+
 Mandatory rules:
 - Count people with COUNT(DISTINCT record_id).
 - Population uses census_record joined to townland.
-- Eviction totals use clearances_record.count.
+- Eviction totals use clearances_record.{clear_col}.
 - Emigration rows use has_emigration_record=1.
 - Eviction people rows use has_eviction_record=1.
 - Tenancy rows use has_tenancy_record=1.
+- Landholding analysis should use holding_acres when it is available.
+- Holy well and ring fort comparisons should use heritage_feature joined by townland_norm / townland name.
 - Townland filtering uses townland_norm='NAME' or UPPER(t.name)='NAME'.
 - Radius queries use distance_km() with a base townland CTE.
-- Person lists should include person_name and LIMIT 200.
+- Person lists should include person_name and LIMIT 50.
+- NEVER use GROUP_CONCAT or string_agg to combine person names — always return one row per person. If the question asks for both a count and a list of people, return individual person rows (the count is derivable from result length).
+- Prefer columns that appear in the live schema block over assumptions from examples.
+- If the question is about a surname or a named family, filter by UPPER(surname) when possible.
+- If the user asks for a count but the data is unavailable, return a diagnostic SELECT that shows the nearest available related fields instead of inventing a count.
 - If the question mixes people with geography, focus this SQLite query on the local records part.
 
-Schema:
+Core semantic hints:
 {schema}
 
 Question:
 {question}
 
+SQL:""".strip()
+
+
+def _build_sql_semantic_repair_prompt(
+    *,
+    question: str,
+    schema: str,
+    analysis: dict[str, Any],
+    invalid_sql: str,
+    approved_examples: list[dict[str, Any]] | None = None,
+) -> str:
+    return f"""{_build_sql_prompt(question, schema, analysis, approved_examples or [])}
+
+The previous SQL passed syntax checks but did not satisfy the app's semantic rules for the question.
+PREVIOUS SQL:
+{invalid_sql or "<empty>"}
+
+Return ONLY one corrected SQLite SELECT/WITH query that answers the question more faithfully.
 SQL:""".strip()
 
 
@@ -2626,30 +4565,83 @@ def _run_read_only_query(sql: str) -> tuple[list[str], list[dict]]:
         conn.close()
 
 
+def _build_sql_runtime_repair_prompt(
+    *,
+    question: str,
+    townland_hint: str | None,
+    failing_sql: str,
+    execution_error: str,
+    approved_examples: list[dict[str, Any]] | None = None,
+) -> str:
+    analysis = _analyse_question(question, townland_hint)
+    return f"""{_build_sql_prompt(question, _ANNOTATED_SCHEMA, analysis, approved_examples or [])}
+
+The previous SQL failed when executed against SQLite.
+EXECUTION ERROR: {execution_error}
+PREVIOUS SQL:
+{failing_sql or "<empty>"}
+
+Return ONLY one corrected SQLite SELECT/WITH query that avoids the error and still answers the question.
+SQL:""".strip()
+
+
 def _execute_with_recovery(
-    question: str, townland_hint: str | None, sql: str,
-) -> tuple[str, list[str], list[dict], str | None]:
+    question: str,
+    townland_hint: str | None,
+    sql: str,
+    approved_examples: list[dict[str, Any]] | None = None,
+) -> tuple[str, list[str], list[dict], str | None, dict[str, Any] | None]:
     try:
         if _requires_verified_fallback(question, sql):
-            raise ValueError("constraint_mismatch")
+            raise ValueError("semantic_constraint_mismatch")
         cols, rows = _run_read_only_query(sql)
-        if not rows:
-            fb = _sanitize_and_validate_sql(_fallback_sql(question, townland_hint))
-            fb_cols, fb_rows = _run_read_only_query(fb)
-            if fb_rows:
-                return fb, fb_cols, fb_rows, "Fallback template used (LLM query returned no rows)."
-        if _should_crosscheck(question):
-            fb = _sanitize_and_validate_sql(_fallback_sql(question, townland_hint))
-            fb_cols, fb_rows = _run_read_only_query(fb)
-            lv = _single_scalar(cols, rows)
-            fv = _single_scalar(fb_cols, fb_rows)
-            if lv is not None and fv is not None and lv != fv:
-                return fb, fb_cols, fb_rows, "Verified template used (value mismatch with LLM result)."
-        return sql, cols, rows, None
+        return sql, cols, rows, None, None
     except Exception as exc:
-        fb = _sanitize_and_validate_sql(_fallback_sql(question, townland_hint))
-        cols, rows = _run_read_only_query(fb)
-        return fb, cols, rows, f"Fallback template used ({type(exc).__name__})."
+        try:
+            repaired_sql, repair_meta, repair_mode = _llm_generate_validated_sql(
+                prompt=_build_sql_runtime_repair_prompt(
+                    question=question,
+                    townland_hint=townland_hint,
+                    failing_sql=sql,
+                    execution_error=str(exc),
+                    approved_examples=approved_examples or [],
+                ),
+                purpose="sqlite_sql_runtime_repair",
+                dialect_label="SQLite",
+            )
+            if _requires_verified_fallback(question, repaired_sql):
+                raise ValueError("semantic_constraint_mismatch")
+            cols, rows = _run_read_only_query(repaired_sql)
+            return (
+                repaired_sql,
+                cols,
+                rows,
+                f"SQL was repaired after execution issue ({type(exc).__name__}).",
+                {**repair_meta, "mode": repair_mode},
+            )
+        except Exception:
+            if ASK_ALLOW_HEURISTIC_FALLBACK:
+                fb = _sanitize_and_validate_sql(_fallback_sql(question, townland_hint))
+                cols, rows = _run_read_only_query(fb)
+                return (
+                    fb,
+                    cols,
+                    rows,
+                    f"Emergency heuristic SQL used after execution failure ({type(exc).__name__}).",
+                    {"provider": "local_fallback", "model": "rule_template", "mode": "fallback_rule"},
+                )
+            diagnostic_sql = _sanitize_and_validate_sql(_diagnostic_message_sql(
+                "I could not produce a validated SQL query that safely answers this question. "
+                "Please rephrase it with a clearer townland, surname, year, ship, record type, or measure."
+            ))
+            cols, rows = _run_read_only_query(diagnostic_sql)
+            return (
+                diagnostic_sql,
+                cols,
+                rows,
+                f"Returned safe guidance after SQL execution failure ({type(exc).__name__}).",
+                {"provider": "validation_guard", "model": "validated_sql_only", "mode": "no_validated_sql"},
+            )
 
 
 def _requires_verified_fallback(question: str, sql: str) -> bool:
@@ -2957,6 +4949,169 @@ def _grouped_answer(columns: list[str], rows: list[dict]) -> str | None:
     )
 
 
+def _normalise_number_token(token: str) -> str:
+    try:
+        number = float(token)
+    except (TypeError, ValueError):
+        return token.strip()
+    if number.is_integer():
+        return str(int(number))
+    out = f"{number:.6f}".rstrip("0").rstrip(".")
+    return out or str(number)
+
+
+def _extract_numeric_tokens(text: str) -> set[str]:
+    # Collapse thousands-separator commas ("6,016" → "6016") before tokenising,
+    # so the LLM formatting numbers with commas doesn't trip the allowlist check.
+    cleaned = re.sub(r'(?<=\d),(?=\d{3}(?:[^\d]|$))', '', text or "")
+    return {
+        _normalise_number_token(match)
+        for match in re.findall(r"-?\d+(?:\.\d+)?", cleaned)
+    }
+
+
+def _allowed_rewrite_number_tokens(
+    actual_answer: str,
+    summary_block: dict[str, Any],
+    data_context: dict[str, Any],
+    supporting_context: dict[str, Any],
+    kg_context: dict | None,
+) -> set[str]:
+    payload = {
+        "actual_answer": actual_answer,
+        "summary": summary_block,
+        "data_context": data_context,
+        "supporting_context": supporting_context,
+        "townland_context": (kg_context or {}).get("townlands", []),
+    }
+    base = _extract_numeric_tokens(json.dumps(payload, ensure_ascii=False, default=str))
+    # Also allow numeric digit-subsequences of every allowed token (e.g. "6016"
+    # permits "6", "60", "601", "6016", "16", etc.) so the LLM can naturally
+    # rephrase "6,016 people" as "over 6,000" without tripping the check.
+    expanded: set[str] = set(base)
+    for tok in base:
+        if tok.lstrip("-").isdigit() and len(tok) > 1:
+            digits = tok.lstrip("-")
+            for start in range(len(digits)):
+                for end in range(start + 1, len(digits) + 1):
+                    expanded.add(str(int(digits[start:end])))
+    return expanded
+
+
+def _assert_rewrite_numbers_supported(
+    rewrite_text: str,
+    actual_answer: str,
+    summary_block: dict[str, Any],
+    data_context: dict[str, Any],
+    supporting_context: dict[str, Any],
+    kg_context: dict | None,
+) -> None:
+    generated_numbers = _extract_numeric_tokens(rewrite_text)
+    if not generated_numbers:
+        return
+    allowed_numbers = _allowed_rewrite_number_tokens(
+        actual_answer=actual_answer,
+        summary_block=summary_block,
+        data_context=data_context,
+        supporting_context=supporting_context,
+        kg_context=kg_context,
+    )
+    unsupported = sorted(number for number in generated_numbers if number not in allowed_numbers)
+    if unsupported:
+        raise RuntimeError(
+            "LLM rewrite introduced unsupported numeric values: " + ", ".join(unsupported[:8])
+        )
+
+
+def _build_chart_spec(
+    *,
+    question: str,
+    columns: list[str],
+    rows: list[dict],
+    availability: dict[str, Any] | None,
+    chart_hint: str | None = None,
+) -> dict[str, Any] | None:
+    if not availability or not rows:
+        return None
+    if not availability.get("available") and (not _rows_have_material_data(columns, rows) or _is_message_only_result(columns, rows)):
+        return None
+
+    if len(rows) == 1 and {"population_1841", "population_1861", "most_populous_1841", "most_populous_1861"}.issubset(set(columns)):
+        row = rows[0]
+        return {
+            "type": "bar",
+            "title": "Most Populous Townland Comparison",
+            "x_label": "Census year",
+            "y_label": "population",
+            "labels": [
+                f"1841: {row.get('most_populous_1841')}",
+                f"1861: {row.get('most_populous_1861')}",
+            ],
+            "values": [
+                _numeric_value(row.get("population_1841")),
+                _numeric_value(row.get("population_1861")),
+            ],
+        }
+
+    numeric_columns = [column for column in columns[1:] if any(_numeric_value(row.get(column)) is not None for row in rows)]
+    if len(rows) > 1 and columns and numeric_columns:
+        label_col = columns[0]
+        metric_col = numeric_columns[0]
+        sample_rows = rows[:12]
+        labels = [str(row.get(label_col) or "") for row in sample_rows]
+        values = [_numeric_value(row.get(metric_col)) or 0.0 for row in sample_rows]
+        chart_type = chart_hint or ("line" if label_col == "year" else "bar")
+        return {
+            "type": chart_type,
+            "title": _friendly_metric_name(metric_col).title(),
+            "x_label": label_col.replace("_", " "),
+            "y_label": metric_col.replace("_", " "),
+            "labels": labels,
+            "values": values,
+        }
+
+    if len(rows) == 1:
+        row = rows[0]
+        metric_pairs = []
+        for column in columns:
+            value = _numeric_value(row.get(column))
+            if value is None:
+                continue
+            metric_pairs.append((column, value))
+        if len(metric_pairs) >= 2:
+            chosen = metric_pairs[:8]
+            return {
+                "type": chart_hint or "bar",
+                "title": "Returned metrics",
+                "x_label": "metric",
+                "y_label": "value",
+                "labels": [pair[0].replace("_", " ") for pair in chosen],
+                "values": [pair[1] for pair in chosen],
+            }
+    return None
+
+
+_LIST_COLUMN_WORDS = {"list", "names", "people", "persons", "sample", "members"}
+
+
+def _is_list_column(col: str) -> bool:
+    return any(w in col.lower() for w in _LIST_COLUMN_WORDS)
+
+
+def _summarise_cell(col: str, val: Any, max_chars: int = 60) -> str:
+    """Return a display-safe cell value: list-like long strings become item counts."""
+    if val is None:
+        return "—"
+    s = str(val)
+    if len(s) <= max_chars:
+        return s
+    # Looks like a comma-separated list — count items
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    if len(parts) > 3:
+        return f"{len(parts)} names (see table)"
+    return s[:max_chars] + "…"
+
+
 def _detail_answer(columns: list[str], row: dict, townland_hint: str | None) -> str:
     display_townland = _display_townland_name(townland_hint)
     if {"townland", "year", "population"}.issubset(set(columns)):
@@ -2980,18 +5135,28 @@ def _detail_answer(columns: list[str], row: dict, townland_hint: str | None) -> 
         if row.get("year"):
             pieces.append(f"year {row.get('year')}")
         return "Matching person record: " + ", ".join(str(p) for p in pieces if p) + "."
-    shown = [f"{c.replace('_', ' ')}={row.get(c)}" for c in columns[:5]]
+    # Prefer short numeric/count columns; skip long list dumps
+    preferred = [c for c in columns if not _is_list_column(c)][:5] or columns[:5]
+    shown = [f"{c.replace('_', ' ')}={_summarise_cell(c, row.get(c))}" for c in preferred]
     context = f" for {display_townland}" if display_townland else ""
     return f"I found one matching row{context}: " + ", ".join(shown) + "."
 
 
-def _build_answer_text(question: str, columns: list[str], rows: list[dict],
-                       townland_hint: str | None, kg_context: dict | None) -> str:
+def _is_message_only_result(columns: list[str], rows: list[dict]) -> bool:
+    return bool(rows and len(columns) == 1 and columns[0] in {"message", "availability_message", "diagnostic_message"})
+
+
+def _data_answer_text(
+    question: str,
+    columns: list[str],
+    rows: list[dict],
+    townland_hint: str | None,
+) -> str:
     analysis = _analyse_question(question, townland_hint)
     display_townland = _display_townland_name(townland_hint)
-    if not rows:
-        context = f" for {display_townland}" if display_townland else ""
-        return f"I could not find matching records{context}."
+
+    if _is_message_only_result(columns, rows):
+        return _clean_message_result_text(rows[0].get(columns[0]))
 
     if len(rows) == 1 and len(columns) == 1:
         key = columns[0]
@@ -3020,13 +5185,312 @@ def _build_answer_text(question: str, columns: list[str], rows: list[dict],
     return f"I found {len(rows)} matching rows{context}."
 
 
+def _rows_have_material_data(columns: list[str], rows: list[dict]) -> bool:
+    if not rows:
+        return False
+    for row in rows:
+        for column in columns:
+            value = row.get(column)
+            if value not in {None, ""}:
+                return True
+    return False
+
+
+def _suggest_rephrasings(
+    question: str,
+    analysis: dict[str, Any],
+    townland_resolution: dict[str, Any],
+) -> list[str]:
+    suggestions: list[str] = []
+    townland = _display_townland_name(townland_resolution.get("name"))
+    surname = analysis.get("surname")
+
+    if townland_resolution.get("suggestions"):
+        suggestion = townland_resolution["suggestions"][0].get("name")
+        if suggestion:
+            suggestions.append(f"Try the townland hint '{suggestion}' and ask again.")
+
+    if analysis.get("primary_intent") == "population":
+        if townland:
+            suggestions.append(f"What was the population of {townland} in 1841, 1851, or 1861?")
+        else:
+            suggestions.append("Try a population question for 1841, 1851, or 1861, which are the strongest early census years in this database.")
+    elif analysis.get("asks_emigration"):
+        if townland:
+            suggestions.append(f"How many people emigrated from {townland}?")
+            suggestions.append(f"Which ships carried emigrants from {townland}?")
+        else:
+            suggestions.append("Try asking about emigration by year, ship, or townland.")
+    elif analysis.get("asks_eviction"):
+        suggestions.append("Try asking for eviction records by year or by townland.")
+    elif analysis.get("asks_tenancy"):
+        suggestions.append("Try asking for tenants by townland, holding size, or latest recorded year.")
+
+    if surname:
+        suggestions.append(f"Try 'How many people are named {str(surname).title()}?' or 'List all {str(surname).title()} records by townland.'")
+    else:
+        suggestions.append("Try asking for a surname, townland, year, ship, or record type explicitly.")
+
+    deduped: list[str] = []
+    for item in suggestions:
+        if item and item not in deduped:
+            deduped.append(item)
+        if len(deduped) >= 4:
+            break
+    return deduped
+
+
+def _build_availability_payload(
+    *,
+    question: str,
+    analysis: dict[str, Any],
+    columns: list[str],
+    rows: list[dict],
+    townland_resolution: dict[str, Any],
+) -> dict[str, Any]:
+    available = _rows_have_material_data(columns, rows)
+    if _is_message_only_result(columns, rows):
+        text = _clean_message_result_text(rows[0].get(columns[0]))
+        lowered = text.lower()
+        if any(token in lowered for token in [
+            "unavailable",
+            "not available",
+            "no data",
+            "no available data",
+            "could not find",
+            "could not build",
+            "could not produce",
+        ]) or re.search(r"\bno\b.+\bdata\b", lowered) or re.search(r"\bno\b.+\bavailable\b", lowered):
+            state = "partial_unavailable" if (
+                analysis.get("year")
+                or "available years" in lowered
+                or ("unavailable" in lowered and "year" in lowered)
+            ) else "no_data"
+            return {
+                "available": False,
+                "state": state,
+                "message": text,
+                "suggestions": _suggest_rephrasings(question, analysis, townland_resolution),
+            }
+    requested_year = analysis.get("year")
+    year_columns = [name for name in columns if name in {"year", "census_year"}]
+    if requested_year and rows and year_columns:
+        matched_year = False
+        for row in rows:
+            for year_column in year_columns:
+                try:
+                    if int(row.get(year_column)) == int(requested_year):
+                        matched_year = True
+                        break
+                except (TypeError, ValueError):
+                    continue
+            if matched_year:
+                break
+        if not matched_year:
+            return {
+                "available": False,
+                "state": "partial_unavailable",
+                "message": f"The asked year {requested_year} is not available in the current database result. The table below shows the nearest related data that could be found instead.",
+                "suggestions": _suggest_rephrasings(question, analysis, townland_resolution),
+            }
+    if available:
+        return {
+            "available": True,
+            "state": "available",
+            "message": "The requested data is available in the current database.",
+            "suggestions": [],
+        }
+
+    message = "The asked data is not available in the current database for this wording or filter."
+    if "1821" in question and analysis.get("primary_intent") == "population":
+        message = "The asked census year is not available here. The current Ask census data begins in 1841 rather than 1821."
+    elif townland_resolution.get("warning"):
+        message = "The asked data could not be matched cleanly because the townland reference is incomplete or ambiguous."
+    elif analysis.get("surname"):
+        message = f"I could not find matching database rows for the surname {str(analysis['surname']).title()} with the current filter."
+
+    return {
+        "available": False,
+        "state": "no_data",
+        "message": message + " Try rephrasing the question or broadening it.",
+        "suggestions": _suggest_rephrasings(question, analysis, townland_resolution),
+    }
+
+
+def _build_related_insights(
+    *,
+    question: str,
+    analysis: dict[str, Any],
+    rows: list[dict],
+    townland_norm: str | None,
+) -> list[dict[str, str]]:
+    insights: list[dict[str, str]] = []
+    q = question.lower()
+    conn = get_db_conn()
+    try:
+        if "widow" in q:
+            row = conn.execute(
+                """
+                SELECT
+                  COUNT(DISTINCT record_id) AS widow_records,
+                  COUNT(DISTINCT CASE WHEN has_eviction_record=1 THEN record_id END) AS widows_on_eviction_records,
+                  COUNT(DISTINCT CASE WHEN children_count > 0 THEN record_id END) AS widows_with_children
+                FROM unified_record
+                WHERE is_widow=1
+                """
+            ).fetchone()
+            if row:
+                insights.append({
+                    "label": "Widow context",
+                    "value": (
+                        f"{int(row['widow_records'] or 0)} widow records appear overall; "
+                        f"{int(row['widows_on_eviction_records'] or 0)} also appear on eviction records; "
+                        f"{int(row['widows_with_children'] or 0)} have recorded children."
+                    ),
+                })
+
+        surname = analysis.get("surname")
+        if surname:
+            row = conn.execute(
+                """
+                SELECT
+                  COUNT(DISTINCT record_id) AS matching_people,
+                  COUNT(DISTINCT CASE WHEN has_emigration_record=1 THEN record_id END) AS emigrants,
+                  COUNT(DISTINCT CASE WHEN has_eviction_record=1 THEN record_id END) AS evicted,
+                  COUNT(DISTINCT CASE WHEN has_tenancy_record=1 THEN record_id END) AS tenants,
+                  MIN(year) AS first_year,
+                  MAX(year) AS last_year
+                FROM unified_record
+                WHERE UPPER(surname)=?
+                """,
+                (str(surname).upper(),),
+            ).fetchone()
+            if row and row["matching_people"] is not None:
+                insights.append({
+                    "label": "Surname span",
+                    "value": (
+                        f"{row['matching_people']} record(s) use the surname {str(surname).title()}, "
+                        f"spanning {row['first_year']} to {row['last_year']}; "
+                        f"{row['emigrants']} include emigration, {row['evicted']} eviction, and {row['tenants']} tenancy records."
+                    ),
+                })
+            top_townlands = [
+                dict(r) for r in conn.execute(
+                    """
+                    SELECT townland, COUNT(DISTINCT record_id) AS matching_people
+                    FROM unified_record
+                    WHERE UPPER(surname)=?
+                      AND townland IS NOT NULL
+                      AND TRIM(townland) <> ''
+                    GROUP BY townland_norm, townland
+                    ORDER BY matching_people DESC, townland
+                    LIMIT 3
+                    """,
+                    (str(surname).upper(),),
+                ).fetchall()
+            ]
+            if top_townlands:
+                insights.append({
+                    "label": "Top surname townlands",
+                    "value": ", ".join(f"{r['townland']} ({r['matching_people']})" for r in top_townlands),
+                })
+
+        if analysis.get("asks_emigration"):
+            peak = conn.execute(
+                """
+                SELECT year, COUNT(DISTINCT record_id) AS emigrants
+                FROM unified_record
+                WHERE has_emigration_record=1
+                  AND year IS NOT NULL
+                GROUP BY year
+                ORDER BY emigrants DESC, year
+                LIMIT 1
+                """
+            ).fetchone()
+            if peak and peak["year"] is not None:
+                insights.append({
+                    "label": "Peak emigration year",
+                    "value": f"The highest recorded emigration volume in the local database is {peak['emigrants']} people in {peak['year']}.",
+                })
+            if townland_norm:
+                ships = [
+                    dict(r) for r in conn.execute(
+                        """
+                        SELECT ship_name, COUNT(DISTINCT record_id) AS emigrants
+                        FROM unified_record
+                        WHERE has_emigration_record=1
+                          AND townland_norm=?
+                          AND ship_name IS NOT NULL
+                          AND TRIM(ship_name) <> ''
+                        GROUP BY ship_name
+                        ORDER BY emigrants DESC, ship_name
+                        LIMIT 3
+                        """,
+                        (_norm_townland(townland_norm),),
+                    ).fetchall()
+                ]
+                if ships:
+                    insights.append({
+                        "label": "Top ships for this townland",
+                        "value": ", ".join(f"{r['ship_name']} ({r['emigrants']})" for r in ships),
+                    })
+
+        if analysis.get("primary_intent") == "population" and townland_norm:
+            peak_pop = conn.execute(
+                """
+                SELECT c.year, c.total
+                FROM census_record c
+                JOIN townland t ON c.townland_id=t.id
+                WHERE UPPER(t.name)=?
+                ORDER BY c.total DESC, c.year
+                LIMIT 1
+                """,
+                (_norm_townland(townland_norm),),
+            ).fetchone()
+            if peak_pop:
+                insights.append({
+                    "label": "Peak matched population",
+                    "value": f"The highest recorded census population for this townland is {peak_pop['total']} in {peak_pop['year']}.",
+                })
+    finally:
+        conn.close()
+
+    if not insights and rows:
+        numeric_cols = [k for k in rows[0].keys() if _numeric_value(rows[0].get(k)) is not None]
+        if rows and numeric_cols:
+            metric_col = numeric_cols[0]
+            top_row = max(rows, key=lambda row: _numeric_value(row.get(metric_col)) or float("-inf"))
+            insights.append({
+                "label": "Top returned row",
+                "value": ", ".join(f"{key}={top_row.get(key)}" for key in list(top_row.keys())[:4]),
+            })
+    return insights[:4]
+
+
+def _build_answer_text(question: str, columns: list[str], rows: list[dict],
+                       townland_hint: str | None, kg_context: dict | None,
+                       availability: dict[str, Any] | None = None) -> str:
+    if availability and not availability.get("available"):
+        message = str(availability.get("message") or "The asked data is not available in the current database.")
+        if _rows_have_material_data(columns, rows) and not _is_message_only_result(columns, rows):
+            return f"{message} {_data_answer_text(question, columns, rows, townland_hint)}"
+        return message
+    return _data_answer_text(question, columns, rows, townland_hint)
+
+
 def _build_structured_summary(question: str, local_columns: list[str], local_rows: list[dict],
                                vrti_columns: list[str], vrti_rows: list[dict],
-                               kg_context: dict | None) -> dict[str, Any]:
+                               kg_context: dict | None,
+                               availability: dict[str, Any] | None = None,
+                               related_insights: list[dict[str, str]] | None = None) -> dict[str, Any]:
     primary: str | None = None
     grouped = _grouped_answer(local_columns, local_rows)
 
-    if len(local_rows) == 1 and len(local_columns) == 1:
+    if availability and not availability.get("available"):
+        primary = str(availability.get("message") or "The asked data is not available in the current database.")
+        if _rows_have_material_data(local_columns, local_rows) and not _is_message_only_result(local_columns, local_rows):
+            primary = f"{primary} {_data_answer_text(question, local_columns, local_rows, None)}"
+    elif len(local_rows) == 1 and len(local_columns) == 1:
         key = local_columns[0]
         primary = f"{_friendly_metric_name(key).title()}: {local_rows[0].get(key)}"
     elif len(local_rows) == 1 and local_columns:
@@ -3037,6 +5501,8 @@ def _build_structured_summary(question: str, local_columns: list[str], local_row
     stats: dict[str, Any] = {"local_records_returned": len(local_rows), "vrti_townlands_enriched": len(vrti_rows)}
     if primary:
         stats["primary_answer"] = primary
+    if availability:
+        stats["availability_state"] = availability.get("state")
 
     lines = [f"Query: {question}"]
     if primary:
@@ -3046,9 +5512,16 @@ def _build_structured_summary(question: str, local_columns: list[str], local_row
     if vrti_rows:
         t_names = ", ".join(r.get("name","") for r in vrti_rows[:3] if r.get("name"))
         lines.append(f"VRTI enriched {len(vrti_rows)} townland(s){': ' + t_names if t_names else ''}.")
+    if related_insights:
+        lines.append("Related insights: " + " | ".join(f"{item.get('label')}: {item.get('value')}" for item in related_insights[:3]))
     lines.append("Sources: Coolattin estate records (SQLite) + VRTI Knowledge Graph (SPARQL).")
 
-    return {"stats": stats, "final_summary_text": "  ".join(lines), "parish_sample": []}
+    return {
+        "stats": stats,
+        "final_summary_text": "  ".join(lines),
+        "parish_sample": [],
+        "related_insights": related_insights or [],
+    }
 
 
 def _build_llm_data_context(
@@ -3062,19 +5535,26 @@ def _build_llm_data_context(
     Compact, explicit data view for LLM rewriting only.
     The full rows are still returned separately in processed_tables.
     """
+    def _truncate_row(row: dict, max_val_len: int = 300) -> dict:
+        out = {}
+        for k, v in row.items():
+            s = str(v) if v is not None else ""
+            out[k] = (s[:max_val_len] + f"…[{len(s)} chars total]") if len(s) > max_val_len else v
+        return out
+
     return {
         "local_database": {
             "columns": local_columns,
             "row_count": len(local_rows),
             "sample_limit": sample_limit,
-            "sample_rows": local_rows[:sample_limit],
+            "sample_rows": [_truncate_row(r) for r in local_rows[:sample_limit]],
             "truncated": len(local_rows) > sample_limit,
         },
         "vrti_graph": {
             "columns": vrti_columns,
             "row_count": len(vrti_rows),
             "sample_limit": sample_limit,
-            "sample_rows": vrti_rows[:sample_limit],
+            "sample_rows": [_truncate_row(r) for r in vrti_rows[:sample_limit]],
             "truncated": len(vrti_rows) > sample_limit,
         },
     }
@@ -3087,6 +5567,7 @@ def _build_supporting_context(
     primary_columns: list[str],
     primary_rows: list[dict],
     kg_context: dict | None,
+    related_insights: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """
     Extra bounded context for broad questions and answer rewriting.
@@ -3104,6 +5585,8 @@ def _build_supporting_context(
         },
         "kg_source": (kg_context or {}).get("source"),
     }
+    if related_insights:
+        context["related_insights"] = related_insights[:4]
     if townland_norm:
         context["townland_detail"] = _townland_deep_context(townland_norm)
     keyword_context = _keyword_search_context(question, townland_norm)
@@ -3129,6 +5612,12 @@ def _database_profile_context() -> dict[str, Any]:
                  FROM unified_record WHERE has_eviction_record=1) AS evicted_people,
               (SELECT COUNT(DISTINCT record_id)
                  FROM unified_record WHERE has_tenancy_record=1) AS tenant_people,
+              (SELECT COUNT(DISTINCT townland_norm)
+                 FROM heritage_feature
+                 WHERE feature_group='holy_well' AND townland_norm IS NOT NULL AND TRIM(townland_norm) <> '') AS townlands_with_holy_wells,
+              (SELECT COUNT(DISTINCT townland_norm)
+                 FROM heritage_feature
+                 WHERE feature_group='ring_fort' AND townland_norm IS NOT NULL AND TRIM(townland_norm) <> '') AS townlands_with_ring_forts,
               (SELECT MIN(year) FROM unified_record) AS first_record_year,
               (SELECT MAX(year) FROM unified_record) AS last_record_year,
               (SELECT COALESCE(SUM({clear_col}), 0) FROM clearances_record) AS clearance_events
@@ -3414,6 +5903,12 @@ def _supporting_context_for_display(context: dict[str, Any]) -> list[dict[str, s
                 f"{', '.join(keyword_matches.get('keywords', []))}."
             ),
         })
+    for insight in context.get("related_insights") or []:
+        if insight.get("label") and insight.get("value"):
+            items.append({
+                "label": str(insight.get("label")),
+                "value": str(insight.get("value")),
+            })
     return items
 
 
@@ -3436,12 +5931,20 @@ def _generate_rephrased_answer(
     text, meta = _llm_generate(
         prompt,
         purpose="answer_rephrase",
-        max_tokens=420,
-        temperature=0.2,
+        max_tokens=160,
+        temperature=0.1,
     )
     cleaned = _strip_answer_formatting(text)
     if not cleaned:
         raise RuntimeError("Empty answer rewrite from LLM.")
+    _assert_rewrite_numbers_supported(
+        rewrite_text=cleaned,
+        actual_answer=actual_answer,
+        summary_block=summary_block,
+        data_context=data_context,
+        supporting_context=supporting_context,
+        kg_context=kg_context,
+    )
     return cleaned, {**meta, "mode": "llm_rewrite"}
 
 
@@ -3453,28 +5956,37 @@ def _build_rephrase_prompt(
     supporting_context: dict[str, Any],
     kg_context: dict | None,
 ) -> str:
+    # Pass only the key facts — a large JSON dump leads to over-long answers.
+    townland_names = [t.get("name") for t in (kg_context or {}).get("townlands", [])[:3] if t.get("name")]
+    key_stats = summary_block.get("stats", {})
+    fuzzy_note = (supporting_context or {}).get("fuzzy_match_note", "")
+
     prompt_payload = {
         "question": question,
         "data_backed_answer": actual_answer,
-        "summary_stats": summary_block.get("stats", {}),
-        "supporting_context": supporting_context,
-        "local_database_sample": data_context.get("local_database", {}),
-        "vrti_graph_sample": data_context.get("vrti_graph", {}),
-        "townland_context": (kg_context or {}).get("townlands", [])[:5],
+        "key_stats": key_stats,
+        "townlands_mentioned": townland_names,
+        "fuzzy_match_note": fuzzy_note,
     }
-    return f"""You are rephrasing a historical archive query result for a website user.
+    row_count = data_context.get("local_database", {}).get("row_count", 0)
+    list_note = (
+        f"\n- The result contains {row_count} individual rows. Do NOT list all of them."
+        " State the total count and give 1–2 representative examples at most."
+        if row_count > 10 else ""
+    )
+    return f"""Rephrase this historical archive result in 1–3 sentences of plain English.
 
-Use ONLY the supplied data. Do not invent names, counts, dates, locations, or causes.
-Keep every number exactly the same as the data-backed answer.
-Use supporting_context for relevant townland metadata, database coverage, census rows, clearances, surname/ship samples, and typo/suggestion notes.
-If a townland was fuzzy-matched, clearly say which townland was used and mention the suggestion.
-If the data sample is truncated, say the table below contains the full returned rows.
-Write a clear, concise answer in plain text. No markdown table. No SQL.
+Rules:
+- Use ONLY the supplied data. Never invent names, numbers, dates, or places.
+- Keep every number identical to data_backed_answer.
+- If data is unavailable, say so in one sentence.
+- If a townland was fuzzy-matched, name which one was used.
+- No markdown, no bullet points, no SQL, no preamble. Plain prose only.{list_note}
 
 DATA:
-{json.dumps(prompt_payload, ensure_ascii=False, default=str, indent=2)}
+{json.dumps(prompt_payload, ensure_ascii=False, default=str)}
 
-Rephrased answer:""".strip()
+Answer (1–3 sentences):""".strip()
 
 
 def _strip_answer_formatting(text: str) -> str:
@@ -4031,6 +6543,18 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
+def _to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s or s.lower() == "nan":
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def _clean_text(value: Any) -> str | None:
     if value is None:
         return None
@@ -4040,6 +6564,83 @@ def _clean_text(value: Any) -> str | None:
 
 def _to_bool_int(value: Any) -> int:
     return 1 if str(value or "").strip().lower() in {"1", "true", "yes", "y", "t"} else 0
+
+
+def _sum_defined_ints(*values: Any) -> int:
+    total = 0
+    found = False
+    for value in values:
+        parsed = _to_int(value)
+        if parsed is None:
+            continue
+        total += parsed
+        found = True
+    return total if found else 0
+
+
+def _best_holding_acres(row: dict[str, Any]) -> float | None:
+    for key in ("acres_irish", "acres_english", "acres", "acres_2"):
+        value = _to_float(row.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _derived_children_count(row: dict[str, Any]) -> int | None:
+    values = [_to_int(row.get("sons")), _to_int(row.get("daughters"))]
+    if all(value is None for value in values):
+        return None
+    return sum(value or 0 for value in values)
+
+
+def _derived_family_size_estimate(row: dict[str, Any]) -> int | None:
+    parts = [
+        1,
+        1 if _to_int(row.get("age_wife_widow_of_head_of_household")) is not None else 0,
+        _to_int(row.get("sons")) or 0,
+        _to_int(row.get("daughters")) or 0,
+        _to_int(row.get("servants_male")) or 0,
+        _to_int(row.get("servants_female")) or 0,
+        _to_int(row.get("other_males_in_household")) or 0,
+        _to_int(row.get("other_famales_in_household")) or 0,
+    ]
+    has_detail = any(part > 0 for part in parts[1:])
+    return sum(parts) if has_detail else None
+
+
+def _derived_is_widow(row: dict[str, Any]) -> int:
+    text_parts = [
+        _clean_text(row.get("forename")),
+        _clean_text(row.get("role")),
+        _clean_text(row.get("comments")),
+    ]
+    haystack = " ".join(part for part in text_parts if part).lower()
+    return 1 if " widow" in f" {haystack}" else 0
+
+
+def _derived_is_canada_destination(arrival: str | None) -> int:
+    if not arrival:
+        return 0
+    place = arrival.lower()
+    canada_tokens = [
+        "canada", "quebec", "st andrews", "st. andrews", "st andrew",
+        "grosse isle", "new brunswick", "nova scotia", "ontario", "montreal", "toronto",
+    ]
+    return 1 if any(token in place for token in canada_tokens) else 0
+
+
+def _heritage_townland_norm(value: str | None) -> str | None:
+    raw = _clean_text(value)
+    if not raw:
+        return None
+    cleaned = re.sub(r"\s*\([^)]*\)\s*", " ", raw)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return _norm_townland(cleaned)
+
+
+def _is_ring_fort_class(value: str | None) -> bool:
+    text = (value or "").strip().lower()
+    return any(token in text for token in ["ringfort", "ring-ditch", "ringwork", "ring-barrow", "hillfort"])
 
 
 def _stringify_pdf(value: Any) -> str:

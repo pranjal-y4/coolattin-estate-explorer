@@ -76,7 +76,11 @@ def get_census_data(filters: CensusFilters) -> CensusResponse:
     )
 
     # ---- Step 2: DB hit + fresh — serve immediately ------------------
-    if records and state and not state.is_stale:
+    # Some environments may have valid persisted census rows even if the
+    # refresh_state table was never backfilled for that specific dataset key.
+    # In that case, prefer serving the DB rows rather than treating the
+    # request as a miss and falling through to a fragile live KG lookup.
+    if records and (state is None or not state.is_stale):
         log.info(
             "census_service.cache_hit | key=%s count=%d",
             dataset_key, len(records),
@@ -88,7 +92,7 @@ def get_census_data(filters: CensusFilters) -> CensusResponse:
                 cache_status="hit",
                 generated_at=now_iso,
                 record_count=len(records),
-                export_file=state.export_file,
+                export_file=state.export_file if state else None,
             ),
         )
 

@@ -3,26 +3,61 @@ coolattin/services/workhouse_service.py
 
 Workhouse data service.
 
-Extracted from app.py (_get_workhouse, _build_workhouse_match_index,
-_split_workhouse_name, _name_variants, _norm).
+Matching strategy (place-first, with occupation bonus):
+  1. Filter workhouse records by electoral_division matching the unified record's
+     townland or parish (place_candidates).
+  2. Within place_candidates, filter by date window (±1 year) around the unified
+     record's year (place_date_candidates).
+  3. Score names with difflib.SequenceMatcher within the filtered subset.
+  4. Add occupation similarity bonus (+0.05) when unified and workhouse occupations
+     share a keyword (e.g. "labourer", "farmer", "servant").  This bonus cannot
+     push a Low-confidence match into Medium — it only improves ranking within a tier.
+  5. Fallback: if no place+date candidates exist, score ALL workhouse records by
+     name only (preserves coverage for sparse data).
+  6. Assign confidence bands:
+       High   — place_match AND date_match AND effective_score >= 0.80
+       Medium — (place_match OR date_match) AND effective_score >= 0.60
+       Low    — effective_score >= 0.60, no place or date match
+     Records below 0.60 are excluded unless they are the sole match.
 
-Responsibilities:
-  - Load workhouse Excel data
-  - Parse and normalise pauper names
-  - Build fuzzy name match index against unified records
-  - Return ranked workhouse matches for a given record_id
+Examples
+--------
+Unified record: forename=Mary, surname=Byrne, townland=Coolattin, year=1849,
+                occupation=servant
+  → Workhouse "Byrne Mary", ed=Coolattin, admitted=1849, employment=servant
+    name_score=0.92  place=True  date=True  occ_bonus=0.05  → High, score=0.92
+
+Unified record: forename=Patrick, surname=Doyle, townland=Ballinglen, year=1848
+  → Workhouse "Doyle Pat",  ed=Ballinglen,  admitted=1847 (±1 ok)
+    name_score=0.78  place=True  date=True                → High, score=0.78
+  → Workhouse "Doyle P",    ed=Shillelagh, admitted=1850
+    name_score=0.65  place=False date=False               → Low,  score=0.65
 """
 from __future__ import annotations
 
 import logging
+import re
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import pandas as pd
 
 log = logging.getLogger(__name__)
 
-_WORKHOUSE_CACHE: pd.DataFrame | None = None
+_WORKHOUSE_CACHE: list[dict] | None = None
 _WORKHOUSE_MATCH_INDEX: dict[str, list[dict]] | None = None
+
+_NAME_SCORE_THRESHOLD = 0.60
+_HIGH_NAME_SCORE = 0.80
+_OCCUPATION_BONUS = 0.05
+
+# Keywords shared between the unified record's occupation field and the
+# workhouse employment field that provide additional matching confidence.
+_OCC_KEYWORDS = {
+    "labourer", "farmer", "servant", "weaver", "tailor", "carpenter",
+    "blacksmith", "shoemaker", "mason", "widow", "spinster", "herder",
+    "shepherd", "miller", "fisherman", "innkeeper", "shopkeeper",
+}
 
 
 def _data_dir() -> Path:
@@ -35,6 +70,14 @@ def _norm(s: object) -> str:
         return ""
     t = str(s).strip().lower()
     return " ".join(t.split())
+
+
+def _parse_year(s: object) -> int | None:
+    """Extract a 4-digit 19th-century year from free-text date strings."""
+    if s is None or (isinstance(s, float) and pd.isna(s)):
+        return None
+    m = re.search(r"\b(18[0-9]{2}|19[0-9]{2})\b", str(s))
+    return int(m.group(1)) if m else None
 
 
 def _split_workhouse_name(name: str) -> tuple[str, str]:
@@ -60,6 +103,33 @@ def _name_variants(forename: object, surname: object, canonical: object) -> set[
     return {x for x in out if x}
 
 
+def _name_score(unified_variants: set[str], wh_variants: set[str]) -> float:
+    """Highest SequenceMatcher ratio across all variant cross-products."""
+    best = 0.0
+    for uv in unified_variants:
+        for wv in wh_variants:
+            r = SequenceMatcher(None, uv, wv).ratio()
+            if r > best:
+                best = r
+                if best >= 1.0:
+                    return best
+    return best
+
+
+def _occupation_bonus(unified_occupation: object, wh_employment: object) -> float:
+    """Return _OCCUPATION_BONUS if any keyword is shared, else 0.0."""
+    u = _norm(unified_occupation)
+    w = _norm(wh_employment)
+    if not u or not w:
+        return 0.0
+    u_words = set(u.split())
+    w_words = set(w.split())
+    shared = (u_words | w_words) & _OCC_KEYWORDS
+    if shared and (u_words & w_words & _OCC_KEYWORDS):
+        return _OCCUPATION_BONUS
+    return 0.0
+
+
 def _safe_int(value: object) -> int | None:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
@@ -69,21 +139,22 @@ def _safe_int(value: object) -> int | None:
         return None
 
 
-def get_workhouse() -> pd.DataFrame:
-    """Load and cache workhouse Excel data."""
+def get_workhouse() -> list[dict]:
+    """Load and cache workhouse Excel data as a list of dicts with parsed years."""
     global _WORKHOUSE_CACHE
     if _WORKHOUSE_CACHE is not None:
-        return _WORKHOUSE_CACHE.copy()
+        return _WORKHOUSE_CACHE
 
     path = _data_dir() / "workhouse_data_final.xlsx"
     if not path.exists():
         log.warning("workhouse_service.xlsx_missing | path=%s", path)
-        return pd.DataFrame()
+        _WORKHOUSE_CACHE = []
+        return []
 
     sheet1 = pd.read_excel(path, sheet_name="1-127", engine="openpyxl")
     sheet2 = pd.read_excel(path, sheet_name="from 128", engine="openpyxl")
 
-    rows = []
+    rows: list[dict] = []
 
     for _, r in sheet1.iterrows():
         raw_name = r.get("Pauper Name")
@@ -101,6 +172,7 @@ def get_workhouse() -> pd.DataFrame:
             "employment": None, "religion": None, "disability": None,
             "spouse": None, "children_count": None,
             "admitted_or_born": None, "died_or_left": None,
+            "_year_admitted": None, "_year_left": None,
         })
 
     for _, r in sheet2.iterrows():
@@ -113,6 +185,8 @@ def get_workhouse() -> pd.DataFrame:
             v = r.get(col)
             return None if pd.isna(v) else str(v).strip()
 
+        admitted = safe_str("date when admitted or born in workhouse")
+        died_left = safe_str("Date when died or left workhouse")
         rows.append({
             "source_sheet": "from 128",
             "raw_name": str(raw_name).strip(),
@@ -128,18 +202,42 @@ def get_workhouse() -> pd.DataFrame:
             "disability": safe_str("If disable then description"),
             "spouse": safe_str("Name of wife or husband"),
             "children_count": safe_str("Number of children"),
-            "admitted_or_born": safe_str("date when admitted or born in workhouse"),
-            "died_or_left": safe_str("Date when died or left workhouse"),
+            "admitted_or_born": admitted,
+            "died_or_left": died_left,
+            "_year_admitted": _parse_year(admitted),
+            "_year_left": _parse_year(died_left),
         })
 
-    _WORKHOUSE_CACHE = pd.DataFrame(rows)
-    log.info("workhouse_service.loaded | rows=%d", len(_WORKHOUSE_CACHE))
-    return _WORKHOUSE_CACHE.copy()
+    _WORKHOUSE_CACHE = rows
+    log.info("workhouse_service.loaded | rows=%d", len(rows))
+    return rows
+
+
+def _wh_year(record: dict) -> int | None:
+    """Representative year for a workhouse record (admitted preferred over left)."""
+    return record.get("_year_admitted") or record.get("_year_left")
+
+
+def _assign_confidence(
+    place_match: bool,
+    date_match: bool,
+    score: float,
+) -> str | None:
+    """Return confidence band or None if below threshold."""
+    if score < _NAME_SCORE_THRESHOLD:
+        return None
+    if place_match and date_match and score >= _HIGH_NAME_SCORE:
+        return "High"
+    if (place_match or date_match) and score >= _NAME_SCORE_THRESHOLD:
+        return "Medium"
+    return "Low"
 
 
 def get_match_index() -> dict[str, list[dict]]:
     """
-    Build and cache fuzzy match index: unified record_id → matching workhouse records.
+    Build and cache the place-first match index:
+      unified record_id → ranked workhouse matches with confidence bands.
+
     Computed once per process lifetime.
     """
     global _WORKHOUSE_MATCH_INDEX
@@ -151,18 +249,20 @@ def get_match_index() -> dict[str, list[dict]]:
     unified = get_unified()
     workhouse = get_workhouse()
 
-    if workhouse.empty:
+    if not workhouse:
         _WORKHOUSE_MATCH_INDEX = {}
         return {}
 
-    wh_by_name: dict[str, list[dict]] = {}
-    for _, wr in workhouse.iterrows():
-        variants = _name_variants(wr.get("forename"), wr.get("surname"), wr.get("raw_name"))
-        payload = {k: (None if pd.isna(v) else v) for k, v in wr.to_dict().items()}
-        for v in variants:
-            wh_by_name.setdefault(v, []).append(payload)
+    # Pre-index workhouse by normalised electoral_division for O(1) place lookup
+    wh_by_place: dict[str, list[dict]] = {}
+    wh_all = list(workhouse)
+    for wr in wh_all:
+        ed = _norm(wr.get("electoral_division"))
+        if ed:
+            wh_by_place.setdefault(ed, []).append(wr)
 
     out: dict[str, list[dict]] = {}
+
     for _, ur in unified.iterrows():
         rid = str(ur.get("record_id") or "").strip()
         if not rid:
@@ -170,27 +270,138 @@ def get_match_index() -> dict[str, list[dict]]:
 
         u_townland = _norm(ur.get("townland"))
         u_parish = _norm(ur.get("parish"))
-        variants = _name_variants(ur.get("forename"), ur.get("surname"), ur.get("canonical_name"))
+        u_year_raw = ur.get("year")
+        u_year: int | None = None
+        if u_year_raw is not None:
+            try:
+                u_year = int(u_year_raw)
+            except (TypeError, ValueError):
+                pass
+
+        u_variants = _name_variants(ur.get("forename"), ur.get("surname"), ur.get("canonical_name"))
+        u_occupation = ur.get("occupation")
+
+        # --- Place candidates: workhouse records whose electoral_division matches townland or parish ---
+        place_candidates: list[dict] = []
+        seen_ed_keys: set[str] = set()
+        for ed_key in (u_townland, u_parish):
+            if ed_key and ed_key not in seen_ed_keys:
+                seen_ed_keys.add(ed_key)
+                place_candidates.extend(wh_by_place.get(ed_key, []))
+        # Also check partial containment (ed contained in townland name or vice versa)
+        for wr in wh_all:
+            ed = _norm(wr.get("electoral_division"))
+            if ed and wr not in place_candidates:
+                if (ed in u_townland or u_townland in ed or
+                        ed in u_parish or u_parish in ed):
+                    place_candidates.append(wr)
+
+        # --- Date-window candidates within place candidates ---
+        place_date_candidates: list[dict] = []
+        if u_year is not None:
+            for wr in place_candidates:
+                wy = _wh_year(wr)
+                if wy is not None and abs(wy - u_year) <= 1:
+                    place_date_candidates.append(wr)
+
+        # --- Determine scoring pool and flags ---
+        if place_date_candidates:
+            score_pool = place_date_candidates
+            pool_place = True
+            pool_date = True
+        elif place_candidates:
+            score_pool = place_candidates
+            pool_place = True
+            pool_date = False
+        else:
+            score_pool = wh_all
+            pool_place = False
+            pool_date = False
+
+        # --- Score names within pool ---
+        seen_sig: set[str] = set()
+        scored: list[tuple[float, bool, bool, dict]] = []
+
+        for wr in score_pool:
+            sig = f"{wr.get('source_sheet')}|{wr.get('raw_name')}|{wr.get('electoral_division')}|{wr.get('admitted_or_born')}"
+            if sig in seen_sig:
+                continue
+            seen_sig.add(sig)
+
+            wh_variants = _name_variants(wr.get("forename"), wr.get("surname"), wr.get("raw_name"))
+            score = _name_score(u_variants, wh_variants)
+
+            # Recalculate per-record place/date flags (pool may be wh_all in fallback)
+            ed = _norm(wr.get("electoral_division"))
+            rec_place = bool(
+                ed and (
+                    ed == u_townland or ed == u_parish
+                    or ed in u_townland or u_townland in ed
+                    or ed in u_parish or u_parish in ed
+                )
+            )
+            wy = _wh_year(wr)
+            rec_date = bool(u_year is not None and wy is not None and abs(wy - u_year) <= 1)
+
+            confidence = _assign_confidence(rec_place, rec_date, score)
+            if confidence is None:
+                continue
+
+            # Occupation bonus improves rank within a tier but does not raise the tier
+            occ_bonus = _occupation_bonus(u_occupation, wr.get("employment"))
+            effective_score = min(score + occ_bonus, 1.0)
+
+            scored.append((effective_score, rec_place, rec_date, wr, confidence, sig))
+
+        # If nothing scored above threshold and pool was restricted, fall back to wh_all
+        if not scored and score_pool is not wh_all:
+            for wr in wh_all:
+                sig = f"{wr.get('source_sheet')}|{wr.get('raw_name')}|{wr.get('electoral_division')}|{wr.get('admitted_or_born')}"
+                if sig in seen_sig:
+                    continue
+                seen_sig.add(sig)
+                wh_variants = _name_variants(wr.get("forename"), wr.get("surname"), wr.get("raw_name"))
+                score = _name_score(u_variants, wh_variants)
+                ed = _norm(wr.get("electoral_division"))
+                rec_place = bool(
+                    ed and (
+                        ed == u_townland or ed == u_parish
+                        or ed in u_townland or u_townland in ed
+                        or ed in u_parish or u_parish in ed
+                    )
+                )
+                wy = _wh_year(wr)
+                rec_date = bool(u_year is not None and wy is not None and abs(wy - u_year) <= 1)
+                confidence = _assign_confidence(rec_place, rec_date, score)
+                if confidence is None:
+                    continue
+                occ_bonus = _occupation_bonus(u_occupation, wr.get("employment"))
+                effective_score = min(score + occ_bonus, 1.0)
+                scored.append((effective_score, rec_place, rec_date, wr, confidence, sig))
+
+        # Sort: confidence tier first (High > Medium > Low), then score descending
+        tier_order = {"High": 0, "Medium": 1, "Low": 2}
+        scored.sort(key=lambda x: (tier_order.get(x[4], 3), -x[0]))
 
         matches: list[dict] = []
-        seen: set[str] = set()
+        for item in scored:
+            effective_score, rec_place, rec_date, wr, confidence, _ = item
+            m = {k: v for k, v in wr.items() if not k.startswith("_")}
+            m["location_match"] = rec_place
+            occ_b = _occupation_bonus(u_occupation, wr.get("employment"))
+            basis_parts = []
+            if rec_place:
+                basis_parts.append("electoral division")
+            if rec_date:
+                basis_parts.append("date")
+            if occ_b:
+                basis_parts.append("occupation")
+            m["match_basis"] = "name" + ((" + " + " + ".join(basis_parts)) if basis_parts else "")
+            m["confidence"] = confidence
+            m["name_score"] = round(effective_score, 3)
+            m["occupation_match"] = bool(occ_b)
+            matches.append(m)
 
-        for v in variants:
-            for m in wh_by_name.get(v, []):
-                sig = f"{m.get('source_sheet')}|{m.get('raw_name')}|{m.get('electoral_division')}|{m.get('admitted_or_born')}"
-                if sig in seen:
-                    continue
-                seen.add(sig)
-                ed = _norm(m.get("electoral_division"))
-                location_match = bool(
-                    ed and (ed == u_townland or ed == u_parish or ed in u_townland or ed in u_parish)
-                )
-                m2 = dict(m)
-                m2["location_match"] = location_match
-                m2["match_basis"] = "name + electoral division" if location_match else "name"
-                matches.append(m2)
-
-        matches.sort(key=lambda x: (not bool(x.get("location_match")), str(x.get("raw_name") or "")))
         out[rid] = matches
 
     _WORKHOUSE_MATCH_INDEX = out

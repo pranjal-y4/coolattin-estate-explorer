@@ -259,7 +259,8 @@
     <h2 class="band-title" data-i18n="mapExplorer">Map Explorer · County Wicklow</h2>
     <p class="band-sub" data-i18n="mapExplorerSub">
       Townland boundaries are drawn from <code>townlands.json</code>. Family pins come from linked records
-      (default: Tenancies).
+      (default: Tenancies). Select a townland and use <strong>Explore Historic Place</strong> to switch this same map
+      into archaeology, holy wells, and monuments mode.
     </p>
   </div>
 
@@ -303,7 +304,11 @@
 
     <!-- MAP + STORY + STATS -->
     <div class="panel map-panel">
-      <div class="panel-title" data-i18n="countyWicklowMap">County Wicklow — Townlands & Families</div>
+      <div class="panel-title" id="exploreMapPanelTitle" data-i18n="countyWicklowMap">County Wicklow — Townlands & Families</div>
+      <p id="exploreMapPanelSubtitle" class="explore-panel-note">
+        Select a townland to view linked family records, then switch the same map into historic place mode when you want
+        nearby archaeology, holy wells, and monuments.
+      </p>
 
       <!-- Map + Story -->
       <div style="display:grid; grid-template-columns: 3fr 1.2fr; gap:14px;">
@@ -315,8 +320,9 @@
 
         <aside class="panel soft" style="height:540px; overflow:auto;">
           <div class="panel-title" data-i18n="familyStory">Family Story</div>
-          <div id="detailsContent" style="font-size:14px; color:#475467;" data-i18n="clickTownlandPolygon">
-            Click a townland polygon or a family pin to view linked records.
+          <div id="detailsContent" style="font-size:14px; color:#475467;">
+            Click a townland polygon to view linked records, then use Explore Historic Place for the historic landscape on
+            this same map.
           </div>
         </aside>
       </div>

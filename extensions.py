@@ -37,6 +37,11 @@ def get_db_conn() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # D14: Performance pragmas — safe with WAL, no durability trade-off for reads
+    conn.execute("PRAGMA synchronous=NORMAL")       # WAL makes FULL unnecessary
+    conn.execute("PRAGMA cache_size=-65536")         # 64 MB page cache
+    conn.execute("PRAGMA temp_store=2")              # keep temp tables in memory
+    conn.execute("PRAGMA mmap_size=268435456")       # 256 MB memory-mapped I/O
     return conn
 
 
@@ -151,6 +156,20 @@ def ensure_schema() -> None:
                 UNIQUE(townland_id, year)
             )
         """)
+
+        # D14: Core table indexes for common query patterns
+        # townland hierarchy lookups (map + census pages)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_townland_civil_parish ON townland(civil_parish)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_townland_barony       ON townland(barony)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_townland_county       ON townland(county)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_townland_kg_uri       ON townland(kg_uri)")
+        # census year-range queries (census dashboard)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_census_year           ON census_record(year)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_census_townland_year  ON census_record(townland_id, year)")
+        # clearances year queries (analytics page)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_clearances_year       ON clearances_record(year)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_clearances_tl_year    ON clearances_record(townland_id, year)")
+
         conn.commit()
         log.info("extensions.schema_ready")
     finally:

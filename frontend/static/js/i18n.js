@@ -85,7 +85,7 @@ const translations = {
 
     // Map Explorer
     mapExplorer: "Map Explorer · County Wicklow",
-    mapExplorerSub: "Townland boundaries are drawn from townlands.json. Family pins come from linked records (default: Tenancies).",
+    mapExplorerSub: "Townland boundaries are drawn from townlands.json. Family pins come from linked records (default: Tenancies). Select a townland and use Explore Historic Place to switch this same map into archaeology, holy wells, and monuments mode.",
     countyWicklowMap: "County Wicklow — Townlands & Families",
     searchFilters: "Search Filters",
     allTownlands: "All townlands",

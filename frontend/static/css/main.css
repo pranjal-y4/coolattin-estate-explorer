@@ -1258,6 +1258,14 @@ img { display: block; }
   background: var(--brass);
 }
 
+.explore-panel-note {
+  margin: 0 0 14px;
+  max-width: 760px;
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
 /* Map container */
 .map-container {
   width: 100%;
@@ -1293,6 +1301,178 @@ img { display: block; }
   color: var(--ink);
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
+}
+
+.heritage-mode-banner {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(176, 141, 87, 0.28);
+  background: linear-gradient(180deg, rgba(255, 251, 235, 0.98), rgba(255, 247, 237, 0.98));
+  color: #7a4b17;
+  font-size: 12.5px;
+  line-height: 1.55;
+  margin-bottom: 14px;
+}
+
+.heritage-radius-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0 12px;
+}
+
+.heritage-radius-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  background: #fff;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform var(--t-fast) var(--ease),
+              box-shadow var(--t-fast) var(--ease),
+              border-color var(--t-fast) var(--ease);
+}
+
+.heritage-radius-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.10);
+}
+
+.heritage-radius-btn.active {
+  border-color: rgba(35, 75, 58, 0.32);
+  box-shadow: 0 10px 22px rgba(35, 75, 58, 0.12);
+  color: #0f172a;
+}
+
+.heritage-radius-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.heritage-radius-btn[data-radius="0"].active {
+  background: linear-gradient(180deg, #f8fafc, #eef2f7);
+}
+
+.heritage-radius-btn[data-radius="2000"].active {
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.18), rgba(251, 191, 36, 0.10));
+}
+
+.heritage-radius-btn[data-radius="5000"].active {
+  background: linear-gradient(180deg, rgba(239, 68, 68, 0.18), rgba(248, 113, 113, 0.10));
+}
+
+.heritage-radius-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.heritage-legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.82);
+  color: #475467;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.heritage-chip-grid {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.heritage-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(216, 210, 200, 0.7);
+  background: #fff;
+}
+
+.heritage-chip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #334155;
+}
+
+.heritage-chip-value {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--forest);
+  line-height: 1;
+}
+
+.heritage-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.heritage-feature-card {
+  background: #fff;
+  border: 1px solid rgba(216, 210, 200, 0.75);
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+}
+
+.heritage-feature-type {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.heritage-feature-name {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1.15;
+  margin-bottom: 10px;
+}
+
+.heritage-feature-meta {
+  display: grid;
+  gap: 5px;
+  font-size: 12.5px;
+  color: #475467;
+  margin-bottom: 12px;
+}
+
+.heritage-feature-meta strong {
+  color: #1f2937;
+}
+
+.heritage-feature-notes {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(216, 210, 200, 0.7);
+  background: #fdfbf7;
+  color: #334155;
+  font-size: 12.5px;
+  line-height: 1.58;
+  margin-bottom: 12px;
 }
 
 /* Map legend */
@@ -2606,3 +2786,24 @@ div.modal-overlay.active {
   line-height: 1.55 !important;
   margin: 12px 16px !important;
 }
+
+/* ── Ask page progress spinner ── */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ── Workhouse confidence badges ── */
+.wh-confidence {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  border-radius: 3px;
+  padding: 1px 6px;
+  line-height: 1.6;
+}
+.wh-High   { background: #d4edda; color: #155724; }
+.wh-Medium { background: #fff3cd; color: #856404; }
+.wh-Low    { background: #f8f9fa; color: #6c757d; border: 1px solid #dee2e6; }

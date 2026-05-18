@@ -11,6 +11,13 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent        # Coolattin-app/ (project root)
 
 
+def _resolve_database_path() -> Path:
+    raw = os.environ.get("DATABASE_PATH", "").strip()
+    if not raw:
+        return BASE_DIR / "coolattin.db"
+    return Path(raw).expanduser()
+
+
 class Config:
     SECRET_KEY: str = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
 
@@ -18,9 +25,9 @@ class Config:
     # Database — SQLite lives at project root                             #
     # Override DATABASE_URL env var for production (PostgreSQL etc.)      #
     # ------------------------------------------------------------------ #
-    DATABASE_PATH: Path = BASE_DIR / "coolattin.db"
+    DATABASE_PATH: Path = _resolve_database_path()
     DATABASE_URL: str = os.environ.get(
-        "DATABASE_URL", f"sqlite:///{BASE_DIR / 'coolattin.db'}"
+        "DATABASE_URL", f"sqlite:///{DATABASE_PATH}"
     )
 
     # ------------------------------------------------------------------ #
@@ -28,6 +35,16 @@ class Config:
     # ------------------------------------------------------------------ #
     VRTI_SPARQL_ENDPOINT: str = "https://virtuoso.virtualtreasury.ie/sparql/"
     VRTI_REQUEST_TIMEOUT: int = int(os.environ.get("VRTI_REQUEST_TIMEOUT", "30"))
+
+    # ------------------------------------------------------------------ #
+    # Local GraphDB (RDF/KG comparative prototype — D8)                   #
+    # ------------------------------------------------------------------ #
+    GRAPHDB_SPARQL_ENDPOINT: str = os.environ.get(
+        "GRAPHDB_SPARQL_ENDPOINT",
+        "http://localhost:7200/repositories/coolattin",
+    )
+    GRAPHDB_ENABLED: bool = os.environ.get("GRAPHDB_ENABLED", "true").lower() == "true"
+    GRAPHDB_REQUEST_TIMEOUT: int = int(os.environ.get("GRAPHDB_REQUEST_TIMEOUT", "15"))
 
     # ------------------------------------------------------------------ #
     # Refresh / staleness TTL (days)                                      #

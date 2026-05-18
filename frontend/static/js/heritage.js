@@ -353,17 +353,26 @@ function drawTownlandHighlight(feature) {
 
   // Draw radius circle when radius > 0
   if (hpState.radiusCircleLayer) hpState.map.removeLayer(hpState.radiusCircleLayer);
-  if (hpState.radius > 0) {
+  if (hpState.centroid) {
     const [lat, lng] = hpState.centroid;
-    hpState.radiusCircleLayer = L.circle([lat, lng], {
-      radius: hpState.radius,
-      color: "#234B3A",
-      weight: 1,
-      fillOpacity: 0,
-      dashArray: "6 4",
-      opacity: 0.35,
-      interactive: false,
-    }).addTo(hpState.map);
+    const boundaryOnly = hpState.radius === 0;
+    const circles = [
+      { radius: 2000, color: "#f59e0b", fillColor: "#fbbf24", dashArray: "10 6" },
+      { radius: 5000, color: "#ef4444", fillColor: "#f87171", dashArray: "14 8" },
+    ].map((ring) => {
+      const active = hpState.radius === ring.radius;
+      return L.circle([lat, lng], {
+        radius: ring.radius,
+        color: ring.color,
+        weight: active ? 3.4 : 2.2,
+        fillColor: ring.fillColor,
+        fillOpacity: active ? 0.08 : boundaryOnly ? 0.03 : 0.025,
+        dashArray: ring.dashArray,
+        opacity: active ? 0.96 : boundaryOnly ? 0.70 : 0.58,
+        interactive: false,
+      });
+    });
+    hpState.radiusCircleLayer = L.layerGroup(circles).addTo(hpState.map);
   }
 }
 

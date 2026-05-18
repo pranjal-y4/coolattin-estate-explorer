@@ -4,6 +4,7 @@ backend/routes/ask.py
 Routes
 ------
 POST /api/ask/query          — stream SSE pipeline events, then final result
+POST /api/ask/feedback       — thumbs up/down feedback + query memory persistence
 GET  /api/ask/llm-status     — LLM provider health/config check
 GET  /api/ask/townland-suggest — fuzzy townland suggestions
 GET  /api/ask/ollama-status  — backward-compatible status alias
@@ -57,6 +58,39 @@ def ask_query():
             "Connection": "keep-alive",
         },
     )
+
+
+@bp.post("/feedback")
+def ask_feedback():
+    body = request.get_json(silent=True) or {}
+    question = (body.get("question") or "").strip()
+    feedback = (body.get("feedback") or "").strip().lower()
+    if not question:
+        return jsonify({"error": "question is required"}), 400
+    if feedback not in {"up", "down"}:
+        return jsonify({"error": "feedback must be 'up' or 'down'"}), 400
+
+    from backend.services.ask_service import record_query_feedback
+
+    try:
+        payload = record_query_feedback(
+            question=question,
+            townland_hint=(body.get("townland_hint") or "").strip() or None,
+            sql_text=body.get("sql_text"),
+            vrti_postgres_sql=body.get("vrti_postgres_sql"),
+            feedback=feedback,
+            note=(body.get("note") or "").strip() or None,
+            result_row_count=int(body.get("result_row_count") or 0),
+            availability_state=(body.get("availability_state") or "").strip() or None,
+            llm_meta=body.get("llm_meta") or {},
+            reused_memory_id=body.get("reused_memory_id"),
+            sample_answer=body.get("sample_answer"),
+            summary_json=body.get("summary_json") or {},
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify(payload), 200
 
 
 @bp.get("/llm-status")

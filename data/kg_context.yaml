@@ -1,0 +1,241 @@
+# ============================================================
+# Coolattin Estate Knowledge Graph — SPARQL Generation Context
+#
+# This file is loaded by ask_service._generate_graphdb_sparql()
+# and injected verbatim into the LLM prompt.  Every fact here
+# is derived from the live GraphDB repository (143,209 triples).
+#
+# Key numbers
+#   Persons : 13,707
+#   Events  : 13,707   (one event per person — 1:1)
+# ============================================================
+
+prefixes:
+  co:     "https://coolattin.ie/ontology#"
+  schema: "https://schema.org/"
+  xsd:    "http://www.w3.org/2001/XMLSchema#"
+
+# ── Classes ──────────────────────────────────────────────────
+
+classes:
+
+  co:Person:
+    description: "One node per historical individual."
+    total: 13707
+    properties:
+      co:estate:
+        required: true
+        coverage: "13,707 / 13,707 (100%)"
+        type: xsd:string
+        values: ["Fitzwilliam"]
+        note: "Always 'Fitzwilliam'. Never filter or project — add no value."
+      co:hasEvent:
+        required: true
+        coverage: "13,707 / 13,707 (100%)"
+        range: co:Event
+        note: "Every Person has exactly one Event. Use with co:Event properties."
+      co:townland:
+        required: false
+        coverage: "13,683 / 13,707 (99.8%)"
+        type: xsd:string
+        example_values: ["Coolboy", "Aghowle Lower", "Tomnafinnoge", "Ballycumber",
+                         "Corravanish", "Kilaveney", "Tinahely", "Moyacomb"]
+        note: >
+          Townland of origin. Present on almost all records. Use WITHOUT OPTIONAL
+          as a WHERE filter (forces the triple to exist). Use OPTIONAL only when
+          projecting the value in SELECT and the person might lack a townland.
+      schema:familyName:
+        required: false
+        coverage: "12,109 / 13,707 (88%)"
+        type: xsd:string
+        note: "Surname. ALWAYS wrap in OPTIONAL { ?person schema:familyName ?surname . }"
+      schema:givenName:
+        required: false
+        coverage: "12,083 / 13,707 (88%)"
+        type: xsd:string
+        note: "Forename. ALWAYS wrap in OPTIONAL."
+      co:parish:
+        required: false
+        coverage: "7,499 / 13,707 (55%)"
+        type: xsd:string
+        example_values: ["Moyacomb", "Shillelagh", "Aghold", "Kiltegan",
+                         "Knockrath", "Carnew"]
+        note: "Civil parish. Present on roughly half of records. ALWAYS OPTIONAL."
+      co:occupation:
+        required: false
+        coverage: "1,791 / 13,707 (13%)"
+        type: xsd:string
+        note: "Occupation (e.g. 'Farmer', 'Labourer'). Rare — ALWAYS OPTIONAL."
+
+  co:Event:
+    description: "One event node per person (emigration, eviction, or tenancy)."
+    total: 13707
+    properties:
+      co:eventType:
+        required: true
+        coverage: "13,707 / 13,707 (100%)"
+        type: xsd:string
+        values:
+          emigration: 6016
+          eviction:   4108
+          tenancy:    3583
+        note: >
+          Exact lowercase string. NEVER wrap in OPTIONAL.
+          Filter: ?event co:eventType "emigration" .
+      co:year:
+        required: false
+        coverage: "13,693 / 13,707 (99.9%)"
+        type: xsd:integer
+        range: [1841, 1886]
+        note: >
+          Calendar year as an xsd:integer. Present on 99.9% of events.
+          Safe to use without OPTIONAL in GROUP BY / COUNT queries.
+          Use OPTIONAL when projecting individual year values in a SELECT.
+          Filter example: FILTER(?year = 1847)
+          Range filter: FILTER(?year >= 1845 && ?year <= 1855)
+      co:forPerson:
+        required: true
+        coverage: "13,707 / 13,707 (100%)"
+        range: co:Person
+        note: "Inverse of co:hasEvent. Usually not needed — traverse via Person → hasEvent."
+
+# ── OPTIONAL rules ────────────────────────────────────────────
+# Rule: NEVER use OPTIONAL for co:eventType or co:estate.
+# Rule: ALWAYS use OPTIONAL for schema:familyName, schema:givenName,
+#       co:parish, co:occupation.
+# Rule: OPTIONAL for co:year only when projecting in a listing query;
+#       omit OPTIONAL when using co:year in GROUP BY or as a filter.
+# Rule: co:townland — OPTIONAL when projecting, none when used as a filter.
+
+# ── Canonical query patterns ─────────────────────────────────
+#
+# The LLM MUST follow these exactly for correctness.
+# Prefixes are pre-declared — omit them from generated SPARQL.
+
+patterns:
+
+  count_all_by_event_type: |
+    # Total people per event type
+    SELECT ?eventType (COUNT(DISTINCT ?person) AS ?personCount)
+    WHERE {
+      ?person a co:Person ; co:hasEvent ?event .
+      ?event co:eventType ?eventType .
+    }
+    GROUP BY ?eventType ORDER BY DESC(?personCount)
+
+  count_emigration: |
+    SELECT (COUNT(DISTINCT ?person) AS ?emigrantCount)
+    WHERE {
+      ?person a co:Person ; co:hasEvent ?event .
+      ?event co:eventType "emigration" .
+    }
+
+  list_emigrants: |
+    SELECT ?surname ?givenName ?townland ?year
+    WHERE {
+      ?person a co:Person ; co:hasEvent ?event .
+      ?event co:eventType "emigration" ; co:year ?year .
+      OPTIONAL { ?person schema:familyName ?surname . }
+      OPTIONAL { ?person schema:givenName ?givenName . }
+      OPTIONAL { ?person co:townland ?townland . }
+    }
+    ORDER BY ?year ?surname LIMIT 50
+
+  evictions_per_year: |
+    SELECT ?year (COUNT(DISTINCT ?person) AS ?evictionCount)
+    WHERE {
+      ?person a co:Person ; co:hasEvent ?event .
+      ?event co:eventType "eviction" ; co:year ?year .
+    }
+    GROUP BY ?year ORDER BY ?year
+
+  emigrants_from_townland: |
+    # Replace 'Coolboy' with the target townland name (case-sensitive)
+    SELECT ?surname ?givenName ?year
+    WHERE {
+      ?person a co:Person ;
+              co:townland "Coolboy" ;
+              co:hasEvent ?event .
+      ?event co:eventType "emigration" ; co:year ?year .
+      OPTIONAL { ?person schema:familyName ?surname . }
+      OPTIONAL { ?person schema:givenName ?givenName . }
+    }
+    ORDER BY ?year ?surname LIMIT 50
+
+  emigration_by_townland: |
+    SELECT ?townland (COUNT(DISTINCT ?person) AS ?emigrants)
+    WHERE {
+      ?person a co:Person ;
+              co:townland ?townland ;
+              co:hasEvent ?event .
+      ?event co:eventType "emigration" .
+    }
+    GROUP BY ?townland ORDER BY DESC(?emigrants) LIMIT 20
+
+  people_by_surname: |
+    # Replace 'Byrne' with target surname (case-sensitive)
+    SELECT ?givenName ?townland ?eventType ?year
+    WHERE {
+      ?person a co:Person ;
+              co:hasEvent ?event .
+      ?event co:eventType ?eventType .
+      OPTIONAL { ?person co:year ?year . }
+      ?person schema:familyName "Byrne" .
+      OPTIONAL { ?person schema:givenName ?givenName . }
+      OPTIONAL { ?person co:townland ?townland . }
+    }
+    ORDER BY ?year LIMIT 50
+
+  evictions_in_year_range: |
+    SELECT ?surname ?givenName ?townland ?year
+    WHERE {
+      ?person a co:Person ; co:hasEvent ?event .
+      ?event co:eventType "eviction" ; co:year ?year .
+      FILTER(?year >= 1847 && ?year <= 1856)
+      OPTIONAL { ?person schema:familyName ?surname . }
+      OPTIONAL { ?person schema:givenName ?givenName . }
+      OPTIONAL { ?person co:townland ?townland . }
+    }
+    ORDER BY ?year ?surname LIMIT 50
+
+  parish_emigration_count: |
+    SELECT ?parish (COUNT(DISTINCT ?person) AS ?emigrants)
+    WHERE {
+      ?person a co:Person ;
+              co:parish ?parish ;
+              co:hasEvent ?event .
+      ?event co:eventType "emigration" .
+    }
+    GROUP BY ?parish ORDER BY DESC(?emigrants)
+
+  tenancy_by_year: |
+    SELECT ?year (COUNT(DISTINCT ?person) AS ?tenants)
+    WHERE {
+      ?person a co:Person ; co:hasEvent ?event .
+      ?event co:eventType "tenancy" ; co:year ?year .
+    }
+    GROUP BY ?year ORDER BY ?year
+
+  all_events_for_townland: |
+    # All record types for a specific townland
+    SELECT ?surname ?givenName ?eventType ?year
+    WHERE {
+      ?person a co:Person ;
+              co:townland "Aghowle Lower" ;
+              co:hasEvent ?event .
+      ?event co:eventType ?eventType .
+      OPTIONAL { ?event co:year ?year . }
+      OPTIONAL { ?person schema:familyName ?surname . }
+      OPTIONAL { ?person schema:givenName ?givenName . }
+    }
+    ORDER BY ?year ?eventType LIMIT 50
+
+# ── Common mistakes to avoid ─────────────────────────────────
+mistakes:
+  - "Using ?person co:year instead of ?event co:year — year is on the Event, not Person."
+  - "Filtering eventType with OPTIONAL — eventType is REQUIRED on every Event."
+  - "Selecting ?person or ?event URI variables — these are opaque. Project only literals and aggregates."
+  - "Using co:forPerson instead of co:hasEvent — traverse from Person, not from Event."
+  - "Omitting DISTINCT in COUNT when counting people — duplicate URIs can inflate counts."
+  - "Using schema:name instead of schema:familyName or schema:givenName."
+  - "Forgetting that co:year is xsd:integer — string comparison ('1847' = 1847) is wrong."

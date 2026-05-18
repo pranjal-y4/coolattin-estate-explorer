@@ -1,0 +1,122 @@
+@prefix sh:     <http://www.w3.org/ns/shacl#> .
+@prefix co:     <https://coolattin.ie/ontology#> .
+@prefix schema: <https://schema.org/> .
+@prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+
+# ============================================================
+# SHACL Node Shapes for the Coolattin Estate Knowledge Graph
+#
+# Coverage statistics (derived from 13,707 ingested records):
+#   co:Person nodes : 13,707
+#   co:Event nodes  : 13,707
+#   Triple total    : 143,209
+#
+# Used as:
+#   1. Formal validation (GraphDB / SPARQL endpoints accept SHACL)
+#   2. LLM reference — loaded into the SPARQL generation prompt
+#      so the model knows exactly which properties are required
+#      vs optional, and what their value types are.
+# ============================================================
+
+
+# ── co:Person shape ─────────────────────────────────────────
+
+co:PersonShape
+    a sh:NodeShape ;
+    sh:targetClass co:Person ;
+
+    # ── Required properties (present on every Person node) ──
+
+    sh:property [
+        sh:path     co:estate ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:in       ( "Fitzwilliam" ) ;
+        rdfs:comment "Always 'Fitzwilliam'. Coverage: 13,707 / 13,707 (100%)."
+    ] ;
+
+    sh:property [
+        sh:path     co:hasEvent ;
+        sh:class    co:Event ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        rdfs:comment "Every Person has exactly one Event. Coverage: 13,707 / 13,707 (100%)."
+    ] ;
+
+    # ── Near-complete optional properties ───────────────────
+
+    sh:property [
+        sh:path     co:townland ;
+        sh:datatype xsd:string ;
+        sh:maxCount 1 ;
+        rdfs:comment "Townland of origin (e.g. 'Coolboy', 'Aghowle Lower'). Coverage: 13,683 / 13,707 (99.8%). Wrap in OPTIONAL when projecting, but safe to use as a filter pattern."
+    ] ;
+
+    sh:property [
+        sh:path     schema:familyName ;
+        sh:datatype xsd:string ;
+        sh:maxCount 1 ;
+        rdfs:comment "Surname. Coverage: 12,109 / 13,707 (88%). Always OPTIONAL."
+    ] ;
+
+    sh:property [
+        sh:path     schema:givenName ;
+        sh:datatype xsd:string ;
+        sh:maxCount 1 ;
+        rdfs:comment "Forename. Coverage: 12,083 / 13,707 (88%). Always OPTIONAL."
+    ] ;
+
+    sh:property [
+        sh:path     co:parish ;
+        sh:datatype xsd:string ;
+        sh:maxCount 1 ;
+        rdfs:comment "Civil parish (e.g. 'Moyacomb', 'Shillelagh'). Coverage: 7,499 / 13,707 (55%). Always OPTIONAL."
+    ] ;
+
+    # ── Sparse optional properties ───────────────────────────
+
+    sh:property [
+        sh:path     co:occupation ;
+        sh:datatype xsd:string ;
+        sh:maxCount 1 ;
+        rdfs:comment "Occupation / role (e.g. 'Farmer', 'Labourer'). Coverage: 1,791 / 13,707 (13%). Always OPTIONAL."
+    ] .
+
+
+# ── co:Event shape ───────────────────────────────────────────
+
+co:EventShape
+    a sh:NodeShape ;
+    sh:targetClass co:Event ;
+
+    # ── Required properties ──────────────────────────────────
+
+    sh:property [
+        sh:path     co:eventType ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:in       ( "emigration" "eviction" "tenancy" ) ;
+        rdfs:comment "Event category. Exactly one of: 'emigration' (6,016 events), 'eviction' (4,108), 'tenancy' (3,583). Coverage: 13,707 / 13,707 (100%). Do NOT wrap in OPTIONAL."
+    ] ;
+
+    sh:property [
+        sh:path     co:forPerson ;
+        sh:class    co:Person ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        rdfs:comment "Inverse of co:hasEvent. Links Event back to Person. Coverage: 13,707 / 13,707 (100%)."
+    ] ;
+
+    # ── Near-complete optional properties ───────────────────
+
+    sh:property [
+        sh:path     co:year ;
+        sh:datatype xsd:integer ;
+        sh:maxCount 1 ;
+        sh:minInclusive 1841 ;
+        sh:maxInclusive 1886 ;
+        rdfs:comment "Calendar year of the event (range: 1841-1886). Coverage: 13,693 / 13,707 (99.9%). Safe to use without OPTIONAL in COUNT or GROUP BY queries; use OPTIONAL if projecting individual year values."
+    ] .

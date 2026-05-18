@@ -2,18 +2,47 @@
 {% block content %}
 <style>
   @keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
+  .ask-detail-summary {
+    padding: 8px 12px;
+    font-size: 11px;
+    color: #64748b;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    font-weight: 600;
+    background: #f8fafc;
+    border-top: 1px solid #f1f5f9;
+  }
+  .ask-detail-summary:hover { background: #f1f5f9; }
+  .ask-detail-summary::marker, .ask-detail-summary::-webkit-details-marker { display: none; }
+  .ask-section-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #475467;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-bottom: 6px;
+  }
 </style>
 <section class="section">
   <div class="container" style="max-width:1180px;">
 
     <h1 class="section-title" style="margin-bottom:6px;">Ask the Archive</h1>
     <p class="section-sub" style="max-width:920px;">
-      Ask in plain English. The page shows the actual database result first, then the configured
-      OpenRouter LLM rewrite when the connection is available.
+      Ask in plain English. The system tries to build a transparent SQL query from the live
+      database schema, categories, and previously approved query patterns, then shows the real
+      database result first. When the configured LLM is available, it rewrites the answer in
+      plain English and can learn from your thumbs-up / thumbs-down feedback.
     </p>
 
-    <!-- LLM status badge -->
-    <div id="llmStatus" style="margin-top:8px;min-height:24px;"></div>
+    <!-- LLM + GraphDB status badges -->
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;min-height:24px;align-items:center;">
+      <div id="llmStatus"></div>
+      <div id="graphdbStatusChip" style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0;">
+        <span id="graphdbStatusDot" style="width:7px;height:7px;border-radius:50%;background:#94a3b8;display:inline-block;"></span>
+        <span id="graphdbStatusText">GraphDB: checking…</span>
+      </div>
+    </div>
 
     <!-- Input panel -->
     <div class="panel soft" style="margin-top:14px;padding:18px;">
@@ -51,6 +80,15 @@
         <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="list all emigrants with their ship names">Emigrants + ships</button>
         <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="show me the estate summary statistics">Estate summary</button>
       </div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+        <span style="font-size:11px;color:#64748b;align-self:center;font-weight:600;">Research examples:</span>
+        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="On average, did male tenants have more land than female tenants?">Male vs female land</button>
+        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="How many widows appear in the records?">Widows in records</button>
+        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="What was the range of family sizes in the eviction records?">Eviction family size range</button>
+        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="What was the peak period for emigration to Canada?">Canada peak period</button>
+        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="Which ship carried the most Coollattin families to Canada?">Top Canada ship</button>
+        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="Is there a statistical relationship between townlands with holy wells and townlands with high population figures?">Holy wells vs population</button>
+      </div>
     </div>
 
     <!-- Status + progress -->
@@ -59,93 +97,203 @@
     <div id="askError"
          style="margin-top:8px;display:none;padding:10px 12px;border-radius:10px;background:#fff1f2;border:1px solid #fecdd3;color:#9f1239;font-size:13px;"></div>
 
-    <!-- Result panel -->
-    <section id="askResult" class="panel" style="display:none;margin-top:16px;padding:18px;">
+    <!-- ═══════════════════════════════════════════════════════ RESULT PANEL -->
+    <section id="askResult" class="panel" style="display:none;margin-top:16px;padding:0;overflow:hidden;">
 
-      <!-- Header -->
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-        <h2 style="margin:0;font-size:20px;color:#0f172a;">Result</h2>
-        <a id="askPdfLink" class="btn btn-ghost" href="#" target="_blank" rel="noopener" style="display:none;">
+      <!-- Top bar -->
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:16px 18px;border-bottom:1px solid #f1f5f9;">
+        <h2 style="margin:0;font-size:18px;color:#0f172a;">Result</h2>
+        <a id="askPdfLink" class="btn btn-ghost" href="#" target="_blank" rel="noopener" style="display:none;font-size:12px;">
           ↓ Download PDF
         </a>
       </div>
 
-      <!-- Actual data answer -->
-      <div style="margin-top:12px;">
-        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">Actual Data Answer</div>
-        <div id="askActualAnswer" style="margin-top:4px;color:#0f172a;font-size:16px;font-weight:700;"></div>
-      </div>
-
-      <!-- LLM answer -->
-      <div style="margin-top:12px;">
-        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">LLM Rephrased Answer</div>
-        <div id="askLlmAnswer" style="margin-top:6px;padding:12px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:10px;color:#14532d;font-size:14px;line-height:1.6;"></div>
-      </div>
-
-      <!-- LLM connection metadata -->
-      <div style="margin-top:10px;">
-        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">LLM Connection + Data Workflow</div>
-        <div id="askLlmMeta" style="margin-top:6px;display:grid;gap:5px;font-size:12px;color:#475467;"></div>
-      </div>
-
-      <!-- Townland resolution -->
-      <div id="askTownlandResolution" style="display:none;margin-top:10px;"></div>
-
-      <!-- Warnings -->
-      <div id="askWarnings" style="margin-top:8px;"></div>
-
-      <!-- Generated SQL -->
-      <div style="margin-top:14px;">
-        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">Generated Queries</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;">
-          <div style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
-            <div style="padding:7px 10px;background:#f8fafc;font-size:11px;font-weight:700;color:#334155;">SQLite — Local Database</div>
-            <pre id="askSqliteQuery" style="margin:0;padding:10px;background:#0f172a;color:#e2e8f0;overflow:auto;font-size:11px;line-height:1.5;max-height:180px;"></pre>
-          </div>
-          <div style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
-            <div style="padding:7px 10px;background:#f8fafc;font-size:11px;font-weight:700;color:#334155;">PostgreSQL — VRTI Warehouse Model</div>
-            <pre id="askVrtiPgQuery" style="margin:0;padding:10px;background:#111827;color:#e5e7eb;overflow:auto;font-size:11px;line-height:1.5;max-height:180px;"></pre>
-          </div>
+      <!-- ── 1. SQLite result table (primary data view) ─────────────────── -->
+      <div style="padding:14px 18px;border-bottom:1px solid #f1f5f9;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <div class="ask-section-label" style="margin:0;">Database Result</div>
+          <div id="askSourceTables" style="font-size:11px;color:#94a3b8;font-style:italic;"></div>
         </div>
-      </div>
-
-      <!-- VRTI Townland Context -->
-      <div id="askKgBlock" style="margin-top:14px;display:none;">
-        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">VRTI Townland Context</div>
-        <div id="askKgContent" style="margin-top:6px;display:grid;gap:6px;"></div>
-      </div>
-
-      <!-- Local DB table -->
-      <div style="margin-top:14px;">
-        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">Processed Table — Local Database</div>
-        <div style="margin-top:6px;overflow:auto;border:1px solid #e2e8f0;border-radius:10px;max-height:320px;">
+        <div style="overflow:auto;border:1px solid #e2e8f0;border-radius:10px;max-height:360px;">
           <table id="askTable" style="width:100%;border-collapse:collapse;background:#fff;"></table>
         </div>
+        <!-- Compact actual answer shown below table -->
+        <div id="askActualAnswer" style="margin-top:8px;font-size:12px;color:#475467;font-style:italic;display:none;"></div>
       </div>
 
-      <!-- VRTI graph table -->
-      <div style="margin-top:14px;">
-        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">Processed Table — VRTI Graph</div>
-        <div style="margin-top:6px;overflow:auto;border:1px solid #e2e8f0;border-radius:10px;max-height:240px;">
-          <table id="askVrtiTable" style="width:100%;border-collapse:collapse;background:#fff;"></table>
+      <!-- ── 2. Warnings / townland resolution ─────────────────────────── -->
+      <div id="askWarnings" style="padding:0 18px;"></div>
+      <div id="askTownlandResolution" style="display:none;padding:0 18px 10px;"></div>
+
+      <!-- ── 3. LLM answer (secondary — plain-English rewrite) ─────────── -->
+      <div style="padding:14px 18px;border-top:1px solid #f1f5f9;">
+        <div class="ask-section-label">Plain-English Summary</div>
+        <div id="askLlmAnswer" style="margin-top:4px;padding:12px 14px;border:1px solid #e2e8f0;background:#f8fafc;border-radius:10px;color:#334155;font-size:13px;line-height:1.6;"></div>
+      </div>
+
+      <!-- ── 4. SQL vs Graph comparison (side-by-side) ─────────────────── -->
+      <div id="askGraphComparisonBlock" style="display:none;margin:0 18px 14px;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
+
+        <!-- Panel header -->
+        <div style="padding:9px 14px;background:#f8fafc;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <div style="font-size:12px;font-weight:700;color:#0f172a;">SQLite vs. GraphDB Comparison</div>
+          <div id="askGraphStatus" style="font-size:11px;color:#64748b;"></div>
+        </div>
+
+        <!-- Metrics bar -->
+        <div id="askGraphMetrics" style="display:flex;gap:8px;flex-wrap:wrap;padding:10px 14px;background:#fafafa;border-bottom:1px solid #f1f5f9;"></div>
+
+        <!-- Setup hint -->
+        <div id="askGraphSetupHint" style="display:none;padding:8px 14px;background:#fffbeb;border-bottom:1px solid #fde68a;font-size:11px;color:#92400e;"></div>
+
+        <!-- Approach row -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;border-bottom:1px solid #f1f5f9;background:#fafafa;">
+          <div style="padding:5px 12px;border-right:1px solid #f1f5f9;font-size:11px;color:#64748b;">
+            <strong style="color:#166534;">Relational</strong> · SQL (SQLite) · Closed-world
+          </div>
+          <div style="padding:5px 12px;font-size:11px;color:#64748b;">
+            <strong style="color:#1e40af;">RDF Graph</strong> · SPARQL 1.1 · Open-world
+          </div>
+        </div>
+
+        <!-- Side-by-side tables -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;">
+
+          <!-- SQLite side -->
+          <div style="border-right:1px solid #e2e8f0;">
+            <div style="padding:7px 12px;background:#f0fdf4;border-bottom:1px solid #bbf7d0;display:flex;align-items:center;gap:6px;">
+              <span style="font-size:11px;font-weight:700;color:#166534;">SQLite</span>
+              <span id="askGraphSqlMeta" style="font-size:10px;color:#64748b;"></span>
+            </div>
+            <div style="overflow:auto;max-height:280px;">
+              <table id="askGraphSqlTable" style="width:100%;border-collapse:collapse;background:#fff;"></table>
+            </div>
+            <details>
+              <summary class="ask-detail-summary">▸ SQL Query</summary>
+              <pre id="askGraphSqlQuery" style="margin:0;padding:10px 12px;background:#0f172a;color:#e2e8f0;font-size:11px;line-height:1.5;overflow:auto;max-height:160px;white-space:pre-wrap;"></pre>
+            </details>
+          </div>
+
+          <!-- GraphDB side -->
+          <div>
+            <div style="padding:7px 12px;background:#eff6ff;border-bottom:1px solid #bfdbfe;display:flex;align-items:center;gap:6px;">
+              <span style="font-size:11px;font-weight:700;color:#1e40af;">GraphDB (SPARQL)</span>
+              <span id="askGraphGdbMeta" style="font-size:10px;color:#64748b;"></span>
+            </div>
+            <div style="overflow:auto;max-height:280px;">
+              <table id="askGraphSparqlTable" style="width:100%;border-collapse:collapse;background:#fff;"></table>
+            </div>
+            <details>
+              <summary class="ask-detail-summary">▸ SPARQL Query</summary>
+              <pre id="askGraphSparqlQuery" style="margin:0;padding:10px 12px;background:#111827;color:#e5e7eb;font-size:11px;line-height:1.5;overflow:auto;max-height:160px;white-space:pre-wrap;"></pre>
+            </details>
+          </div>
+
+        </div>
+
+        <!-- Mismatch explanation (shown only when counts differ) -->
+        <div id="askMismatchExplanation" style="display:none;padding:10px 14px;background:#fefce8;border-top:1px solid #fde68a;">
+          <div style="font-size:11px;font-weight:700;color:#713f12;margin-bottom:4px;">Why results differ</div>
+          <div id="askMismatchText" style="font-size:12px;color:#713f12;line-height:1.6;"></div>
         </div>
       </div>
 
-      <!-- Summary -->
-      <div style="margin-top:14px;">
-        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">Summarised Output</div>
-        <div id="askSummary" style="margin-top:6px;padding:12px 14px;border:1px solid #dbeafe;background:#eff6ff;border-radius:10px;color:#1e3a8a;font-size:13px;line-height:1.6;"></div>
+      <!-- ── 5. Chart (if present) ──────────────────────────────────────── -->
+      <div id="askChartBlock" style="display:none;padding:0 18px 14px;">
+        <div class="ask-section-label">Graph View</div>
+        <div id="askChart" style="padding:12px 14px;border:1px solid #e2e8f0;background:#fff;border-radius:10px;overflow:auto;"></div>
       </div>
 
-      <!-- Supporting context -->
-      <div id="askSupportContextBlock" style="display:none;margin-top:14px;">
-        <div style="font-size:11px;font-weight:700;color:#475467;text-transform:uppercase;letter-spacing:.06em;">Supporting Context Used By LLM</div>
-        <div id="askSupportContext" style="margin-top:6px;display:grid;gap:6px;"></div>
+      <!-- ── 6. Suggestions / Insights (collapsible) ────────────────────── -->
+      <div id="askSuggestionsBlock" style="display:none;padding:0 18px 14px;">
+        <div class="ask-section-label">If Data Is Missing</div>
+        <div id="askSuggestions" style="display:grid;gap:6px;"></div>
       </div>
+
+      <div id="askInsightsBlock" style="display:none;padding:0 18px 14px;">
+        <div class="ask-section-label">Related Insights</div>
+        <div id="askInsights" style="display:grid;gap:6px;"></div>
+      </div>
+
+      <!-- ── 7. Feedback ────────────────────────────────────────────────── -->
+      <div style="margin:0 18px 14px;padding:12px 14px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
+        <div class="ask-section-label">Feedback</div>
+        <div style="font-size:12px;color:#475467;">
+          Thumbs up saves a good SQL pattern; thumbs down records that this answer was not good enough.
+        </div>
+        <input id="askFeedbackNote" type="text" placeholder="Optional note"
+          style="width:100%;margin-top:8px;padding:10px 12px;border:1px solid #d8d2c8;border-radius:10px;background:#fff;color:#0f172a;" />
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+          <button id="askFeedbackUp" class="btn btn-soft" type="button">Thumbs Up</button>
+          <button id="askFeedbackDown" class="btn btn-soft" type="button">Thumbs Down</button>
+        </div>
+        <div id="askFeedbackStatus" style="margin-top:8px;font-size:12px;color:#475467;"></div>
+      </div>
+
+      <!-- ── 8. Technical details (collapsible) ────────────────────────── -->
+      <details style="border-top:1px solid #f1f5f9;">
+        <summary class="ask-detail-summary" style="padding:10px 18px;font-size:12px;">▸ Technical Details &amp; Provenance</summary>
+        <div style="padding:0 18px 14px;display:grid;gap:12px;">
+
+          <!-- Generated Queries -->
+          <div>
+            <div class="ask-section-label">Generated Queries</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+                <div style="padding:7px 10px;background:#f8fafc;font-size:11px;font-weight:700;color:#334155;">SQLite</div>
+                <pre id="askSqliteQuery" style="margin:0;padding:10px;background:#0f172a;color:#e2e8f0;overflow:auto;font-size:11px;line-height:1.5;max-height:160px;"></pre>
+              </div>
+              <div style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+                <div style="padding:7px 10px;background:#f8fafc;font-size:11px;font-weight:700;color:#334155;">PostgreSQL — VRTI Warehouse</div>
+                <pre id="askVrtiPgQuery" style="margin:0;padding:10px;background:#111827;color:#e5e7eb;overflow:auto;font-size:11px;line-height:1.5;max-height:160px;"></pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- LLM Connection metadata -->
+          <div>
+            <div class="ask-section-label">LLM Connection + Data Workflow</div>
+            <div id="askLlmMeta" style="display:grid;gap:5px;font-size:12px;color:#475467;"></div>
+          </div>
+
+          <!-- Query Provenance -->
+          <div>
+            <div class="ask-section-label">Query Provenance</div>
+            <div id="askProvenance" style="display:grid;gap:5px;font-size:12px;color:#475467;"></div>
+          </div>
+
+          <!-- VRTI Townland Context -->
+          <div id="askKgBlock" style="display:none;">
+            <div class="ask-section-label">VRTI Townland Context</div>
+            <div id="askKgContent" style="display:grid;gap:6px;"></div>
+          </div>
+
+          <!-- VRTI graph table -->
+          <div>
+            <div class="ask-section-label">Processed Table — VRTI Graph</div>
+            <div style="overflow:auto;border:1px solid #e2e8f0;border-radius:10px;max-height:200px;">
+              <table id="askVrtiTable" style="width:100%;border-collapse:collapse;background:#fff;"></table>
+            </div>
+          </div>
+
+          <!-- Summarised Output -->
+          <div>
+            <div class="ask-section-label">Summarised Output</div>
+            <div id="askSummary" style="padding:12px 14px;border:1px solid #dbeafe;background:#eff6ff;border-radius:10px;color:#1e3a8a;font-size:13px;line-height:1.6;"></div>
+          </div>
+
+          <!-- Supporting Context -->
+          <div id="askSupportContextBlock" style="display:none;">
+            <div class="ask-section-label">Supporting Context Used By LLM</div>
+            <div id="askSupportContext" style="display:grid;gap:6px;"></div>
+          </div>
+
+        </div>
+      </details>
 
     </section>
   </div>
 </section>
 
-<script src="{{ url_for('static', filename='js/ask.js') }}?v=7"></script>
+<script src="{{ url_for('static', filename='js/ask.js') }}?v=14"></script>
 {% endblock %}

@@ -87,8 +87,9 @@ def run_full_ingest(dry_run: bool = False) -> dict:
         refresh_state_repository,
     )
     from backend.repositories import clearances_repository
+    from backend.jobs.census_seed import load_standard_census_seed_records
     from backend.models.census_models import Townland, CensusRecord, ClearancesRecord
-    from backend.services.townland_service import normalize_townland_name
+    from backend.services.townland_service import canonical_name, normalize_townland_name
     from config import ActiveConfig
 
     stats = {
@@ -96,6 +97,7 @@ def run_full_ingest(dry_run: bool = False) -> dict:
         "townlands_kg_enriched": 0,
         "census_records_json": 0,
         "census_records_kg": 0,
+        "census_records_csv_seed": 0,
         "clearances_records": 0,
         "kg_errors": 0,
     }
@@ -123,6 +125,7 @@ def run_full_ingest(dry_run: bool = False) -> dict:
     # ---- Step 3: Process each townland ----------------------------------
     all_census_records: list[CensusRecord] = []
     all_clearances: list[ClearancesRecord] = []
+    estate_name_map: dict[str, str] = {}
 
     for feat in features:
         props = feat.get("properties") or {}
@@ -134,6 +137,8 @@ def run_full_ingest(dry_run: bool = False) -> dict:
         canonical = normalize_townland_name(raw_name)
         if not canonical:
             continue
+        estate_name_map[canonical] = canonical
+        estate_name_map[canonical_name(raw_name)] = canonical
 
         stats["townlands_processed"] += 1
 
@@ -210,24 +215,7 @@ def run_full_ingest(dry_run: bool = False) -> dict:
             ))
             stats["census_records_json"] += 1
 
-        # ---- 3e: Standard census from KG (1841-1891) -------------------
-        if kg_online and townland.kg_uri:
-            kg_census = _fetch_kg_census(vrti_sparql, townland.kg_uri)
-            for dto in kg_census:
-                all_census_records.append(CensusRecord(
-                    townland_name=canonical,
-                    year=dto.year,
-                    male=dto.male,
-                    female=dto.female,
-                    total=(dto.male or 0) + (dto.female or 0) if (dto.male or dto.female) else None,
-                    inhabited=dto.inhabited,
-                    uninhabited=dto.uninhabited,
-                    source="kg",
-                    kg_uri=townland.kg_uri,
-                ))
-                stats["census_records_kg"] += 1
-
-        # ---- 3f: Clearances records (from GeoJSON) ---------------------
+        # ---- 3e: Clearances records (from GeoJSON) ---------------------
         for year in CLEARANCE_YEARS:
             col = f"Clearances_{year}"
             count_val = _int_or_none(props.get(col))
@@ -241,14 +229,75 @@ def run_full_ingest(dry_run: bool = False) -> dict:
             ))
             stats["clearances_records"] += 1
 
-    # ---- Step 4: Bulk persist all records ------------------------------
+    # ---- Step 4: Standard census from KG (1841-1891) -------------------
+    # Fetch once at county scope, then keep only estate townlands.
+    # This is more reliable than querying the KG one townland URI at a time,
+    # and avoids loading non-estate Wicklow rows into the local DB.
+    if kg_online and estate_name_map:
+        kg_census = vrti_sparql.get_census_records_for_county(county="Wicklow")
+        seen_census_keys = {(rec.townland_name, rec.year) for rec in all_census_records}
+        skipped_non_estate = 0
+
+        for dto in kg_census:
+            raw_name = dto.townland_name or ""
+            match_key = canonical_name(raw_name)
+            canonical = estate_name_map.get(match_key)
+            if not canonical:
+                canonical = estate_name_map.get(normalize_townland_name(raw_name))
+            if not canonical:
+                skipped_non_estate += 1
+                continue
+
+            census_key = (canonical, dto.year)
+            if census_key in seen_census_keys:
+                continue
+
+            all_census_records.append(CensusRecord(
+                townland_name=canonical,
+                year=dto.year,
+                male=dto.male,
+                female=dto.female,
+                total=(dto.male or 0) + (dto.female or 0) if (dto.male or dto.female) else None,
+                inhabited=dto.inhabited,
+                uninhabited=dto.uninhabited,
+                source="kg",
+                kg_uri=dto.townland_uri,
+            ))
+            seen_census_keys.add(census_key)
+            stats["census_records_kg"] += 1
+
+        log.info(
+            "full_ingest.census_kg_filtered | wicklow_rows=%d estate_rows=%d skipped_non_estate=%d",
+            len(kg_census),
+            stats["census_records_kg"],
+            skipped_non_estate,
+        )
+
+        if stats["census_records_kg"] == 0:
+            seed_records = load_standard_census_seed_records(
+                allowed_townlands=set(estate_name_map.values())
+            )
+            for rec in seed_records:
+                census_key = (rec.townland_name, rec.year)
+                if census_key in seen_census_keys:
+                    continue
+                all_census_records.append(rec)
+                seen_census_keys.add(census_key)
+                stats["census_records_csv_seed"] += 1
+            log.warning(
+                "full_ingest.census_kg_empty_using_csv_seed | estate_seed_rows=%d",
+                stats["census_records_csv_seed"],
+            )
+
+    # ---- Step 5: Bulk persist all records ------------------------------
     if not dry_run:
         if all_census_records:
             census_repository.upsert_many(all_census_records)
             log.info(
-                "full_ingest.census_persisted | json=%d kg=%d",
+                "full_ingest.census_persisted | json=%d kg=%d csv_seed=%d",
                 stats["census_records_json"],
                 stats["census_records_kg"],
+                stats["census_records_csv_seed"],
             )
 
         if all_clearances:
@@ -258,11 +307,12 @@ def run_full_ingest(dry_run: bool = False) -> dict:
                 stats["clearances_records"],
             )
 
-        # ---- Step 5: Update refresh state ------------------------------
+        # ---- Step 6: Update refresh state ------------------------------
         total_records = (
             stats["townlands_processed"]
             + stats["census_records_json"]
             + stats["census_records_kg"]
+            + stats["census_records_csv_seed"]
             + stats["clearances_records"]
         )
         refresh_state_repository.upsert(
@@ -274,12 +324,13 @@ def run_full_ingest(dry_run: bool = False) -> dict:
     log.info(
         "full_ingest.complete | "
         "townlands=%d kg_enriched=%d "
-        "census_json=%d census_kg=%d "
+        "census_json=%d census_kg=%d census_csv_seed=%d "
         "clearances=%d kg_errors=%d dry_run=%s",
         stats["townlands_processed"],
         stats["townlands_kg_enriched"],
         stats["census_records_json"],
         stats["census_records_kg"],
+        stats["census_records_csv_seed"],
         stats["clearances_records"],
         stats["kg_errors"],
         dry_run,
@@ -329,18 +380,6 @@ def _fetch_kg_details(vrti_sparql, raw_name: str, county: Optional[str] = None):
     except Exception as exc:
         log.debug("full_ingest._fetch_kg_details failed name=%s err=%s", raw_name, exc)
         return None
-
-
-def _fetch_kg_census(vrti_sparql, townland_uri: str) -> list:
-    """
-    Query the KG for census records linked to the given townland URI.
-    Returns a list of CensusRecordDTO.
-    """
-    try:
-        return vrti_sparql.get_census_records_for_townland(townland_uri)
-    except Exception as exc:
-        log.debug("full_ingest._fetch_kg_census failed uri=%s err=%s", townland_uri, exc)
-        return []
 
 
 def _str_or_none(val) -> Optional[str]:

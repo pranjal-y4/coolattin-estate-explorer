@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  /* ── KG Explore page styles ─────────────────────────────────────── */
+  #kg-wrap {
+    display: grid;
+    grid-template-columns: 1fr 360px;
+    gap: 14px;
+    height: calc(100vh - 140px);
+    min-height: 560px;
+  }
+  #kg-graph-panel {
+    position: relative;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    background: #0f172a;
+    overflow: hidden;
+  }
+  #kg-svg { width: 100%; height: 100%; }
+
+  #kg-side {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+  }
+
+  .kg-card {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 12px 14px;
+  }
+
+  .kg-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #475467;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-bottom: 6px;
+  }
+
+  /* legend dots */
+  .kg-dot { display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px; }
+
+  #kg-tooltip {
+    position:fixed;
+    pointer-events:none;
+    background:rgba(15,23,42,.92);
+    color:#e2e8f0;
+    padding:8px 11px;
+    border-radius:8px;
+    font-size:11px;
+    line-height:1.5;
+    max-width:220px;
+    display:none;
+    z-index:1000;
+  }
+
+  @media (max-width:900px) {
+    #kg-wrap { grid-template-columns:1fr; height:auto; }
+    #kg-graph-panel { height:420px; }
+  }
+</style>
+
+<section class="section">
+  <div class="container" style="max-width:1400px;">
+
+    <h1 class="section-title" style="margin-bottom:4px;">Explore Knowledge Graph</h1>
+    <p class="section-sub" style="max-width:900px;margin-bottom:14px;">
+      Complete visualisation of the Coolattin Estate database as a knowledge graph — all 13,707 estate
+      records aggregated across 516 townlands and 22 parishes, with census and clearances data dimensions.
+      Click any node to explore. Search to highlight matching entities.
+    </p>
+
+    <!-- search + controls bar -->
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+      <input id="kg-search" type="text" placeholder="Search person, townland, or event type…"
+        style="flex:1;min-width:200px;padding:9px 12px;border:1px solid #d8d2c8;border-radius:10px;background:#fff;color:#0f172a;font-size:13px;" />
+      <button id="kg-search-clear" class="btn btn-soft" style="font-size:12px;">Clear</button>
+      <button id="kg-reset-zoom" class="btn btn-soft" style="font-size:12px;">Reset Zoom</button>
+      <span id="kg-node-count" style="font-size:11px;color:#64748b;"></span>
+    </div>
+
+    <div id="kg-wrap">
+      <!-- Graph canvas -->
+      <div id="kg-graph-panel">
+        <svg id="kg-svg"></svg>
+        <!-- mini legend overlay -->
+        <div style="position:absolute;bottom:10px;left:12px;background:rgba(15,23,42,.82);padding:8px 12px;border-radius:8px;color:#e2e8f0;font-size:10px;line-height:1.9;">
+          <div style="font-weight:700;margin-bottom:2px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;font-size:9px;">Nodes</div>
+          <div><span class="kg-dot" style="background:#7c3aed;"></span>Parish</div>
+          <div><span class="kg-dot" style="background:#15803d;"></span>Townland · emigration-dominant</div>
+          <div><span class="kg-dot" style="background:#b91c1c;"></span>Townland · eviction-dominant</div>
+          <div><span class="kg-dot" style="background:#1d4ed8;"></span>Townland · tenancy-dominant</div>
+          <div style="margin-top:4px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;font-size:9px;">Hubs</div>
+          <div><span class="kg-dot" style="background:#16a34a;"></span>Emigration hub</div>
+          <div><span class="kg-dot" style="background:#dc2626;"></span>Eviction hub</div>
+          <div><span class="kg-dot" style="background:#2563eb;"></span>Tenancy hub</div>
+          <div><span class="kg-dot" style="background:#0891b2;"></span>Census data hub</div>
+          <div><span class="kg-dot" style="background:#9333ea;"></span>Clearances hub</div>
+        </div>
+      </div>
+
+      <!-- Side panel -->
+      <div id="kg-side">
+
+        <!-- Legend / stats card -->
+        <div class="kg-card" id="kg-stats-card">
+          <div class="kg-label">Graph Summary</div>
+          <div id="kg-stats" style="font-size:12px;color:#475467;line-height:1.8;">Loading…</div>
+        </div>
+
+        <!-- Selected node detail -->
+        <div class="kg-card" id="kg-detail-card" style="display:none;">
+          <div class="kg-label">Selected Entity</div>
+          <div id="kg-detail" style="font-size:12px;color:#0f172a;line-height:1.7;"></div>
+        </div>
+
+        <!-- Search results summary -->
+        <div class="kg-card" id="kg-search-card" style="display:none;">
+          <div class="kg-label">Search Matches</div>
+          <div id="kg-search-results" style="font-size:12px;color:#0f172a;line-height:1.7;"></div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- Tooltip -->
+<div id="kg-tooltip"></div>
+
+<!-- D3.js v7 via CDN -->
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script src="{{ url_for('static', filename='js/kg_explore.js') }}?v=5"></script>
+{% endblock %}

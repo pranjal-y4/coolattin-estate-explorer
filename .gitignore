@@ -36,6 +36,8 @@ npm-debug.log*
 # ── Generated exports (runtime output, not source) ───────────────────────────
 exports/*
 !exports/.gitkeep
+coolattin-app.zip
+data/coolattin_sample.ttl
 
 # ── Large data files (>100 MB, exceed GitHub's file size limit) ──────────────
 extra_datasets/NMS_OpenData_20230823.csv

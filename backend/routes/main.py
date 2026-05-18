@@ -42,3 +42,8 @@ def ask():
 @bp.get("/heritage")
 def heritage():
     return render_template("heritage.html", title="Historic Landscape · Coolattin")
+
+
+@bp.get("/explore-knowledge")
+def explore_knowledge():
+    return render_template("kg_explore.html", title="Explore Knowledge Graph · Coolattin")

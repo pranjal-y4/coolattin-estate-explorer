@@ -47,6 +47,10 @@ def create_app(config_class=None) -> Flask:
     app.config["VRTI_SPARQL_ENDPOINT"] = config_class.VRTI_SPARQL_ENDPOINT
     app.config["CENSUS_STALE_AFTER_DAYS"] = config_class.CENSUS_STALE_AFTER_DAYS
     app.config["EXPORTS_DIR"] = config_class.EXPORTS_DIR
+    # Cache static files (GeoJSON, CSS, JS) for 24 h in the browser so the
+    # 6.2 MB townlands.json and 4.4 MB unified records are not re-fetched on
+    # every page reload. Set to 0 in development if you need instant updates.
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 86400  # 24 h
 
     # ------------------------------------------------------------------ #
     # Database                                                             #
@@ -66,6 +70,7 @@ def create_app(config_class=None) -> Flask:
     from backend.routes.townlands import bp as townlands_bp
     from backend.routes.exports import bp as exports_bp
     from backend.routes.ask import bp as ask_bp
+    from backend.routes.kg_explore import bp as kg_explore_bp
 
     app.register_blueprint(main_bp)
     app.register_blueprint(census_bp,    url_prefix="/api/census")
@@ -74,6 +79,7 @@ def create_app(config_class=None) -> Flask:
     app.register_blueprint(townlands_bp, url_prefix="/api/townlands")
     app.register_blueprint(exports_bp,   url_prefix="/api/exports")
     app.register_blueprint(ask_bp,       url_prefix="/api/ask")
+    app.register_blueprint(kg_explore_bp, url_prefix="/api/kg")
 
     # ------------------------------------------------------------------ #
     # Legacy compatibility routes                                          #

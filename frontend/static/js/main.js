@@ -130,6 +130,15 @@ document.addEventListener("DOMContentLoaded", async () => {
       .join(" ");
   }
 
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   function normalizeYear(v) {
     if (v === null || v === undefined || v === "") return null;
     const n = Number(v);
@@ -220,8 +229,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         const candidate = `${r.forename || ""} ${r.surname || ""}`.trim().toLowerCase();
         if (candidate !== full) return false;
         // Prefer same townland when available
-        if (townland) return !!match.has_emigration_record && (r.townland || "").trim().toLowerCase() === townland;
-        return !!match.has_emigration_record;
+        if (townland) return !!r.has_emigration_record && (r.townland || "").trim().toLowerCase() === townland;
+        return !!r.has_emigration_record;
       }) || state.records.find((r) => !!r.has_emigration_record && `${r.forename || ""} ${r.surname || ""}`.trim().toLowerCase() === full);
 
       if (match && !seen.has(String(match.record_id))) {
@@ -360,6 +369,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (label === "Chief Tenant") label = "Chief Tenant";
       if (label === "Under Tenant") label = "Under Tenant";
 
+      if (key === "chief_tenant") {
+        const ctSurname = (rec.chief_tenant_surname || "").trim();
+        if (ctSurname && /^[A-Za-z\s'-]+$/.test(ctSurname)) {
+          const safeSurname = ctSurname.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+          const safeDisplay = escapeHtml(String(value));
+          rows.push(formatRow(label, `<button style="background:none;border:none;color:#1d4ed8;font-weight:600;cursor:pointer;font-size:inherit;padding:0;text-decoration:underline;" onclick="window.searchSurname('${safeSurname}')">👤 ${safeDisplay}</button>`));
+          continue;
+        }
+      }
+
       rows.push(formatRow(label, String(value)));
     }
 
@@ -475,14 +494,33 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function workhouseSectionHTML(matches) {
     if (!matches.length) return "";
-    const rows = matches
-      .map((m) => {
+
+    const tierOrder = { High: 0, Medium: 1, Low: 2 };
+    const tierLabel = { High: "High confidence", Medium: "Medium confidence", Low: "Low confidence" };
+
+    // Group by confidence tier
+    const groups = {};
+    for (const m of matches) {
+      const tier = m.confidence || "Low";
+      if (!groups[tier]) groups[tier] = [];
+      groups[tier].push(m);
+    }
+
+    const tiers = Object.keys(groups).sort((a, b) => (tierOrder[a] ?? 3) - (tierOrder[b] ?? 3));
+
+    const rows = tiers.map((tier) => {
+      const header = `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#94a3b8;margin:8px 0 4px;">${tierLabel[tier] || tier}</div>`;
+      const cards = groups[tier].map((m) => {
         const ed = m.electoral_division || "-";
         const basis = m.match_basis || "name";
+        const scoreStr = m.name_score != null ? ` · Score: ${(m.name_score * 100).toFixed(0)}%` : "";
         return `
           <div style="padding:8px;border:1px solid #e2e8f0;border-radius:8px;background:#faf5ff;margin-bottom:6px;">
-            <div style="font-weight:700;color:#4c1d95;">${m.raw_name || "Unknown"}</div>
-            <div style="font-size:11px;color:#475569;">Sheet: ${m.source_sheet || "-"} · Match: ${basis}</div>
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+              <span class="wh-confidence wh-${tier}">${tier}</span>
+              <span style="font-weight:700;color:#4c1d95;">${m.raw_name || "Unknown"}</span>
+            </div>
+            <div style="font-size:11px;color:#475569;">Sheet: ${m.source_sheet || "-"} · Match: ${basis}${scoreStr}</div>
             <div style="font-size:11px;color:#475569;">Electoral Division: ${ed}</div>
             <div style="font-size:11px;color:#475569;">Sex: ${m.sex || "-"} · Age: ${m.age || "-"} · Status: ${m.status || "-"}</div>
             <div style="font-size:11px;color:#475569;">Employment: ${m.employment || "-"} · Religion: ${m.religion || "-"}</div>
@@ -490,12 +528,16 @@ document.addEventListener("DOMContentLoaded", async () => {
             ${m.register_number ? `<div style="font-size:11px;color:#475569;">Register #: ${m.register_number}</div>` : ""}
           </div>
         `;
-      })
-      .join("");
+      }).join("");
+      return header + cards;
+    }).join("");
+
     return `
       <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #cbd5e1;">
-        <div style="font-size:12px;color:#4c1d95;font-weight:800;">Workhouse Records (${matches.length})</div>
-        <div style="font-size:11px;color:#64748b;margin:4px 0 8px;">These could be relevant member records; please verify manually.</div>
+        <div style="font-size:12px;color:#4c1d95;font-weight:800;">Workhouse Records (${matches.length} fuzzy match${matches.length !== 1 ? "es" : ""})</div>
+        <div style="font-size:11px;color:#78350f;background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;margin:4px 0 8px;line-height:1.5;">
+          <strong>Approximate matches only</strong> — these records were identified by name similarity (fuzzy matching) and cannot be guaranteed to refer to the same person. Confidence tiers indicate match quality. Always verify against the original source before drawing conclusions.
+        </div>
         <div style="margin-top:6px;">${rows}</div>
       </div>
     `;
@@ -612,6 +654,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       ${householdListSection}
     `;
   }
+
+  window.searchSurname = function (surname) {
+    if (!surname) return;
+    renderSurnameResults(surname);
+  };
 
   window.openRecordById = function (recordId) {
     const rec = state.records.find((r) => String(r.record_id) === String(recordId));
@@ -743,13 +790,21 @@ document.addEventListener("DOMContentLoaded", async () => {
         <span style="font-size:17px;font-weight:400;">→</span>
       </a>
 
-      <!-- Link to Historic Landscape page -->
-      <a href="/heritage?townland=${encodeURIComponent(key)}"
-         style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;margin-top:8px;background:rgba(176,141,87,.08);border:1px solid rgba(176,141,87,.30);border-radius:10px;color:#7a5e2a;font-size:14px;font-weight:700;text-decoration:none;transition:background .18s;"
-         onmouseover="this.style.background='rgba(176,141,87,.16)'" onmouseout="this.style.background='rgba(176,141,87,.08)'">
-        <span>Explore Historic Landscape</span>
-        <span style="font-size:17px;font-weight:400;">↗</span>
-      </a>
+      <div class="heritage-mode-banner">
+        Use <strong>Explore Historic Place</strong> to keep working on this same home-page map while switching from family
+        records to nearby archaeological sites, holy wells, and monuments for ${escapeHtml(key)}.
+      </div>
+
+      <div class="heritage-actions">
+        <button class="btn btn-soft btn-block" onclick="window.openHistoricLandscapeInMap('${safeKey}')">
+          Explore Historic Place on This Map
+        </button>
+        <a href="/heritage?townland=${encodeURIComponent(key)}"
+           class="btn btn-ghost"
+           style="width:100%;text-align:center;">
+          Open Dedicated Historic Landscape Page
+        </a>
+      </div>
     `;
 
     // Fetch and inject census summary asynchronously
@@ -999,24 +1054,35 @@ document.addEventListener("DOMContentLoaded", async () => {
       });
     }
 
-    input.addEventListener("input", () => {
-      setSurnameError("");
-      refreshSuggest();
-    });
-    input.addEventListener("change", () => {
+    let _surnameTimer = null;
+
+    function tryRenderSurname() {
       const val = input.value.trim();
-      if (!val) {
-        setSurnameError("");
-        return;
-      }
+      if (!val) { setSurnameError(""); return; }
       const tl = $("townlandSelect")?.value || "";
       if (!hasSurnameInContext(val, tl)) {
-        setSurnameError("Surname not found. Please select a surname from the dropdown suggestions.");
+        setSurnameError("Surname not found — type a name and select from the suggestions, or click Apply Filters.");
         return;
       }
       setSurnameError("");
       renderSurnameResults(val, tl);
+    }
+
+    input.addEventListener("input", () => {
+      setSurnameError("");
+      refreshSuggest();
+      // Datalist selection fires `input` but not always `change` on all browsers.
+      // After a short delay, check whether the value now exactly matches a datalist
+      // option and auto-open results if so (handles Safari / older browsers).
+      clearTimeout(_surnameTimer);
+      _surnameTimer = setTimeout(() => {
+        const val = input.value.trim();
+        if (!val) return;
+        const optVals = Array.from(list.options).map(o => o.value);
+        if (optVals.includes(val)) tryRenderSurname();
+      }, 80);
     });
+    input.addEventListener("change", tryRenderSurname);
     refreshSuggest();
     $("townlandSelect")?.addEventListener("change", () => {
       const tl = $("townlandSelect")?.value || "";
@@ -1036,7 +1102,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const sn = ($("surnameInput")?.value || "").trim();
       if (sn) {
         if (!hasSurnameInContext(sn, tl)) {
-          setSurnameError("Surname not found. Please select a surname from the dropdown suggestions.");
+          setSurnameError("Surname not found — type a name and select from the suggestions.");
           return;
         }
         setSurnameError("");
@@ -1051,7 +1117,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("townlandSelect")?.addEventListener("change", () => {
     const tl = $("townlandSelect").value;
     if (tl) {
-      renderTownlandPanel(tl);
+      selectedTownlandName = tl;
+      if (homeHeritageState.mode === "heritage") {
+        renderHomeHeritageSummary(tl);
+      } else {
+        renderTownlandPanel(tl);
+      }
       
       // Also highlight on map when selected from dropdown
       if (townlandsGeoData && tl) {
@@ -1069,7 +1140,14 @@ document.addEventListener("DOMContentLoaded", async () => {
         map.removeLayer(selectedTownlandLayer);
         selectedTownlandLayer = null;
       }
-      $("detailsContent").innerHTML = "<div style='color:#666;margin-top:20px;'>Select a Townland on the map to view tenants and families.</div>";
+      selectedTownlandName = null;
+      clearHomeHeritageLayers();
+      clearHomeHeritageRadiusLayers();
+      if (homeHeritageState.mode === "heritage") {
+        setDetailsPlaceholder("Select a townland to explore historic places on this same map.");
+      } else {
+        setDetailsPlaceholder("Select a Townland on the map to view tenants and families.");
+      }
     }
   });
 
@@ -1093,6 +1171,507 @@ document.addEventListener("DOMContentLoaded", async () => {
   let selectedTownlandLayer = null;
   let selectedTownlandName = null;
   let townlandsGeoData = null;
+  const HOME_HERITAGE_CONFIG = {
+    DEFAULT_RADIUS_M: 2000,
+    DATASETS: {
+      asi: {
+        label: "Archaeological Sites",
+        color: "#9c8a6e",
+        fillColor: "#c4b090",
+        radius: 6,
+        file: "/static/data/asi_wicklow.geojson",
+      },
+      holywells: {
+        label: "Holy Wells",
+        color: "#2d7da0",
+        fillColor: "#5aa5c8",
+        radius: 7,
+        file: "/static/data/holywells_wicklow.geojson",
+      },
+      monuments: {
+        label: "Monuments to Visit",
+        color: "#6d4e8c",
+        fillColor: "#9b7abf",
+        radius: 8,
+        file: "/static/data/monuments_wicklow.geojson",
+      },
+    },
+  };
+  const homeHeritageState = {
+    mode: "records",
+    radius: HOME_HERITAGE_CONFIG.DEFAULT_RADIUS_M,
+    rawData: { asi: null, holywells: null, monuments: null },
+    layerGroups: { asi: null, holywells: null, monuments: null },
+    visibleCounts: { asi: 0, holywells: 0, monuments: 0 },
+    radiusLayers: [],
+    activeFeature: null,
+  };
+
+  function displayTownlandLabel(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/\b([a-z])/g, (match) => match.toUpperCase())
+      .replace(/\bOr\b/g, "or");
+  }
+
+  function setDetailsPlaceholder(message) {
+    const details = $("detailsContent");
+    if (!details) return;
+    details.innerHTML = `<div style="color:#666;margin-top:20px;">${message}</div>`;
+  }
+
+  function updateExploreMapMeta() {
+    const title = $("exploreMapPanelTitle");
+    const subtitle = $("exploreMapPanelSubtitle");
+    if (!title || !subtitle) return;
+
+    if (homeHeritageState.mode === "heritage") {
+      title.textContent = selectedTownlandName
+        ? `${displayTownlandLabel(selectedTownlandName)} — Historic Landscape`
+        : "County Wicklow — Historic Landscape";
+      subtitle.textContent = selectedTownlandName
+        ? "The same map is now showing archaeology, holy wells, monuments, and bright 2 km / 5 km distance rings. Click any marker for more detail."
+        : "Select a townland, then use this same map to explore archaeology, holy wells, monuments, and the highlighted 2 km / 5 km rings.";
+      return;
+    }
+
+    title.textContent = "County Wicklow — Townlands & Families";
+    subtitle.textContent =
+      "Select a townland to view linked family records, then switch the same map into historic place mode when you want nearby archaeology, holy wells, and monuments.";
+  }
+
+  function findTownlandFeatureByName(name) {
+    if (!townlandsGeoData || !name) return null;
+    return (townlandsGeoData.features || []).find((feature) => {
+      const featureName = String(feature.properties?.TL_ENGLISH || "").trim();
+      return featureName.toLowerCase() === String(name).trim().toLowerCase();
+    }) || null;
+  }
+
+  function polygonCentroid(geometry) {
+    const ring =
+      geometry?.type === "Polygon"
+        ? geometry.coordinates[0]
+        : geometry?.type === "MultiPolygon"
+        ? geometry.coordinates[0][0]
+        : [];
+    let minLat = Infinity;
+    let maxLat = -Infinity;
+    let minLng = Infinity;
+    let maxLng = -Infinity;
+    for (const [lng, lat] of ring) {
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+      if (lng < minLng) minLng = lng;
+      if (lng > maxLng) maxLng = lng;
+    }
+    return [(minLat + maxLat) / 2, (minLng + maxLng) / 2];
+  }
+
+  function pointInGeoJSONPolygon(lng, lat, geometry) {
+    if (!geometry) return false;
+    const rings =
+      geometry.type === "Polygon"
+        ? geometry.coordinates
+        : geometry.type === "MultiPolygon"
+        ? geometry.coordinates.flat(1)
+        : [];
+    return rings.some((ring) => pointInRing(lng, lat, ring));
+  }
+
+  function pointInRing(lng, lat, ring) {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i];
+      const [xj, yj] = ring[j];
+      if ((yi > lat) !== (yj > lat) && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  function haversineM(lat1, lng1, lat2, lng2) {
+    const R = 6371000;
+    const phi1 = (lat1 * Math.PI) / 180;
+    const phi2 = (lat2 * Math.PI) / 180;
+    const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
+    const deltaLambda = ((lng2 - lng1) * Math.PI) / 180;
+    const a =
+      Math.sin(deltaPhi / 2) ** 2 +
+      Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function shortMonumentClass(label) {
+    if (!label) return "Heritage Feature";
+    return String(label).split(" - ")[0].trim();
+  }
+
+  function featureDisplayName(props, key) {
+    if (key === "monuments" && props.name) return props.name;
+    if (props.monument_class) return shortMonumentClass(props.monument_class);
+    if (props.monument_type) return shortMonumentClass(props.monument_type);
+    if (props.smrs) return props.smrs;
+    return HOME_HERITAGE_CONFIG.DATASETS[key].label;
+  }
+
+  function formatCoord(value) {
+    return Number(value).toFixed(5);
+  }
+
+  function googleMapsLink(type, lat, lng) {
+    const coord = encodeURIComponent(`${formatCoord(lat)},${formatCoord(lng)}`);
+    if (type === "directions") {
+      return `https://www.google.com/maps/dir/?api=1&destination=${coord}`;
+    }
+    return `https://www.google.com/maps/search/?api=1&query=${coord}`;
+  }
+
+  function clearHomeHeritageLayers() {
+    Object.keys(homeHeritageState.layerGroups).forEach((key) => {
+      const layer = homeHeritageState.layerGroups[key];
+      if (layer) {
+        map.removeLayer(layer);
+        homeHeritageState.layerGroups[key] = null;
+      }
+      homeHeritageState.visibleCounts[key] = 0;
+    });
+  }
+
+  function clearHomeHeritageRadiusLayers() {
+    homeHeritageState.radiusLayers.forEach((layer) => map.removeLayer(layer));
+    homeHeritageState.radiusLayers = [];
+  }
+
+  async function loadHomeHeritageData() {
+    const keys = Object.keys(HOME_HERITAGE_CONFIG.DATASETS);
+    await Promise.all(
+      keys.map(async (key) => {
+        if (homeHeritageState.rawData[key] !== null) return;
+        try {
+          const res = await fetch(HOME_HERITAGE_CONFIG.DATASETS[key].file);
+          if (!res.ok) {
+            homeHeritageState.rawData[key] = [];
+            return;
+          }
+          const geo = await res.json();
+          homeHeritageState.rawData[key] = geo.features || [];
+        } catch (_err) {
+          homeHeritageState.rawData[key] = [];
+        }
+      })
+    );
+  }
+
+  function filterHomeHeritageFeatures(features, geometry, centroid, radiusM) {
+    if (!features?.length || !geometry || !centroid) return [];
+    const [cLat, cLng] = centroid;
+    return features.filter((feature) => {
+      const coords = feature.geometry?.coordinates;
+      if (!coords) return false;
+      const [lng, lat] = coords;
+      if (pointInGeoJSONPolygon(lng, lat, geometry)) return true;
+      if (radiusM > 0) return haversineM(lat, lng, cLat, cLng) <= radiusM;
+      return false;
+    });
+  }
+
+  function drawHomeHeritageRadiusRings(centroid) {
+    clearHomeHeritageRadiusLayers();
+    if (!centroid) return;
+
+    const [lat, lng] = centroid;
+    const activeRadius = homeHeritageState.radius;
+    const boundaryOnly = activeRadius === 0;
+    const ringConfigs = [
+      { radius: 2000, color: "#f59e0b", fillColor: "#fbbf24", dashArray: "10 6" },
+      { radius: 5000, color: "#ef4444", fillColor: "#f87171", dashArray: "14 8" },
+    ];
+
+    ringConfigs.forEach((ring) => {
+      const active = activeRadius === ring.radius;
+      const emphasis = boundaryOnly ? 0.7 : active ? 1 : 0.55;
+      const circle = L.circle([lat, lng], {
+        radius: ring.radius,
+        color: ring.color,
+        weight: active ? 3.4 : 2.2,
+        opacity: active ? 0.96 : 0.58 * emphasis,
+        fillColor: ring.fillColor,
+        fillOpacity: active ? 0.08 : boundaryOnly ? 0.03 : 0.025,
+        dashArray: ring.dashArray,
+        interactive: false,
+      }).addTo(map);
+      homeHeritageState.radiusLayers.push(circle);
+    });
+  }
+
+  function updateHomeHeritageRadiusButtons() {
+    const buttons = document.querySelectorAll(".heritage-radius-btn");
+    buttons.forEach((button) => {
+      const active = Number(button.dataset.radius) === homeHeritageState.radius;
+      button.classList.toggle("active", active);
+    });
+  }
+
+  function homeHeritageRadiusButtonsMarkup() {
+    return `
+      <div class="heritage-radius-row">
+        <button class="heritage-radius-btn" data-radius="0" onclick="window.setHistoricLandscapeRadius(0)">
+          <span class="heritage-radius-dot" style="background:#94a3b8;"></span>
+          Inside townland
+        </button>
+        <button class="heritage-radius-btn" data-radius="2000" onclick="window.setHistoricLandscapeRadius(2000)">
+          <span class="heritage-radius-dot" style="background:#f59e0b;"></span>
+          Inside + 2 km
+        </button>
+        <button class="heritage-radius-btn" data-radius="5000" onclick="window.setHistoricLandscapeRadius(5000)">
+          <span class="heritage-radius-dot" style="background:#ef4444;"></span>
+          Inside + 5 km
+        </button>
+      </div>
+    `;
+  }
+
+  function homeHeritageLegendMarkup() {
+    return `
+      <div class="heritage-radius-legend">
+        <span class="heritage-legend-chip">
+          <span class="heritage-radius-dot" style="background:#f59e0b;"></span>
+          2 km ring
+        </span>
+        <span class="heritage-legend-chip">
+          <span class="heritage-radius-dot" style="background:#ef4444;"></span>
+          5 km ring
+        </span>
+      </div>
+    `;
+  }
+
+  function buildHomeHeritageNarrative(name) {
+    const counts = homeHeritageState.visibleCounts;
+    const radiusLabel =
+      homeHeritageState.radius === 0
+        ? "inside the townland boundary"
+        : `within ${homeHeritageState.radius / 1000} km of ${displayTownlandLabel(name)}`;
+    const parts = [];
+    if (counts.asi > 0) parts.push(`${counts.asi} archaeological site${counts.asi !== 1 ? "s" : ""}`);
+    if (counts.holywells > 0) parts.push(`${counts.holywells} holy well${counts.holywells !== 1 ? "s" : ""}`);
+    if (counts.monuments > 0) parts.push(`${counts.monuments} monument${counts.monuments !== 1 ? "s" : ""}`);
+    if (!parts.length) {
+      return `No mapped heritage features were found ${radiusLabel}. Try widening the radius to 2 km or 5 km.`;
+    }
+    const joined =
+      parts.length === 1
+        ? parts[0]
+        : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+    return `Showing ${joined} ${radiusLabel}. Click a marker on the map to open the full place detail here.`;
+  }
+
+  function homeHeritageStatMarkup() {
+    return `
+      <div class="heritage-chip-grid">
+        ${Object.entries(HOME_HERITAGE_CONFIG.DATASETS).map(([key, cfg]) => `
+          <div class="heritage-chip">
+            <span class="heritage-chip-label">
+              <span class="heritage-radius-dot" style="background:${cfg.color};"></span>
+              ${cfg.label}
+            </span>
+            <span class="heritage-chip-value">${homeHeritageState.visibleCounts[key] || 0}</span>
+          </div>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  function renderHomeHeritageLayer(key, features, centroid, townlandName) {
+    const cfg = HOME_HERITAGE_CONFIG.DATASETS[key];
+    const group = L.layerGroup();
+    features.forEach((feature) => {
+      const coords = feature.geometry?.coordinates || [];
+      const [lng, lat] = coords;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      const props = feature.properties || {};
+      const marker = L.circleMarker([lat, lng], {
+        radius: cfg.radius,
+        color: cfg.color,
+        fillColor: cfg.fillColor,
+        fillOpacity: 0.82,
+        weight: 1.4,
+        opacity: 1,
+      });
+      const label = featureDisplayName(props, key);
+      marker.bindTooltip(label, { sticky: true, className: "townland-hover-tooltip", offset: [0, -4] });
+      marker.on("click", () => {
+        const distanceM = centroid ? haversineM(lat, lng, centroid[0], centroid[1]) : null;
+        homeHeritageState.activeFeature = { feature, key, distanceM };
+        renderHomeHeritageFeatureDetail(townlandName, feature, key, distanceM);
+      });
+      group.addLayer(marker);
+    });
+    homeHeritageState.layerGroups[key] = group;
+    group.addTo(map);
+  }
+
+  async function renderHomeHeritageSummary(townlandName) {
+    const details = $("detailsContent");
+    const townlandFeature = findTownlandFeatureByName(townlandName);
+    if (!details || !townlandFeature) {
+      setDetailsPlaceholder("This townland could not be matched to the historic landscape data.");
+      return;
+    }
+
+    selectedTownlandName = townlandName;
+    homeHeritageState.mode = "heritage";
+    homeHeritageState.activeFeature = null;
+    updateExploreMapMeta();
+    details.innerHTML = "<div style='color:#666;margin-top:20px;'>Loading historic place data…</div>";
+
+    await loadHomeHeritageData();
+    if (homeHeritageState.mode !== "heritage" || selectedTownlandName !== townlandName) {
+      return;
+    }
+
+    const centroid = polygonCentroid(townlandFeature.geometry);
+    clearHomeHeritageLayers();
+    drawHomeHeritageRadiusRings(centroid);
+
+    Object.keys(HOME_HERITAGE_CONFIG.DATASETS).forEach((key) => {
+      const filtered = filterHomeHeritageFeatures(
+        homeHeritageState.rawData[key] || [],
+        townlandFeature.geometry,
+        centroid,
+        homeHeritageState.radius
+      );
+      homeHeritageState.visibleCounts[key] = filtered.length;
+      renderHomeHeritageLayer(key, filtered, centroid, townlandName);
+    });
+
+    const safeTownland = displayTownlandLabel(townlandName).replace(/'/g, "\\'");
+    details.innerHTML = `
+      <h3 style="margin:0 0 3px 0;font-family:'Cormorant Garamond',Georgia,serif;font-size:22px;font-weight:700;color:var(--ink);line-height:1.2;">${escapeHtml(displayTownlandLabel(townlandName))}</h3>
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.2px;color:var(--brass);margin-bottom:16px;font-weight:600;">Historic Landscape</div>
+      <div class="heritage-mode-banner">
+        The map is now focused on nearby historic places for this townland. The 2 km and 5 km rings are shown in brighter colours so you can judge distance more clearly.
+      </div>
+      ${homeHeritageRadiusButtonsMarkup()}
+      ${homeHeritageLegendMarkup()}
+      <p style="margin:0;color:#475467;line-height:1.7;">${escapeHtml(buildHomeHeritageNarrative(townlandName))}</p>
+      ${homeHeritageStatMarkup()}
+      <div class="heritage-actions">
+        <button class="btn btn-primary btn-block" onclick="window.returnToFamilyRecords('${safeTownland}')">Back to Family Records</button>
+        <a href="/census?townland=${encodeURIComponent(townlandName)}" class="btn btn-soft" style="width:100%;text-align:center;">View Census Data</a>
+        <a href="/heritage?townland=${encodeURIComponent(townlandName)}" class="btn btn-ghost" style="width:100%;text-align:center;">Open Dedicated Historic Landscape Page</a>
+      </div>
+    `;
+    updateHomeHeritageRadiusButtons();
+  }
+
+  function renderHomeHeritageFeatureDetail(townlandName, feature, key, distanceM) {
+    const details = $("detailsContent");
+    if (!details) return;
+    const props = feature.properties || {};
+    const cfg = HOME_HERITAGE_CONFIG.DATASETS[key];
+    const [lng, lat] = feature.geometry?.coordinates || [];
+    const safeTownland = displayTownlandLabel(townlandName).replace(/'/g, "\\'");
+    const name = featureDisplayName(props, key);
+    const fullClass = props.monument_class || props.monument_type || cfg.label;
+    const notes = String(props.notes || "").trim();
+    const sourceLink = String(props.source_link || props.external_link || "").trim();
+    const locality = displayTownlandLabel(props.townland || props.locality || townlandName);
+    const distanceText = distanceM != null
+      ? `${(distanceM / 1000).toFixed(2)} km from ${displayTownlandLabel(townlandName)}`
+      : "";
+
+    details.innerHTML = `
+      <button class="btn btn-ghost btn-block" onclick="window.returnToHistoricLandscapeSummary('${safeTownland}')">Back to Historic Place Summary</button>
+      ${homeHeritageRadiusButtonsMarkup()}
+      ${homeHeritageLegendMarkup()}
+      <div class="heritage-feature-card">
+        <div class="heritage-feature-type" style="color:${cfg.color};">${escapeHtml(cfg.label)}</div>
+        <div class="heritage-feature-name">${escapeHtml(name)}</div>
+        <div class="heritage-feature-meta">
+          <div><strong>Class:</strong> ${escapeHtml(fullClass)}</div>
+          <div><strong>Townland:</strong> ${escapeHtml(locality)}</div>
+          ${props.smrs || props.id ? `<div><strong>Reference:</strong> ${escapeHtml(props.smrs || props.id)}</div>` : ""}
+          ${distanceText ? `<div><strong>Distance:</strong> ${escapeHtml(distanceText)}</div>` : ""}
+          <div><strong>Coordinates:</strong> ${formatCoord(lat)}, ${formatCoord(lng)}</div>
+        </div>
+        ${notes ? `<div class="heritage-feature-notes">${escapeHtml(notes.substring(0, 900))}${notes.length > 900 ? "…" : ""}</div>` : ""}
+        <div class="heritage-actions">
+          <a href="${googleMapsLink("view", lat, lng)}" class="btn btn-soft" target="_blank" rel="noopener" style="width:100%;text-align:center;">View Exact Coordinates</a>
+          <a href="${googleMapsLink("directions", lat, lng)}" class="btn btn-soft" target="_blank" rel="noopener" style="width:100%;text-align:center;">Get Directions</a>
+          ${sourceLink ? `<a href="${escapeHtml(sourceLink)}" class="btn btn-ghost" target="_blank" rel="noopener" style="width:100%;text-align:center;">Open Source Record</a>` : ""}
+          <button class="btn btn-primary btn-block" onclick="window.returnToFamilyRecords('${safeTownland}')">Back to Family Records</button>
+        </div>
+      </div>
+    `;
+    updateHomeHeritageRadiusButtons();
+  }
+
+  function resetHomeHeritageMode() {
+    homeHeritageState.mode = "records";
+    homeHeritageState.activeFeature = null;
+    clearHomeHeritageLayers();
+    clearHomeHeritageRadiusLayers();
+    updateExploreMapMeta();
+  }
+
+  window.setHistoricLandscapeRadius = function (radius) {
+    const parsed = Number(radius);
+    homeHeritageState.radius = Number.isFinite(parsed) ? parsed : HOME_HERITAGE_CONFIG.DEFAULT_RADIUS_M;
+    if (homeHeritageState.mode === "heritage" && selectedTownlandName) {
+      renderHomeHeritageSummary(selectedTownlandName);
+      return;
+    }
+    updateHomeHeritageRadiusButtons();
+  };
+
+  window.returnToFamilyRecords = function (townlandName) {
+    const resolved = canonicalTownland(townlandName || selectedTownlandName || "") || townlandName || "";
+    resetHomeHeritageMode();
+    if (resolved) {
+      renderTownlandPanel(resolved);
+      return;
+    }
+    setDetailsPlaceholder("Select a Townland on the map to view tenants and families.");
+  };
+
+  window.returnToHistoricLandscapeSummary = function (townlandName) {
+    const resolved = canonicalTownland(townlandName || selectedTownlandName || "") || townlandName || "";
+    if (!resolved) return;
+    renderHomeHeritageSummary(resolved);
+  };
+
+  window.openHistoricLandscapeInMap = function (townlandName) {
+    const resolved = canonicalTownland(townlandName || selectedTownlandName || $("townlandSelect")?.value || "");
+    homeHeritageState.mode = "heritage";
+    updateExploreMapMeta();
+
+    if (!resolved) {
+      clearHomeHeritageLayers();
+      clearHomeHeritageRadiusLayers();
+      setDetailsPlaceholder("Select a townland first, then use Explore Historic Place to show nearby archaeology, holy wells, and monuments on this map.");
+      return;
+    }
+
+    const select = $("townlandSelect");
+    if (select) {
+      for (const option of select.options) {
+        if (option.value.toLowerCase() === resolved.toLowerCase()) {
+          select.value = option.value;
+          break;
+        }
+      }
+    }
+
+    const feature = findTownlandFeatureByName(resolved);
+    if (feature) {
+      highlightTownland(feature, null);
+    }
+    selectedTownlandName = resolved;
+    renderHomeHeritageSummary(resolved);
+  };
 
   // Create glowing effect for selected townland
   function highlightTownland(feature, layer) {
@@ -1219,53 +1798,61 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   (async () => {
-    try {
-      await loadUnifiedData();
-      await loadOptions();
-      await wireSurnameAutocomplete();
-    } catch (e) {
-      console.error("Data load failed:", e);
-      const details = $("detailsContent");
-      if (details) {
-        details.innerHTML = "<div style='color:#b42318;font-weight:700;'>Failed to load unified data. Please refresh.</div>";
-      }
-    }
-
+    // Load the map boundaries first so the visual is responsive immediately,
+    // then fetch the 4.4 MB unified records in the background.
     try {
       await loadTownlandsGeo();
     } catch (e) {
       console.error("Townland map load failed:", e);
     }
 
-    // If a townland was passed via ?townland= (e.g. linked from census page),
-    // auto-select it in the dropdown and scroll the map explorer into view.
-    const urlParams = new URLSearchParams(window.location.search);
-    const tlParam = urlParams.get("townland");
-    if (tlParam) {
-      const select = $("townlandSelect");
-      if (select) {
-        // Match case-insensitively against loaded options
-        let matched = "";
-        for (const opt of select.options) {
-          if (opt.value.toLowerCase() === tlParam.toLowerCase()) {
-            matched = opt.value;
-            break;
-          }
-        }
-        if (matched) {
-          select.value = matched;
-          // Strip the param so a page refresh doesn't re-select the townland
-          window.history.replaceState({}, "", window.location.pathname);
-          select.dispatchEvent(new Event("change"));
-          // Scroll to the explore section smoothly
-          document.getElementById("explore")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    // Deferred: unified records + options (runs after map paint).
+    // URL param handling also lives here because it depends on loaded options.
+    queueMicrotask(async () => {
+      try {
+        await loadUnifiedData();
+        await loadOptions();
+        await wireSurnameAutocomplete();
+      } catch (e) {
+        console.error("Data load failed:", e);
+        const details = $("detailsContent");
+        if (details) {
+          details.innerHTML = "<div style='color:#b42318;font-weight:700;'>Failed to load unified data. Please refresh.</div>";
         }
       }
-    }
+
+      // If a townland was passed via ?townland= (e.g. linked from census page),
+      // auto-select it in the dropdown and scroll the map explorer into view.
+      const urlParams = new URLSearchParams(window.location.search);
+      const tlParam = urlParams.get("townland");
+      const viewParam = (urlParams.get("view") || "").toLowerCase();
+      if (tlParam) {
+        const select = $("townlandSelect");
+        if (select) {
+          // Match case-insensitively against loaded options
+          let matched = "";
+          for (const opt of select.options) {
+            if (opt.value.toLowerCase() === tlParam.toLowerCase()) {
+              matched = opt.value;
+              break;
+            }
+          }
+          if (matched) {
+            select.value = matched;
+            // Strip the param so a page refresh doesn't re-select the townland
+            window.history.replaceState({}, "", window.location.pathname);
+            select.dispatchEvent(new Event("change"));
+            if (viewParam === "heritage") {
+              window.openHistoricLandscapeInMap(matched);
+            }
+            // Scroll to the explore section smoothly
+            document.getElementById("explore")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        }
+      }
+    });
   })();
 
-  const details = $("detailsContent");
-  if (details) {
-    details.innerHTML = "<div style='color:#666;margin-top:20px;'>Select a Townland on the map to view tenants and families.</div>";
-  }
+  updateExploreMapMeta();
+  setDetailsPlaceholder("Select a Townland on the map to view tenants and families.");
 });

@@ -11,7 +11,7 @@ The application integrates tenancy, eviction, emigration, and census data from t
 - **Interactive Map** — Leaflet.js map of Coolattin townland boundaries with population and clearances overlays
 - **Census Browser** — Population data 1841–1891 (from VRTI KG) plus estate survey years 1827–1868
 - **Analytics Dashboards** — KPI summaries and charts for emigration, evictions, workhouse, and tenancy datasets
-- **Ask (LLM Q&A)** — Natural-language questions answered via SQL + LLM rewrite with SSE streaming; PDF export of results
+- **Ask (LLM Q&A)** — Natural-language questions answered via verified SQL analyses, schema-aware LLM SQL generation, approved query memory, feedback loops, charts, and PDF export
 - **Heritage Map** — NMS monuments and holy wells overlay
 - **Data Export** — Excel exports of census and townland data
 
@@ -143,13 +143,13 @@ OLLAMA_MODEL=llama3.1:8b
 
 ### How the Ask pipeline works
 
-1. 100+ SQL templates matched by keyword scoring — instant answers, no LLM needed
-2. Townland names resolved: exact → fuzzy → "did you mean?" suggestions
-3. If no template matches, the configured LLM generates SQL
-4. All SQL is validated as read-only before execution
-5. LLM rephrases the raw database answer
-6. VRTI SPARQL enriches with parish context (parallel)
-7. PDF report generated and downloadable
+1. High-risk statistical questions use verified analysis SQL first, so known research questions are answered from fixed data-backed queries.
+2. Townland names are resolved exact → fuzzy → suggestion with explicit provenance.
+3. If no verified analysis matches, the configured LLM generates SQL from live schema, row counts, sampled categories, and approved past query patterns.
+4. All SQL is validated as read-only, then rechecked semantically and repaired if SQLite rejects it; if no validated query can be produced, the system returns a clear rephrase message instead of guessing.
+5. If a good query is confirmed with thumbs up, it is stored in approved query memory and can be reused later for similar questions.
+6. The final answer is built from actual SQL results, related insights are computed from local data, and the LLM rewrite is rejected if it introduces unsupported numbers.
+7. Grouped or statistical results can be rendered as a simple chart, and PDF export remains available.
 
 ---
 
@@ -161,9 +161,11 @@ See [`.env.example`](.env.example) for the full documented list. Key variables:
 |---|---|---|
 | `SECRET_KEY` | `dev-secret-...` | Flask session secret — change in production |
 | `FLASK_ENV` | `development` | `development` or `production` |
+| `DATABASE_PATH` | `coolattin.db` in repo root | Optional explicit SQLite file path; set this on Azure to a persistent path like `/home/site/data/coolattin.db` |
 | `ASK_LLM_PROVIDER` | `auto` | `auto` / `openrouter` / `ollama` / `none` |
 | `OPENROUTER_API_KEY` | — | Required for cloud LLM |
 | `OPENROUTER_MODEL` | `openai/gpt-oss-20b:free` | OpenRouter model ID |
+| `ASK_ALLOW_HEURISTIC_FALLBACK` | `0` | Leave at `0` to fail safely with a clear message instead of guessing with heuristic SQL |
 | `OLLAMA_MODEL` | — | Ollama model name |
 | `VRTI_REQUEST_TIMEOUT` | `30` | SPARQL endpoint timeout (seconds) |
 
@@ -180,6 +182,7 @@ See [`.env.example`](.env.example) for the full documented list. Key variables:
 | `GET` | `/heritage` | Heritage monuments page |
 | `POST` | `/api/ask/query` | SSE-streamed Q&A pipeline |
 | `GET` | `/api/ask/llm-status` | LLM provider health check |
+| `POST` | `/api/ask/feedback` | Save thumbs up/down feedback and approved query memory |
 | `GET` | `/api/ask/townland-suggest` | Fuzzy townland suggestions |
 | `GET` | `/api/ask/pdf/<name>` | Download PDF report |
 | `GET` | `/api/census/` | Census data (JSON) |
@@ -217,6 +220,178 @@ This project includes [Claude Code](https://claude.ai/code) configuration in `.c
 | Coolattin Estate GeoJSON | Townland boundaries, estate survey data 1827–1868 |
 | [National Monuments Service](https://www.archaeology.ie/) | Heritage monuments open data |
 | `data/seed/` | Canonical townland reference and name aliases |
+
+---
+
+## Deploy to Azure App Service
+
+This app can run on **Azure App Service (Linux)**. The current architecture uses **SQLite**, so the safest production setup is:
+
+- one App Service instance only
+- a persistent SQLite path such as `/home/site/data/coolattin.db`
+- `Always On` enabled if you use a paid plan
+
+If you later need scale-out or multi-instance hosting, move the app database to PostgreSQL instead of SQLite.
+
+### Files already prepared for Azure
+
+- `requirements.txt` now includes `gunicorn`
+- `startup.txt` contains the Gunicorn startup command used by App Service
+- `DATABASE_PATH` can be provided through environment variables
+
+### From scratch with Azure CLI
+
+1. Install Azure CLI and sign in:
+
+```bash
+az login
+az account set --subscription "<your-subscription-name-or-id>"
+```
+
+2. Choose names:
+
+```bash
+RESOURCE_GROUP="coolattin-rg"
+PLAN_NAME="coolattin-plan"
+APP_NAME="coolattin-archive-app"
+LOCATION="westeurope"
+RUNTIME="PYTHON:3.12"
+```
+
+3. Create the resource group:
+
+```bash
+az group create --name "$RESOURCE_GROUP" --location "$LOCATION"
+```
+
+4. Create a Linux App Service plan.
+
+`B1` is a practical minimum because it supports `Always On`. Free tiers are fine for experiments, but less reliable for LLM-backed requests.
+
+```bash
+az appservice plan create \
+  --name "$PLAN_NAME" \
+  --resource-group "$RESOURCE_GROUP" \
+  --location "$LOCATION" \
+  --sku B1 \
+  --is-linux
+```
+
+5. Create the web app:
+
+```bash
+az webapp create \
+  --resource-group "$RESOURCE_GROUP" \
+  --plan "$PLAN_NAME" \
+  --name "$APP_NAME" \
+  --runtime "$RUNTIME"
+```
+
+6. Configure the startup command:
+
+```bash
+az webapp config set \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --startup-file startup.txt
+```
+
+7. Configure required app settings:
+
+```bash
+az webapp config appsettings set \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --settings \
+    SCM_DO_BUILD_DURING_DEPLOYMENT=1 \
+    FLASK_ENV=production \
+    SECRET_KEY="<strong-random-secret>" \
+    ASK_LLM_PROVIDER=openrouter \
+    OPENROUTER_API_KEY="<your-openrouter-key>" \
+    OPENROUTER_MODEL="openai/gpt-oss-20b:free" \
+    ASK_ALLOW_HEURISTIC_FALLBACK=0 \
+    OPENROUTER_SITE_URL="https://$APP_NAME.azurewebsites.net" \
+    OPENROUTER_APP_TITLE="Coolattin Archive Ask" \
+    DATABASE_PATH="/home/site/data/coolattin.db"
+```
+
+8. Turn on Always On for paid plans:
+
+```bash
+az webapp config set \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --always-on true
+```
+
+9. Build a deploy zip from your project root.
+
+Do not include `venv`, `.venv`, `.git`, or large local-only folders.
+
+```bash
+zip -r coolattin-app.zip . -x "venv/*" ".venv/*" ".git/*" ".github/*" "__pycache__/*" "*.pyc" ".env.local" "coolattin-app.zip"
+```
+
+10. Deploy the zip package:
+
+```bash
+az webapp deploy \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --src-path coolattin-app.zip
+```
+
+11. Open the site:
+
+```bash
+echo "https://$APP_NAME.azurewebsites.net"
+```
+
+### First-time production data setup
+
+After the first deployment, you need to populate the SQLite database on Azure. You can do that by opening the SSH console in App Service and running the ingest job:
+
+```bash
+python3 -c "
+from create_app import create_app
+app = create_app()
+with app.app_context():
+    from backend.jobs.full_ingest import run_full_ingest
+    run_full_ingest()
+"
+```
+
+### Logs and troubleshooting
+
+Stream logs with:
+
+```bash
+az webapp log tail \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME"
+```
+
+If the app starts but dependencies are missing, confirm that:
+
+- `SCM_DO_BUILD_DURING_DEPLOYMENT=1` is set
+- `requirements.txt` includes every runtime dependency
+- `startup.txt` is configured as the startup file
+- `DATABASE_PATH` points to `/home/site/...` rather than the repo root
+
+### Optional: GitHub Actions continuous deployment
+
+Once the app exists, you can wire GitHub Actions to it:
+
+```bash
+az webapp deployment github-actions add \
+  --repo "<github-user>/<github-repo>" \
+  --resource-group "$RESOURCE_GROUP" \
+  --branch main \
+  --name "$APP_NAME" \
+  --login-with-github
+```
+
+That creates a workflow in `.github/workflows/` and adds the publish profile secret to the repo.
 
 ---
 

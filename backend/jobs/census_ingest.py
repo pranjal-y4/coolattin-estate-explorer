@@ -44,10 +44,11 @@ def run_census_ingest(year: int | None = None) -> int:
     """
     from backend.integrations import vrti_sparql
     from backend.repositories import census_repository, refresh_state_repository
-    from backend.services.census_service import DATASET_KEY_PREFIX, _safe_int
+    from backend.services.census_service import DATASET_KEY_PREFIX
     from backend.services import export_service
     from backend.services.townland_service import canonical_name
     from backend.models.census_models import CensusRecord, CensusFilters
+    from backend.jobs.census_seed import load_standard_census_seed_records
 
     log.info("census_ingest.start | year=%s", year)
 
@@ -68,10 +69,10 @@ def run_census_ingest(year: int | None = None) -> int:
     if not kg_dtos:
         log.warning(
             "census_ingest.kg_empty — no census records returned from KG. "
-            "For a complete ingest (GeoJSON + KG), run: "
-            "python -m coolattin.jobs.full_ingest"
+            "Falling back to bundled CSV seed."
         )
-        return 0
+        records = load_standard_census_seed_records(years=[year] if year else None)
+        source = "csv_seed"
     else:
         # Step 3: Normalise
         records = [
