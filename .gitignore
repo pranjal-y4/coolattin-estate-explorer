@@ -29,7 +29,7 @@ node_modules/
 npm-debug.log*
 
 # ── Database (binary, regenerated via ingest jobs) ───────────────────────────
-*.db
+# coolattin.db is committed so Azure deployment has data without a separate ingest step
 *.db-wal
 *.db-shm
 
