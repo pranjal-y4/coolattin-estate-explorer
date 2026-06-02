@@ -91,11 +91,12 @@ ASK_ALLOW_HEURISTIC_FALLBACK = os.environ.get(
 ).strip().lower() in {"1", "true", "yes", "on"}
 
 # Feature flag: routed architecture (entity_resolver → intent_router → semantic/subgraph).
-# Default FALSE so the existing pipeline is unaffected in production.
-# Set ASK_USE_NEW_PIPELINE=true to activate. The old pipeline remains both the flag-off
-# behaviour and the FALLBACK lane inside the new orchestrator.
+# Default TRUE so the newer orchestrated pipeline is the standard runtime path.
+# Set ASK_USE_NEW_PIPELINE=false to force the legacy pipeline only. The old pipeline
+# remains both the explicit flag-off behaviour and the FALLBACK lane inside the
+# new orchestrator.
 ASK_USE_NEW_PIPELINE = os.environ.get(
-    "ASK_USE_NEW_PIPELINE", ""
+    "ASK_USE_NEW_PIPELINE", "true"
 ).strip().lower() in {"1", "true", "yes", "on"}
 
 # ── Claude (Anthropic) — Part D ───────────────────────────────────────────────
