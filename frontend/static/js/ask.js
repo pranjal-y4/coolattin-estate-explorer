@@ -14,6 +14,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const llmAnswerEl = $("askLlmAnswer");
   const llmMetaEl = $("askLlmMeta");
   const provenanceEl = $("askProvenance");
+  const retrievalLaneEl = $("askRetrievalLane");
   const townlandResolutionEl = $("askTownlandResolution");
   const warningsEl = $("askWarnings");
   const suggestionsBlockEl = $("askSuggestionsBlock");
@@ -39,11 +40,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const llmStatusEl = $("llmStatus") || $("ollamaStatus");
 
   const progressOrder = [
-    { key: "contacting_llm",    label: "Contacting LLM" },
+    { key: "classifying_intent", label: "Routing Question" },
+    { key: "contacting_llm",    label: "Building Query" },
+    { key: "slot_filling",      label: "Slot Filling" },
     { key: "framing_query",     label: "Framing Query" },
     { key: "querying_database", label: "Querying SQLite" },
+    { key: "querying_subgraph", label: "Subgraph Retrieval" },
     { key: "querying_vrti_graph", label: "Querying VRTI Graph" },
     { key: "querying_graphdb",  label: "Querying GraphDB" },
+    { key: "querying_fusion",   label: "Reconciling Sources" },
     { key: "preparing_output",  label: "Preparing Output" },
   ];
 
@@ -137,14 +142,76 @@ document.addEventListener("DOMContentLoaded", () => {
       .join("");
   }
 
+  const _laneLabels = {
+    analytical_rule: "ANALYTICAL · semantic rule",
+    analytical_llm:  "ANALYTICAL · LLM slot-fill",
+    relational:      "RELATIONAL · subgraph",
+    comparative:     "COMPARATIVE · SQL + subgraph",
+    fallback_verified_analysis: "FALLBACK · verified analysis",
+    fallback_p4:     "FALLBACK · phase-4 template",
+    fallback_memory: "FALLBACK · approved memory",
+    fallback_llm:    "FALLBACK · LLM SQL",
+    fallback:        "FALLBACK",
+  };
+  const _routeColors = {
+    analytical:  { bg: "#f0fdf4", border: "#86efac", color: "#166534" },
+    relational:  { bg: "#eff6ff", border: "#93c5fd", color: "#1e40af" },
+    comparative: { bg: "#faf5ff", border: "#d8b4fe", color: "#6b21a8" },
+    fallback:    { bg: "#f8fafc", border: "#cbd5e1", color: "#475467" },
+  };
+
   function renderProvenance(payload) {
     if (!provenanceEl) return;
     const provenance = payload?.query_provenance || payload?.structured_output?.query_provenance || {};
     const matches = Array.isArray(provenance?.approved_query_candidates) ? provenance.approved_query_candidates : [];
+
+    // ── New-pipeline lane badge (only when route/lane present) ──────────────
+    if (retrievalLaneEl) {
+      const route = provenance?.route;
+      const lane  = provenance?.lane;
+      if (route || lane) {
+        const laneKey  = lane || route;
+        const laneText = _laneLabels[laneKey] || laneKey;
+        const palette  = _routeColors[route] || _routeColors.fallback;
+        const subNodes = provenance?.subgraph_node_count != null
+          ? `<span style="margin-left:6px;font-size:10px;color:${palette.color};opacity:.8;">${provenance.subgraph_node_count} subgraph triples</span>`
+          : "";
+        const phase6   = provenance?.phase6_todo
+          ? `<span style="margin-left:6px;font-size:10px;color:#713f12;">reconciliation pending</span>`
+          : "";
+        retrievalLaneEl.innerHTML = `
+          <span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;
+            background:${palette.bg};border:1px solid ${palette.border};color:${palette.color};
+            font-size:11px;font-weight:700;">
+            ${escapeHtml(laneText)}${subNodes}${phase6}
+          </span>`;
+      } else {
+        retrievalLaneEl.innerHTML = "";
+      }
+    }
+
     const rows = [
       `SQL source: ${provenance?.direct_memory_reuse ? "approved query memory" : payload?.llm?.mode || "generated"}.`,
       `Execution mode: ${provenance?.execution_mode || "executed_as_generated"}.`,
     ];
+
+    // New-pipeline fields (only present when ASK_USE_NEW_PIPELINE=true)
+    if (provenance?.route) {
+      rows.unshift(`Retrieval route: ${provenance.route}.`);
+    }
+    if (provenance?.lane) {
+      rows.splice(provenance?.route ? 1 : 0, 0, `Dispatch lane: ${provenance.lane}.`);
+    }
+    if (provenance?.subgraph_node_count != null) {
+      const sources = Array.isArray(provenance.subgraph_sources)
+        ? provenance.subgraph_sources.join(", ")
+        : "—";
+      rows.push(`Subgraph: ${provenance.subgraph_node_count} triples from [${sources}].`);
+    }
+    if (provenance?.phase6_todo) {
+      rows.push(`Phase 6: ${provenance.phase6_todo}`);
+    }
+
     if (provenance?.reused_memory_id) {
       rows.push(`Approved memory id reused: ${provenance.reused_memory_id}.`);
     }
@@ -621,6 +688,7 @@ document.addEventListener("DOMContentLoaded", () => {
     latestResultPayload = null;
     setFeedbackStatus("", "muted");
     if (provenanceEl) provenanceEl.innerHTML = "";
+    if (retrievalLaneEl) retrievalLaneEl.innerHTML = "";
     if (suggestionsBlockEl) suggestionsBlockEl.style.display = "none";
     if (suggestionsEl) suggestionsEl.innerHTML = "";
     if (insightsBlockEl) insightsBlockEl.style.display = "none";

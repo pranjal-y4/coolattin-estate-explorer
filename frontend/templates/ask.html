@@ -102,7 +102,10 @@
 
       <!-- Top bar -->
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:16px 18px;border-bottom:1px solid #f1f5f9;">
-        <h2 style="margin:0;font-size:18px;color:#0f172a;">Result</h2>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <h2 style="margin:0;font-size:18px;color:#0f172a;">Result</h2>
+          <span id="askRetrievalLane"></span>
+        </div>
         <a id="askPdfLink" class="btn btn-ghost" href="#" target="_blank" rel="noopener" style="display:none;font-size:12px;">
           ↓ Download PDF
         </a>
@@ -295,5 +298,5 @@
   </div>
 </section>
 
-<script src="{{ url_for('static', filename='js/ask.js') }}?v=14"></script>
+<script src="{{ url_for('static', filename='js/ask.js') }}?v=15"></script>
 {% endblock %}

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from typing import Optional
 
 from extensions import get_db_conn
@@ -31,6 +32,18 @@ def find_by_name(name: str) -> Optional[Townland]:
         conn.close()
 
 
+def find_by_entity_id(entity_id: str) -> Optional[Townland]:
+    """Return a townland by its UUID entity_id, or None."""
+    conn = get_db_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM townland WHERE entity_id = ?", (entity_id,)
+        ).fetchone()
+        return _row_to_model(row) if row else None
+    finally:
+        conn.close()
+
+
 def find_all() -> list[Townland]:
     """Return all townlands ordered by name."""
     conn = get_db_conn()
@@ -41,8 +54,17 @@ def find_all() -> list[Townland]:
         conn.close()
 
 
+def find_all_as_dicts() -> list[dict]:
+    """Return all townlands as plain dicts (for the resolution engine)."""
+    conn = get_db_conn()
+    try:
+        rows = conn.execute("SELECT * FROM townland ORDER BY name").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def count() -> int:
-    """Return total number of townlands in local DB."""
     conn = get_db_conn()
     try:
         result = conn.execute("SELECT COUNT(*) FROM townland").fetchone()
@@ -54,21 +76,27 @@ def count() -> int:
 def upsert(townland: Townland) -> int:
     """
     Insert or update a townland record.
+
+    On insert, assigns a UUID entity_id if the model has none.
     Returns the rowid of the inserted/updated row.
     """
-    canonical = townland.name.strip().upper()
+    canonical   = townland.name.strip().upper()
     images_json = json.dumps(townland.images or [])
-    links_json  = json.dumps(townland.links or [])
+    links_json  = json.dumps(townland.links  or [])
+
     conn = get_db_conn()
     try:
         existing = conn.execute(
-            "SELECT id FROM townland WHERE name = ?", (canonical,)
+            "SELECT id, entity_id FROM townland WHERE name = ?", (canonical,)
         ).fetchone()
 
         if existing:
             conn.execute(
                 """
                 UPDATE townland SET
+                    entity_id          = COALESCE(entity_id, ?),
+                    qualifier          = COALESCE(?, qualifier),
+                    logainm_id         = COALESCE(?, logainm_id),
                     name_gaelic        = COALESCE(?, name_gaelic),
                     barony             = COALESCE(?, barony),
                     civil_parish       = COALESCE(?, civil_parish),
@@ -88,11 +116,15 @@ def upsert(townland: Townland) -> int:
                     vrti_id            = COALESCE(?, vrti_id),
                     images_json        = CASE WHEN ? != '[]' THEN ? ELSE images_json END,
                     links_json         = CASE WHEN ? != '[]' THEN ? ELSE links_json END,
+                    geometry_flag      = COALESCE(?, geometry_flag),
                     source             = ?,
                     updated_at         = datetime('now')
                 WHERE name = ?
                 """,
                 (
+                    townland.entity_id or str(uuid.uuid4()),
+                    townland.qualifier,
+                    townland.logainm_id,
                     townland.name_gaelic,
                     townland.barony,
                     townland.civil_parish,
@@ -110,8 +142,9 @@ def upsert(townland: Townland) -> int:
                     townland.osm_id,
                     townland.osi_id,
                     townland.vrti_id,
-                    images_json, images_json,   # CASE WHEN check + value
+                    images_json, images_json,
                     links_json,  links_json,
+                    townland.geometry_flag,
                     townland.source,
                     canonical,
                 ),
@@ -119,19 +152,24 @@ def upsert(townland: Townland) -> int:
             conn.commit()
             return existing[0]
         else:
+            eid = townland.entity_id or str(uuid.uuid4())
             cursor = conn.execute(
                 """
                 INSERT INTO townland
-                    (name, name_gaelic, barony, civil_parish, electoral_division,
+                    (entity_id, name, qualifier, logainm_id,
+                     name_gaelic, barony, civil_parish, electoral_division,
                      placename_theme, description,
                      td_id, guid, area_sqm,
                      kg_uri, wkt_geometry, centroid_lat, centroid_lon,
                      county, osm_id, osi_id, vrti_id,
-                     images_json, links_json, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     images_json, links_json, geometry_flag, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    eid,
                     canonical,
+                    townland.qualifier,
+                    townland.logainm_id,
                     townland.name_gaelic,
                     townland.barony,
                     townland.civil_parish,
@@ -151,6 +189,7 @@ def upsert(townland: Townland) -> int:
                     townland.vrti_id,
                     images_json,
                     links_json,
+                    townland.geometry_flag,
                     townland.source,
                 ),
             )
@@ -172,34 +211,32 @@ def upsert_many(townlands: list[Townland]) -> int:
 
 def save_kg_cache(name: str, kg_dto) -> None:
     """
-    Write KG-fetched fields back to the townland table so they are
-    available as a cache when the KG endpoint is offline.
-
-    Called by census_service after every successful KG enrichment.
+    Write KG-fetched fields back to the townland table.
     Only updates KG-sourced columns — never overwrites GeoJSON measurements.
     """
-    canonical = name.strip().upper()
+    canonical   = name.strip().upper()
     images_json = json.dumps(kg_dto.images or [])
-    links_json  = json.dumps(kg_dto.links or [])
+    links_json  = json.dumps(kg_dto.links  or [])
     conn = get_db_conn()
     try:
         conn.execute(
             """
             UPDATE townland SET
-                name_gaelic  = COALESCE(name_gaelic, ?),
-                barony       = COALESCE(barony, ?),
-                civil_parish = COALESCE(civil_parish, ?),
-                kg_uri       = ?,
-                wkt_geometry = COALESCE(wkt_geometry, ?),
-                centroid_lat = COALESCE(centroid_lat, ?),
-                centroid_lon = COALESCE(centroid_lon, ?),
-                county       = ?,
-                osm_id       = ?,
-                osi_id       = ?,
-                vrti_id      = ?,
-                images_json  = CASE WHEN ? != '[]' THEN ? ELSE images_json END,
-                links_json   = CASE WHEN ? != '[]' THEN ? ELSE links_json END,
-                updated_at   = datetime('now')
+                name_gaelic   = COALESCE(name_gaelic, ?),
+                barony        = COALESCE(barony, ?),
+                civil_parish  = COALESCE(civil_parish, ?),
+                kg_uri        = ?,
+                wkt_geometry  = COALESCE(wkt_geometry, ?),
+                centroid_lat  = COALESCE(centroid_lat, ?),
+                centroid_lon  = COALESCE(centroid_lon, ?),
+                county        = ?,
+                osm_id        = ?,
+                osi_id        = ?,
+                vrti_id       = ?,
+                images_json   = CASE WHEN ? != '[]' THEN ? ELSE images_json END,
+                links_json    = CASE WHEN ? != '[]' THEN ? ELSE links_json END,
+                geometry_flag = COALESCE(geometry_flag, ?),
+                updated_at    = datetime('now')
             WHERE name = ?
             """,
             (
@@ -216,6 +253,7 @@ def save_kg_cache(name: str, kg_dto) -> None:
                 kg_dto.vrti_id,
                 images_json, images_json,
                 links_json,  links_json,
+                getattr(kg_dto, "centroid_flag", None),
                 canonical,
             ),
         )
@@ -228,10 +266,7 @@ def save_kg_cache(name: str, kg_dto) -> None:
 
 
 def get_or_create(name: str, **kwargs) -> tuple[int, bool]:
-    """
-    Returns (townland_id, created).
-    Creates the townland if it doesn't exist.
-    """
+    """Returns (townland_id, created).  Creates the townland if it doesn't exist."""
     canonical = name.strip().upper()
     conn = get_db_conn()
     try:
@@ -251,8 +286,11 @@ def get_or_create(name: str, **kwargs) -> tuple[int, bool]:
 def _row_to_model(row) -> Townland:
     keys = row.keys()
 
+    def _col(col, default=None):
+        return row[col] if col in keys else default
+
     def _json_list(col):
-        val = row[col] if col in keys else None
+        val = _col(col)
         if not val:
             return []
         try:
@@ -262,27 +300,31 @@ def _row_to_model(row) -> Townland:
 
     return Townland(
         id=row["id"],
+        entity_id=_col("entity_id"),
         name=row["name"],
+        qualifier=_col("qualifier"),
+        logainm_id=_col("logainm_id"),
         name_gaelic=row["name_gaelic"],
         barony=row["barony"],
         civil_parish=row["civil_parish"],
         electoral_division=row["electoral_division"],
         placename_theme=row["placename_theme"],
         description=row["description"],
-        td_id=row["td_id"] if "td_id" in keys else None,
-        guid=row["guid"] if "guid" in keys else None,
-        area_sqm=row["area_sqm"] if "area_sqm" in keys else None,
+        td_id=_col("td_id"),
+        guid=_col("guid"),
+        area_sqm=_col("area_sqm"),
         kg_uri=row["kg_uri"],
         wkt_geometry=row["wkt_geometry"],
         centroid_lat=row["centroid_lat"],
         centroid_lon=row["centroid_lon"],
-        county=row["county"] if "county" in keys else None,
-        osm_id=row["osm_id"] if "osm_id" in keys else None,
-        osi_id=row["osi_id"] if "osi_id" in keys else None,
-        vrti_id=row["vrti_id"] if "vrti_id" in keys else None,
+        county=_col("county"),
+        osm_id=_col("osm_id"),
+        osi_id=_col("osi_id"),
+        vrti_id=_col("vrti_id"),
         images=_json_list("images_json"),
         links=_json_list("links_json"),
+        geometry_flag=_col("geometry_flag"),
         source=row["source"],
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
+        created_at=_col("created_at"),
+        updated_at=_col("updated_at"),
     )

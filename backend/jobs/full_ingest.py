@@ -179,9 +179,10 @@ def run_full_ingest(dry_run: bool = False) -> dict:
                 townland.vrti_id      = kg_dto.vrti_id
                 townland.images       = kg_dto.images
                 townland.links        = kg_dto.links
-                # Prefer KG Gaelic name if not already set from GeoJSON
                 if not townland.name_gaelic and kg_dto.name_gaelic:
                     townland.name_gaelic = kg_dto.name_gaelic
+                if kg_dto.centroid_flag:
+                    townland.geometry_flag = kg_dto.centroid_flag
                 if kg_dto.wkt_geometry or kg_dto.centroid_lat:
                     townland.source = "kg"
             else:

@@ -30,7 +30,10 @@ class Townland:
     Media / links : KG (images_json, links_json)
     """
     id: Optional[int] = None
+    entity_id: Optional[str] = None     # UUID surrogate key (assigned at insert)
     name: str = ""                       # canonical UPPER-CASE English name
+    qualifier: Optional[str] = None     # locational qualifier: UPPER/LOWER/etc.
+    logainm_id: Optional[str] = None    # logainm.ie place identifier
     name_gaelic: Optional[str] = None   # Irish/Gaelic name (from GeoJSON TL_GAEILGE or KG)
     barony: Optional[str] = None        # from KG place hierarchy
     civil_parish: Optional[str] = None  # from KG place hierarchy
@@ -53,6 +56,7 @@ class Townland:
     vrti_id: Optional[str] = None
     images: list = field(default_factory=list)   # image URLs from KG
     links: list = field(default_factory=list)    # external links from KG
+    geometry_flag: Optional[str] = None  # geometry/centroid quality flags
     source: str = "json"                 # 'json' | 'kg' | 'manual'
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -60,7 +64,10 @@ class Townland:
     def to_dict(self) -> dict:
         return {
             "id": self.id,
+            "entity_id": self.entity_id,
             "name": self.name,
+            "qualifier": self.qualifier,
+            "logainm_id": self.logainm_id,
             "name_gaelic": self.name_gaelic,
             "barony": self.barony,
             "civil_parish": self.civil_parish,
@@ -79,6 +86,7 @@ class Townland:
             "vrti_id": self.vrti_id,
             "images": self.images,
             "links": self.links,
+            "geometry_flag": self.geometry_flag,
             "source": self.source,
         }
 

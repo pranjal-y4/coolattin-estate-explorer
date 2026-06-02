@@ -24,6 +24,7 @@ RDF prefix convention for the Coolattin KG:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 import requests
@@ -179,3 +180,157 @@ def triple_count() -> int:
     except Exception as exc:
         log.warning("graphdb_sparql.triple_count_failed | %s", exc)
         return -1
+
+
+# ── Phase 3 — subgraph neighbourhood expansion ─────────────────────────────
+
+def get_entity_neighborhood(
+    entity_label: str,
+    k: int = 2,
+    max_nodes: int = 50,
+) -> list[tuple[str, str, str]]:
+    """
+    Fetch the k-hop neighbourhood of a named entity from the local co: graph.
+
+    Returns a list of (subject_label, predicate_label, object_label) triples.
+    Skips blank nodes and geometry literals.  Returns [] gracefully when
+    GraphDB is unavailable, disabled, or the entity is not found.
+
+    The predicate URI is converted to a human-readable label via _pred_label().
+
+    Used by: subgraph_engine._expand_graphdb (Phase 3)
+    """
+    if not ActiveConfig.GRAPHDB_ENABLED:
+        return []
+
+    label_lower = entity_label.strip().lower().replace('"', '\\"')
+
+    hop1_sparql = f"""
+    SELECT DISTINCT ?subjectLabel ?pred ?obj ?objLabel
+    WHERE {{
+      ?subject rdfs:label ?subjectLabel .
+      FILTER(LCASE(STR(?subjectLabel)) = "{label_lower}")
+      ?subject ?pred ?obj .
+      OPTIONAL {{ ?obj rdfs:label ?objLabel }}
+      FILTER(!isBlank(?obj))
+      FILTER(!isBlank(?subject))
+    }}
+    LIMIT {max_nodes}
+    """
+
+    triples: list[tuple[str, str, str]] = []
+    seen_mid_uris: set[str] = set()
+
+    try:
+        _, bindings = _execute(hop1_sparql)
+    except Exception as exc:
+        log.debug("graphdb_sparql.get_entity_neighborhood hop1_failed error=%s", exc)
+        return []
+
+    for b in bindings:
+        s_label   = _val(b, "subjectLabel") or entity_label
+        pred_uri  = _val(b, "pred") or ""
+        pred_lbl  = _pred_label(pred_uri)
+        if not pred_lbl:
+            continue
+        obj_raw   = _val(b, "obj") or ""
+        obj_label = _val(b, "objLabel") or _shorten_uri(obj_raw)
+        if obj_label:
+            triples.append((s_label, pred_lbl, obj_label))
+            if obj_raw.startswith("http"):
+                seen_mid_uris.add(obj_raw)
+
+    # 2-hop: expand the first few intermediate URI nodes
+    if k >= 2 and seen_mid_uris:
+        for mid_uri in list(seen_mid_uris)[:4]:
+            hop2_sparql = f"""
+            SELECT DISTINCT ?midLabel ?pred2 ?obj2 ?obj2Label
+            WHERE {{
+              BIND(<{mid_uri}> AS ?mid)
+              OPTIONAL {{ ?mid rdfs:label ?midLabel }}
+              ?mid ?pred2 ?obj2 .
+              OPTIONAL {{ ?obj2 rdfs:label ?obj2Label }}
+              FILTER(!isBlank(?obj2))
+            }}
+            LIMIT 15
+            """
+            try:
+                _, h2_bindings = _execute(hop2_sparql)
+                for b in h2_bindings:
+                    mid_lbl  = _val(b, "midLabel") or _shorten_uri(mid_uri)
+                    p2_uri   = _val(b, "pred2") or ""
+                    p2_lbl   = _pred_label(p2_uri)
+                    if not p2_lbl:
+                        continue
+                    o2_raw   = _val(b, "obj2") or ""
+                    o2_label = _val(b, "obj2Label") or _shorten_uri(o2_raw)
+                    if o2_label:
+                        triples.append((mid_lbl, p2_lbl, o2_label))
+            except Exception as exc2:
+                log.debug(
+                    "graphdb_sparql.get_entity_neighborhood hop2_failed mid=%s error=%s",
+                    mid_uri, exc2,
+                )
+
+    log.debug(
+        "graphdb_sparql.get_entity_neighborhood | label=%s k=%d triples=%d",
+        entity_label, k, len(triples),
+    )
+    return triples[:max_nodes]
+
+
+def _pred_label(pred_uri: str) -> str:
+    """
+    Convert a predicate URI to a short human-readable label.
+    Returns "" for predicates that should be omitted (rdf:type, geometry).
+    """
+    if not pred_uri:
+        return ""
+    # Omit geometry and type predicates — too noisy in the context window
+    _omit = {
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+        "http://www.opengis.net/ont/geosparql#asWKT",
+        "http://www.opengis.net/ont/geosparql#hasCentroid",
+        "http://www.opengis.net/ont/geosparql#hasGeometry",
+    }
+    if pred_uri in _omit:
+        return ""
+    known: dict[str, str] = {
+        "https://coolattin.ie/ontology#civilParish":  "civil parish",
+        "https://coolattin.ie/ontology#barony":       "barony",
+        "https://coolattin.ie/ontology#county":       "county",
+        "https://coolattin.ie/ontology#inParish":     "in parish",
+        "https://coolattin.ie/ontology#inBarony":     "in barony",
+        "https://coolattin.ie/ontology#year":         "year",
+        "https://coolattin.ie/ontology#count":        "count",
+        "http://www.w3.org/2000/01/rdf-schema#label": "label",
+        "https://schema.org/name":                    "name",
+    }
+    if pred_uri in known:
+        return known[pred_uri]
+    for prefix in (
+        "https://coolattin.ie/ontology#",
+        "https://schema.org/",
+        "http://www.w3.org/2000/01/rdf-schema#",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+        "http://www.w3.org/2001/XMLSchema#",
+    ):
+        if pred_uri.startswith(prefix):
+            local = pred_uri[len(prefix):]
+            return _camel_to_words(local)
+    frag = pred_uri.split("#")[-1] if "#" in pred_uri else pred_uri.rstrip("/").split("/")[-1]
+    return _camel_to_words(frag) if frag else ""
+
+
+def _shorten_uri(uri: str) -> str:
+    """Return a short readable fragment from a full URI, or the value unchanged."""
+    if not uri or not uri.startswith("http"):
+        return uri
+    frag = uri.split("#")[-1] if "#" in uri else uri.rstrip("/").split("/")[-1]
+    return frag
+
+
+def _camel_to_words(s: str) -> str:
+    """Convert camelCase / PascalCase to space-separated lower-case words."""
+    spaced = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", s)
+    return spaced.lower().strip()

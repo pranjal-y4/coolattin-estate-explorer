@@ -5,3 +5,5 @@ rapidfuzz
 openpyxl
 requests
 rdflib
+shapely
+jellyfish

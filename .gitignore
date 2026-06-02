@@ -41,6 +41,7 @@ data/coolattin_sample.ttl
 
 # ── Large data files (>100 MB, exceed GitHub's file size limit) ──────────────
 extra_datasets/NMS_OpenData_20230823.csv
+data/entity_index.pkl
 
 # ── Editor ───────────────────────────────────────────────────────────────────
 .vscode/

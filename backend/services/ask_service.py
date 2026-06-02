@@ -90,6 +90,14 @@ ASK_ALLOW_HEURISTIC_FALLBACK = os.environ.get(
     "ASK_ALLOW_HEURISTIC_FALLBACK", ""
 ).strip().lower() in {"1", "true", "yes", "on"}
 
+# Feature flag: routed architecture (entity_resolver → intent_router → semantic/subgraph).
+# Default FALSE so the existing pipeline is unaffected in production.
+# Set ASK_USE_NEW_PIPELINE=true to activate. The old pipeline remains both the flag-off
+# behaviour and the FALLBACK lane inside the new orchestrator.
+ASK_USE_NEW_PIPELINE = os.environ.get(
+    "ASK_USE_NEW_PIPELINE", ""
+).strip().lower() in {"1", "true", "yes", "on"}
+
 _OPENROUTER_FREE_MODELS = [
     "openai/gpt-oss-20b:free",
     "openai/gpt-oss-120b:free",
@@ -221,7 +229,7 @@ _TOWNLAND_CATALOG_CACHE: dict[str, Any] = {
 }
 
 _TOWNLAND_STOPWORDS = {
-    "a", "about", "an", "and", "are", "around", "as", "at", "be", "been", "between",
+    "a", "about", "across", "an", "and", "are", "around", "as", "at", "be", "been", "between",
     "by", "can", "census", "count", "did", "do", "does", "emigrated",
     "emigration", "evicted", "eviction", "family", "for", "from", "give",
     "happened", "has", "have", "how", "i", "in", "info", "is", "it", "km",
@@ -882,10 +890,12 @@ def _extract_radius_km(question: str) -> int | None:
 
 
 def _extract_surname(question: str) -> str | None:
+    # "{Surname} family" must come before "family {word}" so "Byrne family members"
+    # captures "Byrne" rather than letting the next pattern capture "members".
     patterns = [
         r"\bsurname[s]?\s+(?:of\s+|is\s+)?['\"]?(\w+)['\"]?",
-        r"\bfamily\s+(?:name\s+)?['\"]?(\w+)['\"]?",
         r"\b([A-Za-z][A-Za-z'-]{2,})\s+family\b",
+        r"\bfamily\s+(?:name\s+)?['\"]?(\w+)['\"]?",
         r"\b(?:about|for|on)\s+([A-Za-z][A-Za-z'-]{2,})\s+(?:family|surname|people|records)\b",
         r"\bnamed?\s+['\"]?(\w+)['\"]?",
         r"\bby\s+the\s+name\s+(?:of\s+)?['\"]?(\w+)['\"]?",
@@ -895,7 +905,7 @@ def _extract_surname(question: str) -> str | None:
         if m:
             candidate = m.group(1).upper()
             # reject common words that aren't surnames
-            if candidate not in {"THE", "A", "AN", "THIS", "THAT", "THEIR", "ALL", "HOW", "MANY"}:
+            if candidate not in {"THE", "A", "AN", "THIS", "THAT", "THEIR", "ALL", "HOW", "MANY", "MEMBERS", "NAME"}:
                 return candidate
     return None
 
@@ -904,6 +914,16 @@ def _analyse_question(question: str, townland_hint: str | None) -> dict[str, Any
     q = (question or "").lower()
     year = _extract_year(question)
     surname = _extract_surname(question)
+    # Fix 3b: canonicalize extracted surname via entity_resolver so fuzzy spellings
+    # (e.g. "Kavanah") resolve to their DB canonical form ("KAVANAGH").
+    if surname:
+        try:
+            from backend.services.entity_resolver import resolve_entity as _re_s
+            _sr = _re_s(surname, entity_type="surname")
+            if _sr.label_norm and _sr.confidence >= 0.70:
+                surname = _sr.label_norm
+        except Exception:
+            pass
     hint = _norm_townland(townland_hint)
     radius_km = _extract_radius_km(question)
 
@@ -1244,6 +1264,121 @@ def _match_and_build_template(
         sql = sql.replace("{surname}", _sql_escape(surname or ""))
 
     return best_tmpl, sql
+
+
+def _match_and_build_template_by_id(
+    template_id: str,
+    question: str,
+    canonical_townland: str | None,
+) -> tuple[dict | None, str | None]:
+    """Build SQL for a specific template ID; returns (None, None) if entity requirements unmet."""
+    year = _extract_year(question)
+    surname = _extract_surname(question)
+    for tmpl in QUESTION_TEMPLATES:
+        if tmpl.get("id") != template_id:
+            continue
+        if tmpl.get("requires_townland") and not canonical_townland:
+            return None, None
+        if tmpl.get("requires_year") and not year:
+            return None, None
+        if tmpl.get("requires_surname") and not surname:
+            return None, None
+        sql = tmpl["sql_template"]
+        if "{townland_norm}" in sql:
+            sql = sql.replace("{townland_norm}", _sql_escape(canonical_townland or ""))
+        if "{year}" in sql:
+            sql = sql.replace("{year}", str(year))
+        if "{surname}" in sql:
+            sql = sql.replace("{surname}", _sql_escape(surname or ""))
+        return tmpl, sql
+    return None, None
+
+
+def _phase4_retrieve(
+    question: str,
+    canonical_townland: str | None,
+    approved_memory: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """
+    Phase 4 hybrid retrieval: dense TF-IDF cosine + sparse keyword overlap → RRF.
+
+    Returns:
+      (template_fast_lane, embedding_ranked_memory)
+
+    template_fast_lane: dict with keys 'template', 'sql', 'cosine_score',
+      'rrf_score', 'template_id' when a high-confidence template hit exists;
+      None otherwise.
+
+    embedding_ranked_memory: approved_memory rows re-ranked by embedding
+      similarity, with 'match_score' set for downstream _approved_query_examples_block.
+    """
+    try:
+        from backend.services.embedding_index import (
+            get_index,
+            TEMPLATE_FAST_LANE_THRESHOLD,
+        )
+        try:
+            from backend.services.semantic_layer import METRIC_REGISTRY as _metrics
+        except Exception:
+            _metrics: dict[str, Any] = {}
+
+        hits = get_index().retrieve(
+            question,
+            top_k=12,
+            templates=QUESTION_TEMPLATES,
+            metrics=_metrics,
+            memory_rows=approved_memory,
+        )
+
+        # ── Template fast lane ────────────────────────────────────────────────
+        template_fast_lane: dict[str, Any] | None = None
+        q_lower = question.lower()
+        for hit in hits:
+            if hit.source not in ("template", "metric"):
+                continue
+            if hit.cosine_score < TEMPLATE_FAST_LANE_THRESHOLD:
+                continue
+            # required_keywords is the HARD gate — must all be present
+            if hit.required_keywords and not all(kw in q_lower for kw in hit.required_keywords):
+                continue
+            if hit.source == "template":
+                tmpl, tmpl_sql = _match_and_build_template_by_id(hit.key, question, canonical_townland)
+                if tmpl and tmpl_sql:
+                    template_fast_lane = {
+                        "template": tmpl,
+                        "sql": tmpl_sql,
+                        "template_id": hit.key,
+                        "cosine_score": hit.cosine_score,
+                        "rrf_score": hit.rrf_score,
+                        "description": tmpl.get("description"),
+                    }
+                    break
+
+        # ── Re-rank memory rows by embedding similarity ───────────────────────
+        memory_scores: dict[str, tuple[float, float]] = {
+            hit.key: (hit.cosine_score, hit.rrf_score)
+            for hit in hits
+            if hit.source == "memory"
+        }
+        ranked: list[dict[str, Any]] = []
+        unranked: list[dict[str, Any]] = []
+        for row in approved_memory:
+            rid = str(row.get("id") or "")
+            if rid in memory_scores:
+                cos, rrf = memory_scores[rid]
+                item = dict(row)
+                item["match_score"] = round(cos * 100.0, 2)
+                item["_p4_rrf"] = rrf
+                ranked.append(item)
+            else:
+                unranked.append(dict(row))
+        ranked.sort(key=lambda r: r.get("_p4_rrf", 0.0), reverse=True)
+
+        return template_fast_lane, ranked + unranked
+
+    except Exception as exc:
+        log.debug("ask_service.phase4_retrieve_failed error=%s", exc)
+        return None, approved_memory
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1755,6 +1890,11 @@ def record_query_feedback(
         conn.close()
 
     _clear_query_memory_cache()
+    try:
+        from backend.services.embedding_index import get_index as _get_embed_index
+        _get_embed_index().invalidate_memory()
+    except Exception:
+        pass
     return {
         "ok": True,
         "feedback": feedback_value,
@@ -1826,6 +1966,739 @@ def answer_question(
     return final_payload
 
 
+def _orchestrated_pipeline_stream(
+    question: str,
+    townland_hint: str | None,
+    include_sql: bool,
+    force_llm: bool,
+) -> Generator[str, None, None]:
+    """
+    New routed pipeline — activated by ASK_USE_NEW_PIPELINE=true.
+
+    Orchestrator flow (per STEP 2 spec):
+      1. Phase 1 — entity_resolver (via _resolve_townland_context) runs ONCE; the
+         resolved sql_id + kg_uri are shared by every downstream lane.
+      2. Phase 5 — classify_intent → ANALYTICAL / RELATIONAL / COMPARATIVE / FALLBACK.
+      3. Dispatch:
+           ANALYTICAL  → Phase 2 semantic_layer: rule-based slot-fill first (0 LLM calls),
+                         then LLM slot-fill if confidence < threshold.  SQL comes from
+                         the deterministic compiler — never from free-form LLM generation.
+           RELATIONAL  → Phase 3 subgraph retrieval for qualitative context, then
+           /HERITAGE      FALLBACK SQL generation for any counts (Core Rule 1: counts
+                         always come from SQL, never from the subgraph).
+           COMPARATIVE → ANALYTICAL SQL + RELATIONAL subgraph side-by-side.
+                         Full reconciliation is Phase 6 (TODO marker in provenance).
+           FALLBACK    → old pipeline (verified_analysis → phase4_embedding →
+                         approved_memory → LLM free-form SQL).
+      4. ANY lane error → graceful fallback to old pipeline SQL generation.
+      5. Stages 2-end — safety check, DB execution, VRTI, GraphDB, fusion, rewrite, PDF,
+         final result SSE — identical to the old pipeline; call the same helpers.
+
+    New SSE stages vs old pipeline:
+      classifying_intent — routing decision (always emitted)
+      slot_filling       — LLM slot-fill attempt (ANALYTICAL lane only)
+
+    New provenance fields in result payload:
+      query_provenance.route   — intent_route label
+      query_provenance.lane    — which dispatch path executed
+    """
+    # ── Setup ─────────────────────────────────────────────────────────────────
+    try:
+        _ensure_unified_table_seeded()
+        _ensure_heritage_feature_seeded()
+        _ensure_query_memory_schema()
+    except Exception as exc:
+        yield _sse("error", message=f"Database not ready: {exc}")
+        return
+
+    # ── Phase 1: Entity resolution ────────────────────────────────────────────
+    # entity_resolver is called exactly once, inside _townland_resolution_payload,
+    # and enriches the returned dict with sql_id + kg_uri so every downstream lane
+    # references the same resolved entity without re-deriving it.
+    townland_resolution = _resolve_townland_context(question, townland_hint)
+    canonical_townland = townland_resolution.get("name_norm")
+    analysis = _analyse_question(question, canonical_townland or townland_hint)
+    warnings: list[str] = []
+    if townland_resolution.get("warning"):
+        warnings.append(str(townland_resolution["warning"]))
+    warnings.extend(_question_data_coverage_warnings(question))
+
+    # ── Phase 5: Intent classification ───────────────────────────────────────
+    yield _sse(
+        "progress", stage="classifying_intent", status="started",
+        label="Routing Question", detail="Classifying question intent…",
+    )
+    _semantic_slot_fill = None
+    try:
+        from backend.services.semantic_layer import try_rule_based_fill as _try_sl_fill
+        _semantic_slot_fill = _try_sl_fill(question, analysis, townland_resolution)
+    except Exception as _sl_init_exc:
+        log.debug("orchestrated_pipeline.sl_init_failed error=%s", _sl_init_exc)
+
+    intent_route = "fallback"
+    try:
+        from backend.services.intent_router import (
+            classify_intent as _classify_intent,
+            ANALYTICAL as _ANALYTICAL,
+            RELATIONAL as _RELATIONAL,
+            COMPARATIVE as _COMPARATIVE,
+        )
+        intent_route = _classify_intent(question, analysis, _semantic_slot_fill)
+    except Exception as _ir_exc:
+        log.warning("orchestrated_pipeline.intent_router_failed error=%s", _ir_exc)
+        _ANALYTICAL = "analytical"
+        _RELATIONAL = "relational"
+        _COMPARATIVE = "comparative"
+
+    yield _sse(
+        "progress", stage="classifying_intent", status="completed",
+        label="Routing Question", detail=f"Route: {intent_route}",
+    )
+
+    # ── SQL generation (stage 1) ──────────────────────────────────────────────
+    t0 = time.perf_counter()
+    sql: str = ""
+    llm_meta: dict[str, Any] = {}
+    vrti_postgres_sql: str = ""
+    vrti_query_meta: dict[str, Any] = {}
+    chart_hint: str | None = None
+    _phase3_result = None
+    # approved_matches needed by _execute_with_recovery and memory marking
+    approved_matches: list[dict[str, Any]] = []
+    direct_memory_match: dict[str, Any] | None = None
+    query_provenance: dict[str, Any] = {
+        "used_approved_memory": False,
+        "reused_memory_id": None,
+        "direct_memory_reuse": False,
+        "execution_mode": "executed_as_generated",
+        "strategy": "new_pipeline",
+        "route": intent_route,
+        "approved_query_candidates": [],
+        "new_pipeline": True,
+    }
+
+    yield _sse(
+        "progress", stage="contacting_llm", status="started",
+        label="Building Query", detail=f"Route: {intent_route} — preparing…",
+    )
+
+    _routed_sql_ok = False
+
+    # ── ANALYTICAL lane (Phase 2: semantic_layer → deterministic SQL) ──────────
+    if intent_route == _ANALYTICAL and not force_llm:
+        try:
+            from backend.services.semantic_layer import (
+                compile_sql as _compile_sl,
+                slot_fill_meta as _slot_fill_meta,
+                build_slot_fill_prompt as _build_slot_fill_prompt,
+                parse_slot_fill as _parse_slot_fill,
+            )
+            sf = _semantic_slot_fill
+            if sf and sf.confidence >= 0.80:
+                _compiled = _compile_sl(sf, _clearances_count_column())
+                if _compiled:
+                    sql = _compiled
+                    llm_meta = _slot_fill_meta(sf, sql)
+                    query_provenance.update({"strategy": "semantic_layer_rule", "lane": "analytical_rule"})
+                    _routed_sql_ok = True
+                    ms = int((time.perf_counter() - t0) * 1000)
+                    yield _sse(
+                        "progress", stage="contacting_llm", status="completed",
+                        label="Building Query",
+                        detail=f"Semantic rule [{sf.metric}] confidence={sf.confidence:.2f}",
+                        duration_ms=ms,
+                    )
+
+            if not _routed_sql_ok:
+                # LLM slot-fill fallback within ANALYTICAL lane
+                yield _sse(
+                    "progress", stage="slot_filling", status="started",
+                    label="Slot Filling", detail="LLM slot-fill for analytical query…",
+                )
+                try:
+                    _sf_prompt = _build_slot_fill_prompt(question, analysis, townland_resolution)
+                    _sf_raw, _sf_meta = _llm_generate(
+                        _sf_prompt, purpose="slot_fill", max_tokens=256, temperature=0.0
+                    )
+                    _sf_parsed = _parse_slot_fill(_sf_raw, question)
+                    if _sf_parsed and _sf_parsed.confidence >= 0.70:
+                        _compiled2 = _compile_sl(_sf_parsed, _clearances_count_column())
+                        if _compiled2:
+                            sql = _compiled2
+                            llm_meta = _slot_fill_meta(_sf_parsed, sql)
+                            llm_meta["llm_provider"] = _sf_meta.get("provider")
+                            llm_meta["llm_model"] = _sf_meta.get("model")
+                            query_provenance.update({"strategy": "semantic_layer_llm", "lane": "analytical_llm"})
+                            _routed_sql_ok = True
+                            ms = int((time.perf_counter() - t0) * 1000)
+                            yield _sse(
+                                "progress", stage="slot_filling", status="completed",
+                                label="Slot Filling",
+                                detail=f"LLM slot-fill [{_sf_parsed.metric}] confidence={_sf_parsed.confidence:.2f}",
+                                duration_ms=ms,
+                            )
+                        else:
+                            yield _sse("progress", stage="slot_filling", status="completed",
+                                       label="Slot Filling", detail="Compile failed — falling back")
+                    else:
+                        yield _sse("progress", stage="slot_filling", status="completed",
+                                   label="Slot Filling", detail="Low confidence — falling back to old pipeline")
+                except Exception as _sf_exc:
+                    log.debug("orchestrated_pipeline.llm_slot_fill_failed error=%s", _sf_exc)
+                    yield _sse("progress", stage="slot_filling", status="completed",
+                               label="Slot Filling", detail=f"Slot-fill error — falling back")
+        except Exception as _al_exc:
+            log.warning("orchestrated_pipeline.analytical_lane_failed error=%s", _al_exc)
+
+    # ── RELATIONAL / COMPARATIVE — Phase 3 subgraph retrieval ─────────────────
+    # Core Rule 1: subgraph provides qualitative context only; counts still come from SQL.
+    if intent_route in (_RELATIONAL, _COMPARATIVE):
+        try:
+            from backend.services.subgraph_engine import retrieve_subgraph as _retrieve_subgraph
+            _sg_t0 = time.perf_counter()
+            yield _sse(
+                "progress", stage="querying_subgraph", status="started",
+                label="Subgraph Retrieval",
+                detail="Expanding knowledge graph neighbourhood for relational context…",
+            )
+            _phase3_result = _retrieve_subgraph(
+                question, analysis, townland_resolution, sources=("vrti", "graphdb")
+            )
+            _sg_ms = int((time.perf_counter() - _sg_t0) * 1000)
+            _sg_srcs = ", ".join(_phase3_result.sources_used) if _phase3_result.sources_used else "none"
+            _sg_nodes = (
+                len(_phase3_result.triples_vrti) + len(_phase3_result.triples_graphdb)
+            )
+            yield _sse(
+                "progress", stage="querying_subgraph", status="completed",
+                label="Subgraph Retrieval",
+                detail=(
+                    f"{_sg_nodes} triples · sources: {_sg_srcs} · "
+                    f"type: {_phase3_result.question_type}"
+                    + (", pruned" if _phase3_result.pruned else "")
+                ),
+                duration_ms=_sg_ms,
+            )
+            query_provenance["subgraph_node_count"] = _sg_nodes
+            query_provenance["subgraph_sources"] = _phase3_result.sources_used
+            if intent_route == _COMPARATIVE:
+                # TODO: Phase 6 — full metric reconciliation between SQLite and KG.
+                # For now return SQL result + subgraph context side-by-side.
+                query_provenance["phase6_todo"] = (
+                    "Full cross-source reconciliation pending Phase 6 implementation."
+                )
+        except Exception as _sg_exc:
+            log.warning("orchestrated_pipeline.subgraph_failed error=%s", _sg_exc)
+
+    # ── FALLBACK — old pipeline SQL paths (also used by RELATIONAL/COMPARATIVE for counts) ──
+    # Activates when: (a) route=FALLBACK, (b) ANALYTICAL lane didn't produce SQL,
+    # (c) RELATIONAL/COMPARATIVE always need SQL for numeric data.
+    _need_fallback_sql = not _routed_sql_ok
+    if _need_fallback_sql:
+        _raw_memory = _load_approved_query_memory()
+        approved_matches = _find_similar_approved_queries(question, analysis, canonical_townland)
+        direct_memory_match = (
+            approved_matches[0]
+            if _can_reuse_memory_directly(
+                question, analysis, canonical_townland,
+                approved_matches[0] if approved_matches else None,
+            )
+            else None
+        )
+        _p4_template, _p4_memory = _phase4_retrieve(question, canonical_townland, _raw_memory)
+        query_provenance["approved_query_candidates"] = _memory_matches_for_display(approved_matches)
+
+        verified = _try_verified_analysis(question, canonical_townland, analysis)
+        if verified and not force_llm:
+            sql = str(verified.get("sql") or "")
+            llm_meta = dict(verified.get("meta") or {})
+            chart_hint = verified.get("chart_hint")
+            query_provenance.update({
+                "strategy": f"{query_provenance.get('strategy','new_pipeline')}+verified_analysis",
+                "lane": "fallback_verified_analysis",
+            })
+            ms = int((time.perf_counter() - t0) * 1000)
+            yield _sse(
+                "progress", stage="contacting_llm", status="completed",
+                label="Building Query",
+                detail=f"Verified analysis: {llm_meta.get('analysis_id')}",
+                duration_ms=ms,
+            )
+        elif _p4_template and not force_llm:
+            _p4_tid = _p4_template["template_id"]
+            sql = str(_p4_template["sql"])
+            llm_meta = {
+                "provider": "phase4_embedding", "model": "tfidf_rrf",
+                "mode": "template_fast_lane", "analysis_id": _p4_tid,
+                "description": _p4_template.get("description"),
+                "cosine_score": _p4_template.get("cosine_score"),
+                "rrf_score": _p4_template.get("rrf_score"),
+            }
+            chart_hint = VERIFIED_ANALYSIS_CHART_HINTS.get(_p4_tid)
+            query_provenance.update({
+                "strategy": "fallback_phase4_template", "lane": "fallback_p4",
+                "p4_template_id": _p4_tid,
+            })
+            ms = int((time.perf_counter() - t0) * 1000)
+            yield _sse(
+                "progress", stage="contacting_llm", status="completed",
+                label="Building Query",
+                detail=f"Phase 4 fast lane: {_p4_tid} cosine={_p4_template.get('cosine_score', 0):.3f}",
+                duration_ms=ms,
+            )
+        elif direct_memory_match and not force_llm:
+            sql = str(direct_memory_match.get("sql_text") or "")
+            llm_meta = {
+                "provider": "query_memory", "model": "approved_sql",
+                "mode": "approved_memory_reuse",
+                "memory_id": direct_memory_match.get("id"),
+                "memory_similarity": direct_memory_match.get("match_score"),
+                "description": "Reused previously approved SQL for a similar question",
+            }
+            query_provenance.update({
+                "used_approved_memory": True,
+                "reused_memory_id": direct_memory_match.get("id"),
+                "direct_memory_reuse": True,
+                "strategy": "fallback_approved_memory",
+                "lane": "fallback_memory",
+            })
+            ms = int((time.perf_counter() - t0) * 1000)
+            yield _sse(
+                "progress", stage="contacting_llm", status="completed",
+                label="Building Query",
+                detail=f"Approved memory reuse (similarity {direct_memory_match.get('match_score')})",
+                duration_ms=ms,
+            )
+        else:
+            try:
+                _few_shot = _p4_memory if _p4_memory else approved_matches
+                sql, llm_meta = _generate_sql(
+                    question, _ANNOTATED_SCHEMA, canonical_townland,
+                    analysis=analysis, approved_examples=_few_shot,
+                )
+                vrti_postgres_sql, vrti_query_meta = _generate_vrti_postgres_query(
+                    question, canonical_townland
+                )
+                query_provenance.update({
+                    "strategy": "fallback_llm_sql",
+                    "lane": "fallback_llm",
+                })
+                ms = int((time.perf_counter() - t0) * 1000)
+                yield _sse(
+                    "progress", stage="contacting_llm", status="completed",
+                    label="Building Query",
+                    detail=(
+                        f"LLM SQL [{llm_meta.get('mode')}] | "
+                        f"VRTI: {vrti_query_meta.get('mode')} | "
+                        f"model: {llm_meta.get('model')}"
+                    ),
+                    duration_ms=ms,
+                )
+            except Exception as exc:
+                ms = int((time.perf_counter() - t0) * 1000)
+                if ASK_ALLOW_HEURISTIC_FALLBACK:
+                    sql = _fallback_sql(question, canonical_townland)
+                    llm_meta = {
+                        "provider": "local_fallback", "model": "rule_template",
+                        "mode": "fallback_rule",
+                    }
+                    query_provenance["strategy"] = "emergency_fallback"
+                else:
+                    sql = _diagnostic_message_sql(
+                        "I could not build a validated SQL query for this question. "
+                        "Please rephrase with a clearer townland, year, surname, ship, "
+                        "record type, or measure."
+                    )
+                    llm_meta = {
+                        "provider": "validation_guard", "model": "validated_sql_only",
+                        "mode": "no_validated_sql", "error": str(exc),
+                    }
+                    query_provenance["strategy"] = "validated_sql_unavailable"
+                vrti_postgres_sql = _fallback_vrti_postgres_sql(question, canonical_townland)
+                vrti_query_meta = {
+                    "provider": "local_fallback", "model": "rule_template", "mode": "fallback_rule",
+                }
+                yield _sse(
+                    "progress", stage="contacting_llm", status="completed",
+                    label="Building Query",
+                    detail=f"LLM unavailable ({exc}) — fallback SQL used",
+                    duration_ms=ms,
+                )
+    else:
+        # Routed SQL produced by ANALYTICAL lane — fill in VRTI defaults
+        vrti_postgres_sql = vrti_postgres_sql or _fallback_vrti_postgres_sql(question, canonical_townland)
+        vrti_query_meta = vrti_query_meta or {
+            "provider": "new_pipeline", "model": intent_route, "mode": "routed",
+        }
+
+    # ── Stage 2 — Framing Query (FORBIDDEN_SQL guardrail) ────────────────────
+    t0 = time.perf_counter()
+    yield _sse("progress", stage="framing_query", status="started",
+               label="Framing Query", detail="Validating SQL for safety…")
+    try:
+        safe_sql = _sanitize_and_validate_sql(sql)
+    except ValueError:
+        if ASK_ALLOW_HEURISTIC_FALLBACK:
+            safe_sql = _sanitize_and_validate_sql(_fallback_sql(question, canonical_townland))
+        else:
+            safe_sql = _sanitize_and_validate_sql(_diagnostic_message_sql(
+                "I could not validate a safe SQL query for this question. "
+                "Please rephrase with a clearer entity, year, townland, surname, or measure."
+            ))
+            llm_meta = {
+                "provider": "validation_guard", "model": "validated_sql_only",
+                "mode": "no_validated_sql", "error": "sql_validation_failed",
+            }
+            query_provenance["strategy"] = "validated_sql_unavailable"
+    ms = int((time.perf_counter() - t0) * 1000)
+    yield _sse("progress", stage="framing_query", status="completed",
+               label="Framing Query", detail="Read-only query validated", duration_ms=ms)
+
+    # ── Stage 3 — Querying Database ───────────────────────────────────────────
+    t0 = time.perf_counter()
+    yield _sse("progress", stage="querying_database", status="started",
+               label="Querying SQLite", detail="Running SQL against local SQLite database…")
+    safe_sql, columns, rows, query_warning, execution_meta = _execute_with_recovery(
+        question=question, townland_hint=canonical_townland, sql=safe_sql,
+        approved_examples=approved_matches,
+    )
+    if query_warning:
+        warnings.append(query_warning)
+    if execution_meta:
+        query_provenance["execution_mode"] = execution_meta.get("mode") or "recovered"
+        if execution_meta.get("mode") == "fallback_rule":
+            warnings.append(
+                "The system had to use an emergency local heuristic because the "
+                "generated SQL could not be executed safely."
+            )
+            query_provenance["strategy"] = "emergency_fallback"
+        elif execution_meta.get("mode") == "no_validated_sql":
+            warnings.append(
+                "No validated SQL query could be produced safely, so the system "
+                "returned guidance instead of guessing."
+            )
+            query_provenance["strategy"] = "validated_sql_unavailable"
+        else:
+            warnings.append("The system repaired the generated SQL after an execution error.")
+        if llm_meta.get("mode") != "approved_memory_reuse":
+            llm_meta = execution_meta
+    if direct_memory_match:
+        _mark_query_memory_used(int(direct_memory_match.get("id") or 0))
+    sql_execution_ms = int((time.perf_counter() - t0) * 1000)
+    yield _sse(
+        "progress", stage="querying_database", status="completed",
+        label="Querying SQLite",
+        detail=f"{len(rows)} row{'s' if len(rows)!=1 else ''} returned · {sql_execution_ms} ms",
+        duration_ms=sql_execution_ms,
+    )
+
+    # ── Stage 4 — Querying VRTI Graph ─────────────────────────────────────────
+    t0 = time.perf_counter()
+    yield _sse("progress", stage="querying_vrti_graph", status="started",
+               label="Querying VRTI Graph",
+               detail="Fetching townland + parish data from VRTI Knowledge Graph…")
+    kg_context, kg_warnings = _kg_context(question, canonical_townland, force=True)
+    vrti_columns, vrti_rows = _kg_context_to_table(kg_context)
+    warnings.extend(kg_warnings)
+    ms = int((time.perf_counter() - t0) * 1000)
+    parish_count = (kg_context or {}).get("parish_count")
+    _vrti_detail = f"{len(vrti_rows)} townland(s) enriched"
+    if parish_count:
+        _vrti_detail += f" | {parish_count} Wicklow parishes"
+    yield _sse("progress", stage="querying_vrti_graph", status="completed",
+               label="Querying VRTI Graph", detail=_vrti_detail, duration_ms=ms)
+
+    # ── Phase 3 subgraph context injection ────────────────────────────────────
+    # Inject linearized subgraph into kg_context so the LLM rewrite can synthesise
+    # both qualitative KG context and quantitative SQL results.
+    if _phase3_result and _phase3_result.linearized:
+        if kg_context is None:
+            kg_context = {}
+        kg_context["subgraph_linearized"] = _phase3_result.linearized
+        if intent_route == _COMPARATIVE:
+            kg_context["phase6_fusion_note"] = (
+                "This is a comparative question. SQLite estate records provide counts "
+                "and statistics; the VRTI/GraphDB subgraph provides qualitative and "
+                "relational context. Synthesise both in your answer."
+            )
+
+    # ── Stage 4.5 — Querying GraphDB (non-fatal) ─────────────────────────────
+    from backend.integrations import graphdb_sparql as _gdb
+    graph_comparison: dict[str, Any] = {
+        "sparql_query": "", "sql_query": safe_sql,
+        "columns": [], "rows": [], "row_count": 0,
+        "graphdb_available": False, "triple_count": -1,
+        "data_loaded": False, "error": None, "setup_hint": None,
+        "timing": {"sql_ms": sql_execution_ms, "sparql_gen_ms": 0, "graphdb_ms": 0},
+        "mismatch_explanation": None,
+    }
+    if ActiveConfig.GRAPHDB_ENABLED:
+        _gdb_stage_t0 = time.perf_counter()
+        yield _sse("progress", stage="querying_graphdb", status="started",
+                   label="Querying GraphDB", detail="Generating SPARQL query via LLM…")
+        _sparql_t0 = time.perf_counter()
+        sparql_text = ""
+        try:
+            sparql_text, _ = _generate_graphdb_sparql(question, safe_sql)
+            graph_comparison["sparql_query"] = sparql_text
+        except Exception as exc:
+            graph_comparison["error"] = f"SPARQL generation failed: {exc}"
+            log.warning("orchestrated_pipeline.graphdb_sparql_gen_failed error=%s", exc)
+        graph_comparison["timing"]["sparql_gen_ms"] = int(
+            (time.perf_counter() - _sparql_t0) * 1000
+        )
+        if sparql_text:
+            yield _sse("progress", stage="querying_graphdb", status="started",
+                       label="Querying GraphDB", detail="Executing SPARQL against local RDF graph…")
+            _gdb_exec_t0 = time.perf_counter()
+            try:
+                graphdb_ok = _gdb.probe()
+                graph_comparison["graphdb_available"] = graphdb_ok
+                if graphdb_ok:
+                    tc = _gdb.triple_count()
+                    graph_comparison["triple_count"] = tc
+                    graph_comparison["data_loaded"] = tc > 0
+                    if tc == 0:
+                        graph_comparison["setup_hint"] = (
+                            "GraphDB is running but the repository is empty. "
+                            "Load data with: python3 scripts/rdf_uplift.py --import"
+                        )
+                    g_cols, g_rows = _gdb.query(sparql_text)
+                    graph_comparison["columns"] = g_cols
+                    graph_comparison["rows"] = g_rows
+                    graph_comparison["row_count"] = len(g_rows)
+                    _gdb_available = graphdb_ok
+                    _gdb_loaded = graph_comparison["data_loaded"]
+                    if _gdb_available and _gdb_loaded and sparql_text:
+                        _sql_n = len(rows)
+                        _gdb_n = graph_comparison["row_count"]
+                        _rc_diff = _sql_n != _gdb_n
+                        _val_diff = False
+                        if not _rc_diff and _sql_n == 1 and _gdb_n == 1:
+                            _sv = _first_numeric(rows[0])
+                            _gv = _first_numeric(graph_comparison["rows"][0])
+                            _val_diff = (
+                                _sv is not None and _gv is not None and _sv != _gv
+                            )
+                        if _rc_diff or _val_diff:
+                            graph_comparison["mismatch_explanation"] = _explain_result_mismatch(
+                                question=question,
+                                sql=safe_sql,
+                                sparql=sparql_text,
+                                sql_rows=rows,
+                                sparql_rows=graph_comparison["rows"],
+                            )
+            except Exception as exc:
+                graph_comparison["error"] = str(exc)
+                log.warning("orchestrated_pipeline.graphdb_execute_failed error=%s", exc)
+            graph_comparison["timing"]["graphdb_ms"] = int(
+                (time.perf_counter() - _gdb_exec_t0) * 1000
+            )
+        _gdb_total_ms = int((time.perf_counter() - _gdb_stage_t0) * 1000)
+        if graph_comparison["graphdb_available"]:
+            _tc = graph_comparison["triple_count"]
+            _tc_label = f" · {_tc:,} triples" if _tc >= 0 else ""
+            _gdb_detail = (
+                f"{graph_comparison['row_count']} row(s){_tc_label} · "
+                f"SPARQL gen {graph_comparison['timing']['sparql_gen_ms']} ms · "
+                f"query {graph_comparison['timing']['graphdb_ms']} ms"
+            )
+        else:
+            _gdb_detail = (
+                "GraphDB offline — SPARQL generated, not executed"
+                if sparql_text else "SPARQL generation failed"
+            )
+        yield _sse("progress", stage="querying_graphdb", status="completed",
+                   label="Querying GraphDB", detail=_gdb_detail, duration_ms=_gdb_total_ms)
+
+    # ── Phase 6 — Fusion & reconciliation ─────────────────────────────────────
+    t0 = time.perf_counter()
+    yield _sse("progress", stage="querying_fusion", status="started",
+               label="Reconciling Sources",
+               detail="Aligning SQLite, GraphDB, and VRTI results on resolved entity…")
+    fusion_result = _fuse_lanes(
+        sqlite_rows=rows,
+        sqlite_columns=columns,
+        graphdb_rows=graph_comparison.get("rows", []),
+        graphdb_columns=graph_comparison.get("columns", []),
+        vrti_rows=vrti_rows,
+        canonical_townland=canonical_townland,
+        entity_resolution=townland_resolution.get("entity_resolution"),
+        question=question,
+    )
+    if fusion_result["discrepancies"]:
+        if kg_context is None:
+            kg_context = {}
+        kg_context["phase6_discrepancies"] = fusion_result["discrepancies"]
+        kg_context["phase6_fusion_text"] = fusion_result["fusion_text"]
+    ms = int((time.perf_counter() - t0) * 1000)
+    _f_detail = (
+        f"{fusion_result['discrepancy_count']} discrepancy(ies) · "
+        f"{fusion_result['agreement_count']} agreement(s)"
+        if (fusion_result["discrepancy_count"] or fusion_result["agreement_count"])
+        else "No numeric overlap between sources to compare"
+    )
+    yield _sse("progress", stage="querying_fusion", status="completed",
+               label="Reconciling Sources", detail=_f_detail, duration_ms=ms)
+
+    # ── Stage 5 — Preparing Output ────────────────────────────────────────────
+    t0 = time.perf_counter()
+    yield _sse("progress", stage="preparing_output", status="started",
+               label="Preparing Output",
+               detail="Building data tables, LLM rewrite, and PDF report…")
+    availability = _build_availability_payload(
+        question=question,
+        analysis=analysis,
+        columns=columns,
+        rows=rows,
+        townland_resolution=townland_resolution,
+    )
+    related_insights = _build_related_insights(
+        question=question, analysis=analysis,
+        rows=rows, townland_norm=canonical_townland,
+    )
+    chart_spec = _build_chart_spec(
+        question=question, columns=columns, rows=rows,
+        availability=availability, chart_hint=chart_hint,
+    )
+    actual_answer = _build_answer_text(
+        question, columns, rows, canonical_townland, kg_context,
+        availability=availability,
+    )
+    summary_block = _build_structured_summary(
+        question=question, local_columns=columns, local_rows=rows,
+        vrti_columns=vrti_columns, vrti_rows=vrti_rows,
+        kg_context=kg_context, availability=availability,
+        related_insights=related_insights,
+    )
+    supporting_context = _build_supporting_context(
+        question=question, townland_norm=canonical_townland,
+        townland_resolution=townland_resolution,
+        primary_columns=columns, primary_rows=rows,
+        kg_context=kg_context, related_insights=related_insights,
+    )
+    llm_data_context = _build_llm_data_context(
+        local_columns=columns, local_rows=rows,
+        vrti_columns=vrti_columns, vrti_rows=vrti_rows,
+    )
+    llm_rephrased_answer: str | None = None
+    llm_rewrite_meta: dict[str, Any] = {
+        "provider": "none", "model": None, "mode": "not_requested",
+    }
+    try:
+        llm_rephrased_answer, llm_rewrite_meta = _generate_rephrased_answer(
+            question=question,
+            actual_answer=actual_answer,
+            summary_block=summary_block,
+            data_context=llm_data_context,
+            supporting_context=supporting_context,
+            kg_context=kg_context,
+        )
+        if llm_rephrased_answer:
+            summary_block["llm_rephrased_text"] = llm_rephrased_answer
+    except Exception as exc:
+        llm_rewrite_meta = {
+            "provider": "unavailable", "model": None,
+            "mode": "not_generated", "error": str(exc),
+        }
+        warnings.append(f"LLM rewrite unavailable: {exc}")
+
+    structured_output = {
+        "queries": {
+            "local_sqlite_query": safe_sql,
+            "vrti_postgresql_query": vrti_postgres_sql,
+        },
+        "processed_tables": {
+            "local_database": {"columns": columns, "rows": rows, "row_count": len(rows)},
+            "vrti_graph": {"columns": vrti_columns, "rows": vrti_rows, "row_count": len(vrti_rows)},
+        },
+        "summary": summary_block,
+        "supporting_context": _supporting_context_for_display(supporting_context),
+        "availability": availability,
+        "related_insights": related_insights,
+        "chart": chart_spec,
+        "query_provenance": query_provenance,
+        "discrepancies": fusion_result["discrepancies"],
+        "fusion": {
+            "discrepancy_count": fusion_result["discrepancy_count"],
+            "agreement_count": fusion_result["agreement_count"],
+            "fusion_text": fusion_result["fusion_text"],
+        },
+    }
+    pdf_path = _write_pdf_report(
+        question=question, answer=actual_answer, sql=safe_sql,
+        columns=columns, rows=rows, llm_meta=llm_meta,
+        kg_context=kg_context, include_sql=True,
+        vrti_postgres_sql=vrti_postgres_sql,
+        vrti_columns=vrti_columns, vrti_rows=vrti_rows,
+        summary_block=summary_block,
+        llm_rephrased_answer=llm_rephrased_answer,
+        llm_rewrite_meta=llm_rewrite_meta,
+    )
+    if llm_meta.get("mode") == "fallback_rule":
+        warnings.append("LLM SQL generation unavailable — fallback SQL template used.")
+    elif llm_meta.get("mode") == "no_validated_sql":
+        warnings.append(
+            "The system did not find a validated SQL query for this request and returned "
+            "safe guidance instead."
+        )
+    warnings.extend(_null_rate_warnings(columns, rows))
+    ms = int((time.perf_counter() - t0) * 1000)
+    yield _sse("progress", stage="preparing_output", status="completed",
+               label="Preparing Output", detail="PDF generated", duration_ms=ms)
+
+    # ── Final result ──────────────────────────────────────────────────────────
+    payload: dict[str, Any] = {
+        "question": question,
+        "answer": actual_answer,
+        "actual_answer": actual_answer,
+        "llm_rephrased_answer": llm_rephrased_answer,
+        "columns": columns,
+        "rows": rows,
+        "row_count": len(rows),
+        "llm": llm_meta,
+        "llm_rewrite": llm_rewrite_meta,
+        "vrti_query_generation": vrti_query_meta,
+        "townland_context": canonical_townland,
+        "townland_resolution": townland_resolution,
+        # Phase 1 — entity_resolver ran once; sql_id + kg_uri shared by all lanes
+        "entity_resolution": townland_resolution.get("entity_resolution"),
+        "kg_context": kg_context,
+        "availability": availability,
+        "related_insights": related_insights,
+        "chart": chart_spec,
+        "query_provenance": query_provenance,
+        "suggestions": availability.get("suggestions", []),
+        "structured_output": structured_output,
+        "pdf_url": f"/api/ask/pdf/{pdf_path.name}",
+        "warnings": warnings,
+        "source_tables": _extract_tables(safe_sql) if safe_sql else [],
+        "graph_comparison": graph_comparison,
+        "discrepancies": fusion_result["discrepancies"],
+        "fusion": {
+            "discrepancy_count": fusion_result["discrepancy_count"],
+            "agreement_count": fusion_result["agreement_count"],
+            "entity_label": fusion_result["entity_label"],
+            "kg_uri": fusion_result["kg_uri"],
+            "fusion_text": fusion_result["fusion_text"],
+            "source_provenance": fusion_result["source_provenance"],
+        },
+        "subgraph_context": {
+            "linearized":     _phase3_result.linearized,
+            "hierarchy":      _phase3_result.hierarchy,
+            "siblings":       _phase3_result.siblings,
+            "external_links": _phase3_result.external_links,
+            "sources_used":   _phase3_result.sources_used,
+            "question_type":  _phase3_result.question_type,
+            "k_hops":         _phase3_result.k_hops,
+            "pruned":         _phase3_result.pruned,
+        } if _phase3_result else None,
+    }
+    if include_sql:
+        payload["sql"] = safe_sql
+    yield _sse("result", **payload)
+
+
 def answer_question_stream(
     question: str,
     townland_hint: str | None = None,
@@ -1846,6 +2719,13 @@ def answer_question_stream(
         yield _sse("error", message="Please enter a longer question.")
         return
 
+    # ── Feature flag: routed architecture ─────────────────────────────────────
+    # When ASK_USE_NEW_PIPELINE=true, delegate to the new orchestrator.
+    # When false (default), run the existing pipeline unchanged below.
+    if ASK_USE_NEW_PIPELINE:
+        yield from _orchestrated_pipeline_stream(clean_q, townland_hint, include_sql, force_llm)
+        return
+
     try:
         _ensure_unified_table_seeded()
         _ensure_heritage_feature_seeded()
@@ -1861,9 +2741,33 @@ def answer_question_stream(
     if townland_resolution.get("warning"):
         warnings.append(str(townland_resolution["warning"]))
     warnings.extend(_question_data_coverage_warnings(clean_q))
+
+    # Phase 2 — try semantic layer (deterministic rule-based fast lane)
+    _semantic_slot_fill = None
+    try:
+        from backend.services.semantic_layer import (
+            try_rule_based_fill as _try_rule_based_fill,
+            compile_sql as _compile_semantic_sql,
+            compile_sparql as _compile_semantic_sparql,
+            slot_fill_meta as _slot_fill_meta,
+            build_slot_fill_prompt as _build_slot_fill_prompt,
+            parse_slot_fill as _parse_slot_fill,
+        )
+        _semantic_slot_fill = _try_rule_based_fill(clean_q, analysis, townland_resolution)
+    except Exception as _sl_exc:
+        log.debug("ask_service.semantic_layer_init_failed error=%s", _sl_exc)
+
     verified_analysis = _try_verified_analysis(clean_q, canonical_townland, analysis)
     approved_matches = _find_similar_approved_queries(clean_q, analysis, canonical_townland)
     direct_memory_match = approved_matches[0] if _can_reuse_memory_directly(clean_q, analysis, canonical_townland, approved_matches[0] if approved_matches else None) else None
+
+    # Phase 4 — hybrid semantic retrieval: dense cosine + sparse keyword → RRF.
+    # Runs over all templates + approved memory in parallel with the checks above.
+    # _p4_template: high-confidence template fast lane (may be None)
+    # _p4_memory:   approved memory rows re-ranked by embedding similarity;
+    #               used as few-shot examples for Phase 7 LLM fallback.
+    _raw_memory = _load_approved_query_memory()
+    _p4_template, _p4_memory = _phase4_retrieve(clean_q, canonical_townland, _raw_memory)
 
     # ── Stage 1 — Contacting LLM / Query memory match ─────────────────────
     t0 = time.perf_counter()
@@ -1884,7 +2788,88 @@ def answer_question_stream(
         "approved_query_candidates": _memory_matches_for_display(approved_matches),
     }
 
-    if verified_analysis and not force_llm:
+    # Phase 2 — semantic layer takes priority for analytical questions.
+    # Falls through to verified_analysis → memory → LLM if fill is absent or
+    # confidence is below threshold.
+    _sl_confidence_threshold = 0.80
+    if (
+        _semantic_slot_fill is not None
+        and _semantic_slot_fill.confidence >= _sl_confidence_threshold
+        and not force_llm
+    ):
+        try:
+            _compiled = _compile_semantic_sql(
+                _semantic_slot_fill, _clearances_count_column()
+            )
+            if _compiled:
+                sql = _compiled
+                llm_meta = _slot_fill_meta(_semantic_slot_fill, sql)
+                vrti_postgres_sql = _fallback_vrti_postgres_sql(clean_q, canonical_townland)
+                vrti_query_meta = {"provider": "semantic_layer", "model": "rule_compiler", "mode": "semantic_layer"}
+                query_provenance.update({"strategy": "semantic_layer"})
+                ms = int((time.perf_counter() - t0) * 1000)
+                yield _sse(
+                    "progress", stage="contacting_llm", status="completed",
+                    label="Contacting LLM",
+                    detail=(
+                        f"Semantic layer: {_semantic_slot_fill.metric} "
+                        f"dims={_semantic_slot_fill.dimensions} "
+                        f"filters={list(_semantic_slot_fill.filters.keys())} "
+                        f"confidence={_semantic_slot_fill.confidence:.2f}"
+                    ),
+                    duration_ms=ms,
+                )
+                # Jump directly to SQL execution — skip all other routing branches.
+                # The variable 'sql' is set; we proceed to Stage 2 (framing query).
+                # Use a sentinel to skip the if/elif/else chain below.
+                _semantic_routed = True
+            else:
+                _semantic_routed = False
+        except Exception as _sl_compile_exc:
+            log.warning("ask_service.semantic_compile_failed error=%s", _sl_compile_exc)
+            _semantic_routed = False
+    else:
+        _semantic_routed = False
+
+    # Phase 5 routing state — initialized here so they are visible after the chain.
+    _intent_route: str = "fallback"
+    _force_subgraph: bool = False
+
+    if _semantic_routed:
+        pass  # sql, llm_meta, vrti_postgres_sql all set above
+    elif _p4_template and not force_llm:
+        # Phase 4 template fast lane — high-confidence embedding match short-circuits LLM.
+        # required_keywords hard filter was already applied inside _phase4_retrieve.
+        _p4_tmpl = _p4_template["template"]
+        sql = str(_p4_template["sql"])
+        _p4_tid = _p4_template["template_id"]
+        llm_meta = {
+            "provider": "phase4_embedding",
+            "model": "tfidf_rrf",
+            "mode": "template_fast_lane",
+            "analysis_id": _p4_tid,
+            "description": _p4_template.get("description"),
+            "cosine_score": _p4_template.get("cosine_score"),
+            "rrf_score": _p4_template.get("rrf_score"),
+        }
+        vrti_postgres_sql = _fallback_vrti_postgres_sql(clean_q, canonical_townland)
+        vrti_query_meta = {"provider": "phase4_embedding", "model": "tfidf_rrf", "mode": "template_fast_lane"}
+        chart_hint = VERIFIED_ANALYSIS_CHART_HINTS.get(_p4_tid)
+        query_provenance.update({
+            "strategy": "phase4_template_fast_lane",
+            "p4_template_id": _p4_tid,
+            "p4_cosine_score": _p4_template.get("cosine_score"),
+        })
+        ms = int((time.perf_counter() - t0) * 1000)
+        yield _sse(
+            "progress", stage="contacting_llm", status="completed", label="Contacting LLM",
+            detail=(
+                f"Phase 4 fast lane: template={_p4_tid} "
+                f"cosine={_p4_template.get('cosine_score', 0):.3f}"
+            ),
+            duration_ms=ms,
+        )
+    elif verified_analysis and not force_llm:
         sql = str(verified_analysis.get("sql") or "")
         llm_meta = dict(verified_analysis.get("meta") or {})
         vrti_postgres_sql = _fallback_vrti_postgres_sql(clean_q, canonical_townland)
@@ -1918,28 +2903,83 @@ def answer_question_stream(
         yield _sse("progress", stage="contacting_llm", status="completed", label="Contacting LLM",
                    detail=f"Reused approved query memory (similarity {direct_memory_match.get('match_score')})", duration_ms=ms)
     else:
-        yield _sse("progress", stage="contacting_llm", status="started", label="Contacting LLM",
-                   detail="Sending schema, live database context, and approved-query examples to the LLM…")
+        # ── Phase 5 — Intent router ───────────────────────────────────────────
+        # Classify before any LLM call so the right handler is chosen upfront.
+        # Fast-lane paths above (Phase 4, verified analysis, memory reuse, high-
+        # confidence semantic slot fill) bypass this block entirely.
         try:
-            # Run sequentially to avoid overloading small/free LLM providers
-            # with concurrent generations on the same request.
-            sql, llm_meta = _generate_sql(
-                clean_q,
-                _ANNOTATED_SCHEMA,
-                canonical_townland,
-                analysis=analysis,
-                approved_examples=approved_matches,
+            from backend.services.intent_router import (
+                classify_intent as _classify_intent_fn,
+                ANALYTICAL as _IR_ANALYTICAL,
+                RELATIONAL as _IR_RELATIONAL,
+                COMPARATIVE as _IR_COMPARATIVE,
             )
-            vrti_postgres_sql, vrti_query_meta = _generate_vrti_postgres_query(clean_q, canonical_townland)
-            query_provenance["strategy"] = "validated_sql_unavailable" if llm_meta.get("mode") == "no_validated_sql" else "llm_sql"
-            ms = int((time.perf_counter() - t0) * 1000)
-            yield _sse("progress", stage="contacting_llm", status="completed", label="Contacting LLM",
-                       detail=(
-                           f"Local: {llm_meta.get('mode')} | "
-                           f"VRTI: {vrti_query_meta.get('mode')} | "
-                           f"Model: {llm_meta.get('model')}"
-                       ),
-                       duration_ms=ms)
+            _intent_route = _classify_intent_fn(clean_q, analysis, _semantic_slot_fill)
+        except Exception as _ir_exc:
+            log.debug("ask_service.intent_router_failed error=%s", _ir_exc)
+            _intent_route = "fallback"
+
+        query_provenance["intent_route"] = _intent_route
+        # RELATIONAL and COMPARATIVE both require Phase 3 subgraph activation.
+        _force_subgraph = _intent_route in {"relational", "comparative"}
+        if _intent_route == "comparative":
+            query_provenance["phase6_fusion"] = True
+
+        yield _sse(
+            "progress", stage="contacting_llm", status="started", label="Contacting LLM",
+            detail=f"Route: {_intent_route} — preparing query…",
+        )
+        try:
+            _llm_slot_sql: str | None = None
+
+            # ANALYTICAL route — Phase 2: try LLM slot-fill for structured SQL.
+            if _intent_route == "analytical" and _semantic_slot_fill is not None:
+                try:
+                    _sf_prompt = _build_slot_fill_prompt(clean_q, analysis, townland_resolution)
+                    _sf_raw, _sf_meta = _llm_generate(_sf_prompt, purpose="slot_fill", max_tokens=256, temperature=0.0)
+                    _sf_parsed = _parse_slot_fill(_sf_raw, clean_q)
+                    if _sf_parsed and _sf_parsed.confidence >= 0.70:
+                        _llm_slot_sql = _compile_semantic_sql(_sf_parsed, _clearances_count_column())
+                        if _llm_slot_sql:
+                            sql = _llm_slot_sql
+                            llm_meta = _slot_fill_meta(_sf_parsed, sql)
+                            llm_meta["llm_provider"] = _sf_meta.get("provider")
+                            llm_meta["llm_model"] = _sf_meta.get("model")
+                            vrti_postgres_sql = _fallback_vrti_postgres_sql(clean_q, canonical_townland)
+                            vrti_query_meta = {"provider": "semantic_layer", "model": "llm_slot_fill", "mode": "semantic_layer"}
+                            query_provenance["strategy"] = "semantic_layer_llm"
+                            ms = int((time.perf_counter() - t0) * 1000)
+                            yield _sse("progress", stage="contacting_llm", status="completed",
+                                       label="Contacting LLM",
+                                       detail=f"Phase 2 slot-fill [{_intent_route}]: {_sf_parsed.metric} confidence={_sf_parsed.confidence:.2f}",
+                                       duration_ms=ms)
+                except Exception as _sf_exc:
+                    log.debug("ask_service.llm_slot_fill_failed error=%s", _sf_exc)
+
+            if not _llm_slot_sql:
+                # RELATIONAL → Phase 3 handles KG context; use Phase 7 free-form SQL.
+                # COMPARATIVE → Phase 7 SQL + Phase 3 KG, fused in Phase 6 rewrite.
+                # ANALYTICAL (slot-fill miss) / FALLBACK → Phase 7 free-form SQL.
+                _few_shot = _p4_memory if _p4_memory else approved_matches
+                sql, llm_meta = _generate_sql(
+                    clean_q,
+                    _ANNOTATED_SCHEMA,
+                    canonical_townland,
+                    analysis=analysis,
+                    approved_examples=_few_shot,
+                )
+                vrti_postgres_sql, vrti_query_meta = _generate_vrti_postgres_query(clean_q, canonical_townland)
+                query_provenance["strategy"] = (
+                    "validated_sql_unavailable" if llm_meta.get("mode") == "no_validated_sql" else "llm_sql"
+                )
+                ms = int((time.perf_counter() - t0) * 1000)
+                yield _sse("progress", stage="contacting_llm", status="completed", label="Contacting LLM",
+                           detail=(
+                               f"Phase 7 [{_intent_route}]: {llm_meta.get('mode')} | "
+                               f"VRTI: {vrti_query_meta.get('mode')} | "
+                               f"Model: {llm_meta.get('model')}"
+                           ),
+                           duration_ms=ms)
         except Exception as exc:
             ms = int((time.perf_counter() - t0) * 1000)
             if ASK_ALLOW_HEURISTIC_FALLBACK:
@@ -2034,6 +3074,59 @@ def answer_question_stream(
         vrti_detail += f" | {parish_count} Wicklow parishes"
     yield _sse("progress", stage="querying_vrti_graph", status="completed", label="Querying VRTI Graph",
                detail=vrti_detail, duration_ms=ms)
+
+    # ── Phase 3 — Subgraph retrieval (relational / multi-hop / heritage) ─────
+    # Activates when Phase 5 router classified the question as RELATIONAL or
+    # COMPARATIVE (_force_subgraph=True), or when is_subgraph_question() detects
+    # relational/heritage signals independently (existing fast-lane paths).
+    # Core Rule 1: never used to answer count/aggregate questions.
+    _phase3_result = None
+    try:
+        from backend.services.subgraph_engine import (
+            is_subgraph_question as _is_subgraph_q,
+            retrieve_subgraph as _retrieve_subgraph,
+        )
+        if _force_subgraph or _is_subgraph_q(clean_q, analysis, _semantic_slot_fill):
+            t0 = time.perf_counter()
+            yield _sse(
+                "progress", stage="querying_subgraph", status="started",
+                label="Subgraph Retrieval",
+                detail="Expanding knowledge graph neighbourhood for relational context…",
+            )
+            _phase3_result = _retrieve_subgraph(
+                clean_q, analysis, townland_resolution,
+                sources=("vrti", "graphdb"),
+            )
+            if _phase3_result and _phase3_result.linearized:
+                if kg_context is None:
+                    kg_context = {}
+                kg_context["subgraph_linearized"] = _phase3_result.linearized
+            ms = int((time.perf_counter() - t0) * 1000)
+            _p3_src = ", ".join(_phase3_result.sources_used) if _phase3_result else "none"
+            _p3_detail = (
+                f"Subgraph from {_p3_src} · "
+                f"{_phase3_result.k_hops} hop(s)"
+                + (", pruned" if _phase3_result and _phase3_result.pruned else "")
+                + f" · type: {_phase3_result.question_type}"
+            ) if _phase3_result else "No subgraph retrieved"
+            yield _sse(
+                "progress", stage="querying_subgraph", status="completed",
+                label="Subgraph Retrieval", detail=_p3_detail, duration_ms=ms,
+            )
+    except Exception as _p3_exc:
+        log.debug("ask_service.phase3_failed error=%s", _p3_exc)
+
+    # ── Phase 6 — Fusion annotation for COMPARATIVE questions ────────────────
+    # When the router flagged a COMPARATIVE intent and Phase 3 produced subgraph
+    # context, annotate kg_context so the LLM rewrite synthesises both sources.
+    if _intent_route == "comparative" and _phase3_result and _phase3_result.linearized:
+        if kg_context is None:
+            kg_context = {}
+        kg_context["phase6_fusion_note"] = (
+            "This is a comparative question. The SQLite estate records provide counts "
+            "and statistics; the VRTI knowledge graph subgraph provides qualitative and "
+            "relational context. Synthesise both in your answer."
+        )
 
     # ── Stage 4.5 — Querying GraphDB (RDF/KG comparison) ─────────────────
     from backend.integrations import graphdb_sparql as _gdb
@@ -2140,6 +3233,41 @@ def answer_question_stream(
         yield _sse("progress", stage="querying_graphdb", status="completed", label="Querying GraphDB",
                    detail=gdb_detail, duration_ms=total_ms)
 
+    # ── Phase 6 — Fusion & reconciliation ────────────────────────────────────
+    # Align SQLite, GraphDB, and VRTI results on the resolved entity; detect
+    # agreement vs. discrepancy on shared metrics; annotate rows with source
+    # provenance. Directly serves the dissertation objective of comparing the
+    # purpose-built co: estate graph against VRTI's general-purpose place graph.
+    t0 = time.perf_counter()
+    yield _sse("progress", stage="querying_fusion", status="started",
+               label="Reconciling Sources",
+               detail="Aligning SQLite, GraphDB, and VRTI results on resolved entity…")
+    fusion_result = _fuse_lanes(
+        sqlite_rows=rows,
+        sqlite_columns=columns,
+        graphdb_rows=graph_comparison.get("rows", []),
+        graphdb_columns=graph_comparison.get("columns", []),
+        vrti_rows=vrti_rows,
+        canonical_townland=canonical_townland,
+        entity_resolution=townland_resolution.get("entity_resolution"),
+        question=clean_q,
+    )
+    if fusion_result["discrepancies"]:
+        if kg_context is None:
+            kg_context = {}
+        kg_context["phase6_discrepancies"] = fusion_result["discrepancies"]
+        kg_context["phase6_fusion_text"] = fusion_result["fusion_text"]
+    ms = int((time.perf_counter() - t0) * 1000)
+    if fusion_result["discrepancy_count"] or fusion_result["agreement_count"]:
+        _f_detail = (
+            f"{fusion_result['discrepancy_count']} discrepancy(ies) · "
+            f"{fusion_result['agreement_count']} agreement(s)"
+        )
+    else:
+        _f_detail = "No numeric overlap between sources to compare"
+    yield _sse("progress", stage="querying_fusion", status="completed",
+               label="Reconciling Sources", detail=_f_detail, duration_ms=ms)
+
     # ── Stage 5 — Preparing Output ────────────────────────────────────────
     t0 = time.perf_counter()
     yield _sse("progress", stage="preparing_output", status="started", label="Preparing Output",
@@ -2229,6 +3357,12 @@ def answer_question_stream(
         "related_insights": related_insights,
         "chart": chart_spec,
         "query_provenance": query_provenance,
+        "discrepancies": fusion_result["discrepancies"],
+        "fusion": {
+            "discrepancy_count": fusion_result["discrepancy_count"],
+            "agreement_count": fusion_result["agreement_count"],
+            "fusion_text": fusion_result["fusion_text"],
+        },
     }
 
     pdf_path = _write_pdf_report(
@@ -2265,6 +3399,8 @@ def answer_question_stream(
         "vrti_query_generation": vrti_query_meta,
         "townland_context": canonical_townland,
         "townland_resolution": townland_resolution,
+        # Phase 1 — shared entity resolution (sql_id + kg_uri available to all lanes)
+        "entity_resolution": townland_resolution.get("entity_resolution"),
         "kg_context": kg_context,
         "availability": availability,
         "related_insights": related_insights,
@@ -2276,6 +3412,26 @@ def answer_question_stream(
         "warnings": warnings,
         "source_tables": _extract_tables(safe_sql) if safe_sql else [],
         "graph_comparison": graph_comparison,
+        # Phase 6 — fusion & reconciliation
+        "discrepancies": fusion_result["discrepancies"],
+        "fusion": {
+            "discrepancy_count": fusion_result["discrepancy_count"],
+            "agreement_count": fusion_result["agreement_count"],
+            "entity_label": fusion_result["entity_label"],
+            "kg_uri": fusion_result["kg_uri"],
+            "fusion_text": fusion_result["fusion_text"],
+            "source_provenance": fusion_result["source_provenance"],
+        },
+        "subgraph_context": {
+            "linearized":     _phase3_result.linearized,
+            "hierarchy":      _phase3_result.hierarchy,
+            "siblings":       _phase3_result.siblings,
+            "external_links": _phase3_result.external_links,
+            "sources_used":   _phase3_result.sources_used,
+            "question_type":  _phase3_result.question_type,
+            "k_hops":         _phase3_result.k_hops,
+            "pruned":         _phase3_result.pruned,
+        } if _phase3_result else None,
     }
     if include_sql:
         payload["sql"] = safe_sql
@@ -3384,6 +4540,140 @@ Be direct and factual. If the SPARQL query uses a property that looks like a SQL
     except Exception as exc:
         log.debug("ask_service.mismatch_explanation_failed error=%s", exc)
         return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 6 — Fusion & reconciliation helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _infer_metric_name(columns: list, row: dict) -> str | None:
+    """Return a human-readable metric name from the first numeric column."""
+    for col in columns:
+        val = row.get(col)
+        if val is None:
+            continue
+        try:
+            float(val)
+            return col.replace("_", " ").lower()
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
+def _infer_discrepancy_cause(delta: float, sqlite_val: float, gdb_val: float) -> str:
+    pct = (delta / max(abs(sqlite_val), abs(gdb_val), 1)) * 100
+    if pct < 5:
+        return "likely differing record scope (minor: < 5% difference)"
+    elif pct < 20:
+        return "moderate divergence — possible partial RDF uplift or alternate property path in SPARQL"
+    else:
+        return "substantial divergence — likely schema mismatch or incomplete data loading in GraphDB"
+
+
+def _build_fusion_text(discrepancies: list[dict[str, Any]]) -> str:
+    """Build a citation-ready sentence for each detected discrepancy."""
+    parts = []
+    for d in discrepancies:
+        s_val = d["sqlite_value"]
+        g_val = d["graphdb_value"]
+        metric = d["metric"]
+        delta = d["delta"]
+        cause = d["likely_cause"]
+        entity = d["entity"]
+
+        def _fmt(v: float) -> str:
+            return str(int(v)) if isinstance(v, float) and v == int(v) else str(v)
+
+        parts.append(
+            f"SQLite records {_fmt(s_val)} {metric} for {entity}; "
+            f"the Coolattin RDF graph (GraphDB) attributes {_fmt(g_val)} — "
+            f"a discrepancy of {_fmt(delta)}, {cause}."
+        )
+    return " ".join(parts)
+
+
+def _fuse_lanes(
+    sqlite_rows: list,
+    sqlite_columns: list,
+    graphdb_rows: list,
+    graphdb_columns: list,
+    vrti_rows: list,
+    canonical_townland: str | None,
+    entity_resolution: dict | None,
+    question: str,
+) -> dict[str, Any]:
+    """
+    Phase 6: align results from all lanes on the resolved entity, detect
+    agreement vs. discrepancy on shared metrics, and annotate rows with
+    per-source provenance.
+    """
+    entity_label = (
+        (entity_resolution or {}).get("sql_id") or canonical_townland or "unknown entity"
+    )
+    kg_uri = (entity_resolution or {}).get("kg_uri")
+    discrepancies: list[dict[str, Any]] = []
+    agreement_count = 0
+
+    sqlite_provenance = [{"source": "sqlite", "entity": entity_label, "kg_uri": None}
+                         for _ in sqlite_rows]
+    graphdb_provenance = [{"source": "graphdb", "entity": entity_label, "kg_uri": kg_uri}
+                          for _ in graphdb_rows]
+    vrti_provenance = [{"source": "vrti", "entity": entity_label, "kg_uri": kg_uri}
+                       for _ in vrti_rows]
+
+    # Aggregate comparison: both sources returned exactly one numeric row
+    sqlite_val = _first_numeric(sqlite_rows[0]) if len(sqlite_rows) == 1 else None
+    gdb_val = _first_numeric(graphdb_rows[0]) if len(graphdb_rows) == 1 else None
+
+    if sqlite_val is not None and gdb_val is not None:
+        delta = abs(sqlite_val - gdb_val)
+        if delta == 0:
+            agreement_count += 1
+        else:
+            metric = _infer_metric_name(sqlite_columns, sqlite_rows[0]) or "count"
+            discrepancies.append({
+                "metric": metric,
+                "entity": entity_label,
+                "kg_uri": kg_uri,
+                "sqlite_value": sqlite_val,
+                "vrti_value": None,
+                "graphdb_value": gdb_val,
+                "delta": delta,
+                "likely_cause": _infer_discrepancy_cause(delta, sqlite_val, gdb_val),
+            })
+    elif len(sqlite_rows) > 1 and len(graphdb_rows) > 1:
+        # List comparison: compare row counts
+        s_count = len(sqlite_rows)
+        g_count = len(graphdb_rows)
+        if s_count == g_count:
+            agreement_count += 1
+        else:
+            discrepancies.append({
+                "metric": "record count",
+                "entity": entity_label,
+                "kg_uri": kg_uri,
+                "sqlite_value": float(s_count),
+                "vrti_value": None,
+                "graphdb_value": float(g_count),
+                "delta": float(abs(s_count - g_count)),
+                "likely_cause": "differing record scope or incomplete RDF uplift",
+            })
+
+    fusion_text = _build_fusion_text(discrepancies)
+
+    return {
+        "discrepancies": discrepancies,
+        "agreement_count": agreement_count,
+        "discrepancy_count": len(discrepancies),
+        "entity_label": entity_label,
+        "kg_uri": kg_uri,
+        "source_provenance": {
+            "sqlite": sqlite_provenance,
+            "graphdb": graphdb_provenance,
+            "vrti": vrti_provenance,
+        },
+        "fusion_text": fusion_text,
+    }
 
 
 def _build_sql_prompt(
@@ -5960,6 +7250,8 @@ def _build_rephrase_prompt(
     townland_names = [t.get("name") for t in (kg_context or {}).get("townlands", [])[:3] if t.get("name")]
     key_stats = summary_block.get("stats", {})
     fuzzy_note = (supporting_context or {}).get("fuzzy_match_note", "")
+    # Phase 3 subgraph context injected into kg_context by the SSE pipeline
+    subgraph_linearized = (kg_context or {}).get("subgraph_linearized", "")
 
     prompt_payload = {
         "question": question,
@@ -5974,6 +7266,33 @@ def _build_rephrase_prompt(
         " State the total count and give 1–2 representative examples at most."
         if row_count > 10 else ""
     )
+    # Subgraph context block — present only for relational / hierarchy questions
+    kg_block = (
+        f"\n\nKNOWLEDGE GRAPH CONTEXT (administrative hierarchy and place "
+        f"relationships retrieved by subgraph traversal — use for qualitative "
+        f"and relational answers; do NOT use to produce counts or statistics):\n"
+        f"{subgraph_linearized}"
+        if subgraph_linearized else ""
+    )
+    kg_rule = (
+        "\n- If KNOWLEDGE GRAPH CONTEXT is present, use it to answer relational or"
+        " hierarchy questions. Never use it to produce counts or numbers."
+        if subgraph_linearized else ""
+    )
+    # Phase 6 fusion: cite detected discrepancies explicitly; for COMPARATIVE
+    # questions without numeric discrepancies, note that both sources contributed.
+    fusion_note = (kg_context or {}).get("phase6_fusion_note", "")
+    fusion_text = (kg_context or {}).get("phase6_fusion_text", "")
+    discrepancy_rule = (
+        f"\n- SOURCE DISCREPANCY DETECTED — you MUST state this in your answer: {fusion_text}"
+        f" Attribute the exact figures to each source (SQLite estate records vs Coolattin RDF graph)."
+        if fusion_text else ""
+    )
+    fusion_rule = (
+        f"\n- COMPARATIVE question (Phase 6 fusion): {fusion_note}"
+        if fusion_note and not fusion_text else ""
+    )
+    source_rules = fusion_rule + discrepancy_rule
     return f"""Rephrase this historical archive result in 1–3 sentences of plain English.
 
 Rules:
@@ -5981,10 +7300,10 @@ Rules:
 - Keep every number identical to data_backed_answer.
 - If data is unavailable, say so in one sentence.
 - If a townland was fuzzy-matched, name which one was used.
-- No markdown, no bullet points, no SQL, no preamble. Plain prose only.{list_note}
+- No markdown, no bullet points, no SQL, no preamble. Plain prose only.{list_note}{kg_rule}{source_rules}
 
 DATA:
-{json.dumps(prompt_payload, ensure_ascii=False, default=str)}
+{json.dumps(prompt_payload, ensure_ascii=False, default=str)}{kg_block}
 
 Answer (1–3 sentences):""".strip()
 
@@ -6298,6 +7617,26 @@ def _townland_resolution_payload(
     }
     if warning:
         payload["warning"] = warning
+
+    # Phase 1 — enrich with sql_id + kg_uri from shared entity resolver.
+    # This ensures every downstream lane (SQL compiler, SPARQL engine,
+    # fusion reconciler) references the same resolved entity.
+    try:
+        from backend.services.entity_resolver import resolve_entity as _re
+        er = _re(match.get("name") or "", "townland")
+        payload["sql_id"] = er.sql_id
+        payload["kg_uri"] = er.kg_uri or match.get("kg_uri")
+        payload["entity_resolution"] = {
+            "sql_id": er.sql_id,
+            "kg_uri": er.kg_uri,
+            "confidence": er.confidence,
+            "match_type": er.match_type,
+        }
+    except Exception as _er_exc:
+        log.debug("ask_service.entity_resolver_skipped error=%s", _er_exc)
+        payload["sql_id"] = None
+        payload["kg_uri"] = None
+
     return payload
 
 

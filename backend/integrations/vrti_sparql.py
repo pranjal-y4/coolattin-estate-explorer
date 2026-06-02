@@ -76,6 +76,7 @@ class TownlandDTO:
     vrti_id: Optional[str] = None
     images: list = field(default_factory=list)    # image URLs from KG
     links: list = field(default_factory=list)     # external links (logainm, townlands.ie)
+    centroid_flag: Optional[str] = None           # set when coordinate swap-check fails
 
     def to_dict(self) -> dict:
         return {
@@ -112,27 +113,38 @@ class CensusRecordDTO:
 # Internal helpers                                                     #
 # ------------------------------------------------------------------ #
 
-def _parse_point_wkt(wkt: Optional[str]) -> tuple[Optional[float], Optional[float]]:
-    """Parse VRTI centroid WKT → (lat, lon).
-    The VRTI KG stores centroids as POINT(lat lon) — not standard GeoSPARQL
-    lon-lat order, but verified empirically against known Irish coordinates."""
+def _parse_point_wkt(
+    wkt: Optional[str],
+) -> tuple[Optional[float], Optional[float], Optional[str]]:
+    """
+    Parse VRTI centroid WKT → (lat, lon, flag).
+
+    The VRTI KG stores centroids as POINT(lat lon) — empirically confirmed
+    as lat-first, which is non-standard GeoSPARQL (lon-first) order.
+
+    Returns (lat, lon, None) on success.
+    Returns (None, None, flag_reason) when both coordinate orderings fail
+    the Ireland sanity check; the caller should write the flag to geometry_flag
+    rather than silently discarding the centroid.
+    """
     if not wkt:
-        return None, None
+        return None, None, None
     try:
         inner = wkt.strip().upper().replace("POINT(", "").replace(")", "")
         parts = inner.split()
         if len(parts) == 2:
-            lat, lon = float(parts[0]), float(parts[1])
-            # Sanity check: Ireland is ~51-55°N, 5-10°W
-            if 51.0 <= lat <= 55.5 and -11.0 <= lon <= -5.0:
-                return lat, lon
-            # Try swapped if sanity check fails
-            lat2, lon2 = float(parts[1]), float(parts[0])
-            if 51.0 <= lat2 <= 55.5 and -11.0 <= lon2 <= -5.0:
-                return lat2, lon2
-    except (ValueError, AttributeError):
-        pass
-    return None, None
+            a, b = float(parts[0]), float(parts[1])
+            # Ireland: 51–55.5°N, 5–11°W
+            if 51.0 <= a <= 55.5 and -11.0 <= b <= -5.0:
+                return a, b, None
+            if 51.0 <= b <= 55.5 and -11.0 <= a <= -5.0:
+                return b, a, None
+            flag = f"coordinate_out_of_range:({a:.4f},{b:.4f})"
+            log.warning("vrti_sparql._parse_point_wkt | %s wkt=%s", flag, wkt)
+            return None, None, flag
+    except (ValueError, AttributeError) as exc:
+        return None, None, f"wkt_parse_error:{exc}"
+    return None, None, "unknown_point_format"
 
 
 def _execute(query: str) -> list[dict]:
@@ -443,7 +455,7 @@ def get_townland_details_by_name(
     else:
         chosen_county = next(iter(chosen["counties"]), None)
 
-    lat, lon = _parse_point_wkt(chosen["centroid_wkt"])
+    lat, lon, centroid_flag = _parse_point_wkt(chosen["centroid_wkt"])
 
     dto = TownlandDTO(
         uri=chosen["uri"],
@@ -461,6 +473,7 @@ def get_townland_details_by_name(
         vrti_id=chosen["vrti_id"],
         images=sorted(chosen["images"]),
         links=sorted(chosen["links"]),
+        centroid_flag=centroid_flag,
     )
     log.info(
         "vrti_sparql.get_townland_details_by_name | name=%s county=%s centroid=(%s,%s) images=%d",
@@ -660,6 +673,143 @@ def get_parish_names(
     except Exception as exc:
         log.warning("vrti_sparql.get_parish_names county=%s failed: %s", county, exc)
         return []
+
+
+def get_place_hierarchy(entity_uri: str) -> dict:
+    """
+    Fetch the administrative hierarchy for a single townland URI.
+
+    Returns {townland_name, parish, barony, county} — any value may be None
+    if the KG does not contain that level for this entity.
+
+    Used by: subgraph_engine (Phase 3 hierarchy traversal)
+    """
+    query = f"""
+    SELECT ?townlandName ?parish ?barony ?county
+    WHERE {{
+      GRAPH <{PRESENT_DAY_PLACES_GRAPH}> {{
+        OPTIONAL {{
+          <{entity_uri}> rdfs:label ?townlandName .
+          FILTER(langMatches(lang(?townlandName), "en"))
+        }}
+        OPTIONAL {{
+          <{entity_uri}> crm:P89_falls_within ?parishPlace .
+          ?parishPlace crm:P2_has_type vrti:PresentDayParish ;
+                       rdfs:label ?parish .
+          FILTER(langMatches(lang(?parish), "en"))
+          OPTIONAL {{
+            ?parishPlace crm:P89_falls_within ?baronPlace .
+            ?baronPlace crm:P2_has_type vrti:PresentDayBarony ;
+                        rdfs:label ?barony .
+            FILTER(langMatches(lang(?barony), "en"))
+            OPTIONAL {{
+              ?baronPlace crm:P89_falls_within ?countyPlace .
+              ?countyPlace rdfs:label ?county .
+              FILTER(langMatches(lang(?county), "en"))
+            }}
+          }}
+        }}
+      }}
+    }}
+    LIMIT 5
+    """
+    try:
+        bindings = _execute(query)
+        if not bindings:
+            return {}
+        b = bindings[0]
+        return {
+            "townland_name": _val(b, "townlandName"),
+            "parish":        _val(b, "parish"),
+            "barony":        _val(b, "barony"),
+            "county":        _val(b, "county"),
+        }
+    except Exception:
+        log.warning("vrti_sparql.get_place_hierarchy | uri=%s failed", entity_uri)
+        return {}
+
+
+def get_sibling_townlands(entity_uri: str, limit: int = 20) -> list[dict]:
+    """
+    Fetch townlands that share the same civil parish as entity_uri.
+    This is a 2-hop traversal: townland → parish ← sibling.
+
+    Returns [{name, uri}] sorted alphabetically.
+
+    Used by: subgraph_engine (Phase 3 — same-parish neighbourhood)
+    """
+    query = f"""
+    SELECT DISTINCT ?sibling ?siblingName
+    WHERE {{
+      GRAPH <{PRESENT_DAY_PLACES_GRAPH}> {{
+        <{entity_uri}> crm:P89_falls_within ?parish .
+        ?sibling crm:P89_falls_within ?parish ;
+                 crm:P2_has_type vrti:PresentDayTownland ;
+                 rdfs:label ?siblingName .
+        FILTER(langMatches(lang(?siblingName), "en"))
+        FILTER(?sibling != <{entity_uri}>)
+      }}
+    }}
+    ORDER BY ?siblingName
+    LIMIT {limit}
+    """
+    try:
+        bindings = _execute(query)
+        return [
+            {"name": _val(b, "siblingName"), "uri": _val(b, "sibling")}
+            for b in bindings
+            if _val(b, "siblingName")
+        ]
+    except Exception:
+        log.warning("vrti_sparql.get_sibling_townlands | uri=%s failed", entity_uri)
+        return []
+
+
+def get_external_links(entity_uri: str) -> dict:
+    """
+    Fetch external identifiers and reference links for an entity URI.
+
+    Returns {osm_id, osi_id, vrti_id, links: list[str]}.
+    All values default to None / [] if not found.
+
+    Used by: subgraph_engine (Phase 3 — external provenance)
+    """
+    query = f"""
+    SELECT ?pred ?obj
+    WHERE {{
+      GRAPH <{PRESENT_DAY_PLACES_GRAPH}> {{
+        <{entity_uri}> ?pred ?obj .
+        FILTER(?pred IN (
+          vrti:OsmIdentifier,
+          vrti:OsiIdentifier,
+          vrti:VrtiIdentifier,
+          crm:P67i_is_referred_to_by,
+          crm:P71i_is_listed_in
+        ))
+        FILTER(!isBlank(?obj))
+      }}
+    }}
+    LIMIT 20
+    """
+    result: dict = {"osm_id": None, "osi_id": None, "vrti_id": None, "links": []}
+    try:
+        bindings = _execute(query)
+        for b in bindings:
+            pred = _val(b, "pred") or ""
+            obj  = _val(b, "obj") or ""
+            if not obj:
+                continue
+            if "OsmIdentifier" in pred:
+                result["osm_id"] = obj
+            elif "OsiIdentifier" in pred:
+                result["osi_id"] = obj
+            elif "VrtiIdentifier" in pred:
+                result["vrti_id"] = obj
+            elif obj not in result["links"]:
+                result["links"].append(obj)
+    except Exception:
+        log.warning("vrti_sparql.get_external_links | uri=%s failed", entity_uri)
+    return result
 
 
 def probe_endpoint() -> bool:
