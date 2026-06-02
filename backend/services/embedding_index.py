@@ -345,3 +345,214 @@ _INDEX = EmbeddingIndex()
 
 def get_index() -> EmbeddingIndex:
     return _INDEX
+
+
+# ── Part B: Voyage-powered hybrid chunk retrieval ────────────────────────────
+# Separate from the template index above.  Retrieves over verbalised person /
+# place / community chunks built by voyage_embeddings.build_*_passport().
+#
+# The sparse hard filter (required_keywords) is kept as a precision floor;
+# Voyage dense scores add recall for variant phrasings.
+#
+# Chunk store: module-level list of {"id", "text", "embedding", "metadata"}.
+# Rebuilt by refresh_chunk_index() which is called on the ingest cadence.
+
+_chunk_lock = threading.Lock()
+_CHUNKS: list[dict[str, Any]] = []
+_CHUNKS_BUILT_AT: float = 0.0
+_CHUNKS_TTL: float = 3600.0  # rebuild at most once per hour
+
+
+def refresh_chunk_index(force: bool = False) -> int:
+    """
+    Build or refresh the Voyage chunk index from the live database.
+    Returns the number of chunks indexed.
+    Called lazily on first retrieve_chunks() call and forced on ingest.
+    """
+    global _CHUNKS_BUILT_AT
+
+    now = time.time()
+    with _chunk_lock:
+        if not force and _CHUNKS and (now - _CHUNKS_BUILT_AT) < _CHUNKS_TTL:
+            return len(_CHUNKS)
+
+    try:
+        from backend.services.voyage_embeddings import embed_documents
+        from extensions import get_db_conn
+
+        chunks: list[dict[str, Any]] = []
+        conn = get_db_conn()
+        try:
+            # Place passports — one per townland
+            tl_rows = conn.execute(
+                """SELECT name, name_gaelic, civil_parish, barony, county,
+                          description, id
+                   FROM townland WHERE name IS NOT NULL LIMIT 500"""
+            ).fetchall()
+            for row in tl_rows:
+                stats_row = conn.execute(
+                    """SELECT SUM(cr.count) AS evictions,
+                              (SELECT total FROM census_record
+                               WHERE townland_id=? AND year=1851 LIMIT 1) AS pop_1851
+                       FROM clearances_record cr WHERE cr.townland_id=?""",
+                    (row["id"], row["id"]),
+                ).fetchone()
+                from backend.services.voyage_embeddings import build_place_passport
+                stats = {}
+                if stats_row:
+                    if stats_row["pop_1851"]:
+                        stats["population_1851"] = stats_row["pop_1851"]
+                    if stats_row["evictions"]:
+                        stats["total_evictions"] = stats_row["evictions"]
+                text = build_place_passport(
+                    name=row["name"],
+                    civil_parish=row["civil_parish"],
+                    barony=row["barony"],
+                    county=row["county"],
+                    description=row["description"],
+                    stats=stats,
+                )
+                chunks.append({
+                    "id": f"place:{row['name'].upper()}",
+                    "text": text,
+                    "metadata": {
+                        "type": "place",
+                        "name": row["name"],
+                        "civil_parish": row["civil_parish"],
+                    },
+                })
+
+            # Community summaries — one per civil_parish
+            parish_rows = conn.execute(
+                """SELECT t.civil_parish,
+                          COUNT(DISTINCT t.id) AS tl_count,
+                          SUM(cr.count) AS total_evictions,
+                          MIN(cr.year) AS min_year, MAX(cr.year) AS max_year
+                   FROM townland t
+                   LEFT JOIN clearances_record cr ON cr.townland_id = t.id
+                   WHERE t.civil_parish IS NOT NULL
+                   GROUP BY t.civil_parish"""
+            ).fetchall()
+            for pr in parish_rows:
+                emig_row = conn.execute(
+                    """SELECT COUNT(DISTINCT u.record_id) AS n
+                       FROM unified_record u
+                       WHERE u.has_emigration_record=1 AND u.parish=?""",
+                    (pr["civil_parish"],),
+                ).fetchone()
+                from backend.services.voyage_embeddings import build_community_summary
+                yr = (pr["min_year"], pr["max_year"]) if pr["min_year"] else None
+                text = build_community_summary(
+                    parish=pr["civil_parish"],
+                    townland_count=pr["tl_count"] or 0,
+                    total_emigrants=(emig_row["n"] if emig_row else 0),
+                    total_evictions=int(pr["total_evictions"] or 0),
+                    year_range=yr,
+                )
+                chunks.append({
+                    "id": f"community:{pr['civil_parish'].upper()}",
+                    "text": text,
+                    "metadata": {"type": "community", "civil_parish": pr["civil_parish"]},
+                })
+        finally:
+            conn.close()
+
+        if not chunks:
+            log.warning("embedding_index.chunk_refresh: no chunks built")
+            return 0
+
+        texts = [c["text"] for c in chunks]
+        embeddings = embed_documents(texts)
+
+        if len(embeddings) == len(chunks):
+            for c, vec in zip(chunks, embeddings):
+                c["embedding"] = vec
+        else:
+            log.warning(
+                "embedding_index.chunk_refresh: embedding count mismatch chunks=%d embeddings=%d",
+                len(chunks), len(embeddings),
+            )
+            for c in chunks:
+                c["embedding"] = []
+
+        with _chunk_lock:
+            _CHUNKS.clear()
+            _CHUNKS.extend(chunks)
+            _CHUNKS_BUILT_AT = time.time()
+
+        log.info("embedding_index.chunk_refresh: indexed %d chunks", len(chunks))
+        return len(chunks)
+
+    except Exception as exc:
+        log.warning("embedding_index.chunk_refresh_failed error=%s", exc)
+        return 0
+
+
+def retrieve_chunks(
+    query: str,
+    top_k: int = 8,
+    required_keywords: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Hybrid chunk retrieval: Voyage dense + keyword sparse → RRF → top_k.
+
+    required_keywords: if provided, chunks must contain all keywords (sparse
+    hard filter; exact match against lowercase chunk text).
+    Returns a list of chunk dicts with added "voyage_score" and "rrf_score".
+    """
+    try:
+        from backend.services.voyage_embeddings import embed_query, rrf_fuse, cosine_similarity
+    except Exception as exc:
+        log.debug("embedding_index.retrieve_chunks: voyage unavailable error=%s", exc)
+        return []
+
+    # Lazy build
+    with _chunk_lock:
+        chunks = list(_CHUNKS)
+
+    if not chunks:
+        built = refresh_chunk_index()
+        if not built:
+            return []
+        with _chunk_lock:
+            chunks = list(_CHUNKS)
+
+    if not chunks:
+        return []
+
+    q_vec = embed_query(query)
+    if not q_vec:
+        return []
+
+    q_lower = query.lower()
+
+    # Dense ranking
+    dense_scored: list[tuple[float, dict]] = []
+    for chunk in chunks:
+        vec = chunk.get("embedding") or []
+        if not vec:
+            continue
+        score = cosine_similarity(q_vec, vec)
+        dense_scored.append((score, chunk))
+    dense_scored.sort(key=lambda x: x[0], reverse=True)
+    dense_ranked = [
+        {"id": c["id"], **c, "voyage_score": s}
+        for s, c in dense_scored
+    ]
+
+    # Sparse ranking: keyword count over chunk text
+    sparse_scored: list[tuple[float, dict]] = []
+    for chunk in chunks:
+        text_lower = chunk["text"].lower()
+        if required_keywords and not all(kw in text_lower for kw in required_keywords):
+            continue
+        kw_score = sum(1 for w in q_lower.split() if len(w) > 3 and w in text_lower)
+        sparse_scored.append((float(kw_score), chunk))
+    sparse_scored.sort(key=lambda x: x[0], reverse=True)
+    sparse_ranked = [{"id": c["id"], **c, "kw_score": s} for s, c in sparse_scored]
+
+    if not sparse_ranked and required_keywords:
+        return []
+
+    fused = rrf_fuse(dense_ranked, sparse_ranked)
+    return fused[:top_k]

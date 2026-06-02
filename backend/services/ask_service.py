@@ -98,6 +98,20 @@ ASK_USE_NEW_PIPELINE = os.environ.get(
     "ASK_USE_NEW_PIPELINE", ""
 ).strip().lower() in {"1", "true", "yes", "on"}
 
+# ── Claude (Anthropic) — Part D ───────────────────────────────────────────────
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6").strip()
+ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
+ANTHROPIC_API_VERSION = "2023-06-01"
+
+# ── Grok (xAI) — Part D ───────────────────────────────────────────────────────
+GROK_API_KEY = os.environ.get("GROK_API_KEY", "").strip()
+GROK_MODEL = os.environ.get("GROK_MODEL", "grok-3-mini").strip()
+GROK_BASE_URL = os.environ.get("GROK_BASE_URL", "https://api.x.ai/v1").rstrip("/")
+
+# Which model handles final answer synthesis: "claude" | "grok" | "openrouter" | "ollama"
+ASK_SYNTHESIS_MODEL = os.environ.get("ASK_SYNTHESIS_MODEL", "claude").strip().lower()
+
 _OPENROUTER_FREE_MODELS = [
     "openai/gpt-oss-20b:free",
     "openai/gpt-oss-120b:free",
@@ -2015,6 +2029,10 @@ def _orchestrated_pipeline_stream(
     # entity_resolver is called exactly once, inside _townland_resolution_payload,
     # and enriches the returned dict with sql_id + kg_uri so every downstream lane
     # references the same resolved entity without re-deriving it.
+    yield _sse(
+        "progress", stage="resolving_identity", status="started",
+        label="Resolving Entities", detail="Identifying entities in the question…",
+    )
     townland_resolution = _resolve_townland_context(question, townland_hint)
     canonical_townland = townland_resolution.get("name_norm")
     analysis = _analyse_question(question, canonical_townland or townland_hint)
@@ -2022,6 +2040,48 @@ def _orchestrated_pipeline_stream(
     if townland_resolution.get("warning"):
         warnings.append(str(townland_resolution["warning"]))
     warnings.extend(_question_data_coverage_warnings(question))
+
+    # Part A: Person identity resolution for surname questions
+    _person_identity_result: dict[str, Any] = {}
+    if analysis.get("surname"):
+        try:
+            from backend.services.identity_resolver import resolve_person_identity as _rpi
+            _pir = _rpi(analysis["surname"], townland_norm=canonical_townland)
+            _person_identity_result = {
+                "raw_name": _pir.raw_name,
+                "total_mentions": _pir.total_mentions,
+                "is_ambiguous": _pir.is_ambiguous,
+                "disambiguation_note": _pir.disambiguation_note,
+                "person_candidates": [
+                    {
+                        "person_id": c.person_id,
+                        "display_name": c.display_name,
+                        "confidence": c.confidence,
+                        "supporting_record_count": len(c.supporting_mention_ids),
+                        "may_be_confused_with": c.may_be_confused_with,
+                        "townland_norm": c.townland_norm,
+                        "year_range": list(c.year_range) if c.year_range else None,
+                    }
+                    for c in _pir.person_candidates
+                ],
+            }
+            if _pir.is_ambiguous and _pir.disambiguation_note:
+                warnings.append(_pir.disambiguation_note)
+        except Exception as _pir_exc:
+            log.debug("orchestrated_pipeline.person_identity_failed error=%s", _pir_exc)
+
+    yield _sse(
+        "progress", stage="resolving_identity", status="completed",
+        label="Resolving Entities",
+        detail=(
+            f"Townland: {canonical_townland or 'not found'}"
+            + (
+                f" · Person: {_person_identity_result.get('total_mentions', 0)} mention(s)"
+                + (" [ambiguous]" if _person_identity_result.get("is_ambiguous") else "")
+                if _person_identity_result else ""
+            )
+        ),
+    )
 
     # ── Phase 5: Intent classification ───────────────────────────────────────
     yield _sse(
@@ -2063,6 +2123,7 @@ def _orchestrated_pipeline_stream(
     vrti_query_meta: dict[str, Any] = {}
     chart_hint: str | None = None
     _phase3_result = None
+    _chunk_context: list[dict[str, Any]] = []   # Part C — set later
     # approved_matches needed by _execute_with_recovery and memory marking
     approved_matches: list[dict[str, Any]] = []
     direct_memory_match: dict[str, Any] | None = None
@@ -2189,6 +2250,62 @@ def _orchestrated_pipeline_stream(
                 )
         except Exception as _sg_exc:
             log.warning("orchestrated_pipeline.subgraph_failed error=%s", _sg_exc)
+
+    # ── Part C: Vector recall over verbalised chunks (RELATIONAL / COMPARATIVE / FALLBACK) ──
+    _chunk_context: list[dict[str, Any]] = []
+    if intent_route in (_RELATIONAL, _COMPARATIVE, "fallback"):
+        try:
+            yield _sse(
+                "progress", stage="retrieving_vectors", status="started",
+                label="Vector Recall", detail="Searching dense chunk index for matching context…",
+            )
+            _vt0 = time.perf_counter()
+            from backend.services.embedding_index import retrieve_chunks as _retrieve_chunks
+            _chunk_context = _retrieve_chunks(question, top_k=6)
+            _vms = int((time.perf_counter() - _vt0) * 1000)
+            yield _sse(
+                "progress", stage="retrieving_vectors", status="completed",
+                label="Vector Recall",
+                detail=f"{len(_chunk_context)} chunk(s) retrieved",
+                duration_ms=_vms,
+            )
+            # Rerank: Claude-based relevance pass when candidates > 3
+            if len(_chunk_context) > 3 and ANTHROPIC_API_KEY:
+                try:
+                    yield _sse(
+                        "progress", stage="reranking", status="started",
+                        label="Reranking", detail="Claude relevance pass on retrieved chunks…",
+                    )
+                    _rr_t0 = time.perf_counter()
+                    _chunk_texts = [c.get("text", "") for c in _chunk_context[:6]]
+                    _rerank_prompt = (
+                        f"Given the question: '{question}'\n\n"
+                        "Score each chunk 0–10 for relevance. Return a JSON array of integers, "
+                        "one per chunk, in the same order.\n\n"
+                        + "\n\n".join(f"CHUNK {i}: {t[:400]}" for i, t in enumerate(_chunk_texts))
+                    )
+                    _rr_text, _ = _llm_generate_claude(
+                        system_prompt="You are a relevance judge for a historical archive retrieval system.",
+                        user_content=_rerank_prompt,
+                        max_tokens=80,
+                        temperature=0.0,
+                    )
+                    # Parse scores and re-order
+                    import re as _re
+                    _scores = [int(x) for x in _re.findall(r"\d+", _rr_text)]
+                    if len(_scores) == len(_chunk_context):
+                        _ranked = sorted(zip(_scores, _chunk_context), key=lambda x: x[0], reverse=True)
+                        _chunk_context = [c for _, c in _ranked]
+                    _rr_ms = int((time.perf_counter() - _rr_t0) * 1000)
+                    yield _sse(
+                        "progress", stage="reranking", status="completed",
+                        label="Reranking", detail=f"Reranked {len(_chunk_context)} chunks",
+                        duration_ms=_rr_ms,
+                    )
+                except Exception as _rr_exc:
+                    log.debug("orchestrated_pipeline.rerank_failed error=%s", _rr_exc)
+        except Exception as _vc_exc:
+            log.debug("orchestrated_pipeline.vector_recall_failed error=%s", _vc_exc)
 
     # ── FALLBACK — old pipeline SQL paths (also used by RELATIONAL/COMPARATIVE for counts) ──
     # Activates when: (a) route=FALLBACK, (b) ANALYTICAL lane didn't produce SQL,
@@ -2586,13 +2703,54 @@ def _orchestrated_pipeline_stream(
         "provider": "none", "model": None, "mode": "not_requested",
     }
     try:
-        llm_rephrased_answer, llm_rewrite_meta = _generate_rephrased_answer(
+        # Part F — Claude synthesis when new pipeline is active
+        # Builds a structured payload so the answer leads with the direct result,
+        # cites provenance, surfaces disambiguation, and ends with next steps.
+        _chunk_summary = " ".join(c.get("text", "")[:300] for c in _chunk_context[:3]) if _chunk_context else ""
+        _graph_ctx_str = (kg_context or {}).get("subgraph_linearized", "") or _chunk_summary
+        _resolved_entities: list[dict[str, Any]] = []
+        if canonical_townland:
+            _re_entry: dict[str, Any] = {
+                "entity_type": "townland",
+                "label": townland_resolution.get("name"),
+                "sql_id": townland_resolution.get("sql_id"),
+                "kg_uri": townland_resolution.get("kg_uri"),
+            }
+            _resolved_entities.append(_re_entry)
+        if _person_identity_result:
+            _resolved_entities.append({
+                "entity_type": "person",
+                "raw_name": _person_identity_result.get("raw_name"),
+                "is_ambiguous": _person_identity_result.get("is_ambiguous"),
+                "candidates": _person_identity_result.get("person_candidates", []),
+                "disambiguation_note": _person_identity_result.get("disambiguation_note"),
+            })
+        _sql_result_for_synthesis: dict[str, Any] = {
+            "columns": columns,
+            "rows": rows[:20],
+            "row_count": len(rows),
+            "sql_used": safe_sql,
+        }
+        _discrepancies_for_synthesis = [
+            {
+                "metric": d.get("metric"),
+                "sql_value": d.get("sqlite_value"),
+                "graph_value": d.get("graphdb_value"),
+                "likely_reason": d.get("likely_reason") or d.get("likely_cause"),
+            }
+            for d in fusion_result.get("discrepancies", [])
+        ]
+        llm_rephrased_answer, llm_rewrite_meta = _claude_synthesize_answer(
             question=question,
-            actual_answer=actual_answer,
-            summary_block=summary_block,
-            data_context=llm_data_context,
-            supporting_context=supporting_context,
-            kg_context=kg_context,
+            resolved_entities=_resolved_entities,
+            sql_result=_sql_result_for_synthesis,
+            graph_context=_graph_ctx_str,
+            discrepancies=_discrepancies_for_synthesis,
+            provenance={
+                "townland_match_type": townland_resolution.get("match_type"),
+                "route": intent_route,
+                "sql_strategy": query_provenance.get("strategy"),
+            },
         )
         if llm_rephrased_answer:
             summary_block["llm_rephrased_text"] = llm_rephrased_answer
@@ -4578,7 +4736,7 @@ def _build_fusion_text(discrepancies: list[dict[str, Any]]) -> str:
         g_val = d["graphdb_value"]
         metric = d["metric"]
         delta = d["delta"]
-        cause = d["likely_cause"]
+        cause = d.get("likely_reason") or d.get("likely_cause", "")
         entity = d["entity"]
 
         def _fmt(v: float) -> str:
@@ -4639,6 +4797,7 @@ def _fuse_lanes(
                 "vrti_value": None,
                 "graphdb_value": gdb_val,
                 "delta": delta,
+                "likely_reason": _infer_discrepancy_cause(delta, sqlite_val, gdb_val),
                 "likely_cause": _infer_discrepancy_cause(delta, sqlite_val, gdb_val),
             })
     elif len(sqlite_rows) > 1 and len(graphdb_rows) > 1:
@@ -4656,6 +4815,7 @@ def _fuse_lanes(
                 "vrti_value": None,
                 "graphdb_value": float(g_count),
                 "delta": float(abs(s_count - g_count)),
+                "likely_reason": "differing record scope or incomplete RDF uplift",
                 "likely_cause": "differing record scope or incomplete RDF uplift",
             })
 
@@ -4776,6 +4936,195 @@ Question:
 {question}
 
 SQL:""".strip()
+
+
+def _llm_generate_claude(
+    system_prompt: str,
+    user_content: str,
+    max_tokens: int = 512,
+    temperature: float = 0.1,
+) -> tuple[str, dict[str, Any]]:
+    """
+    Part D — Call Claude (Anthropic) directly via HTTP.
+    Falls back to _llm_generate (OpenRouter/Ollama) when ANTHROPIC_API_KEY is unset.
+    Never raises — returns ("", meta) on error.
+    """
+    if not ANTHROPIC_API_KEY:
+        # Graceful fallback: pack system + user into a single prompt
+        combined = f"{system_prompt}\n\n{user_content}"
+        try:
+            text, meta = _llm_generate(combined, purpose="synthesis", max_tokens=max_tokens, temperature=temperature)
+            return text, {**meta, "via": "fallback_openrouter_or_ollama"}
+        except Exception as exc:
+            log.warning("ask_service.claude_fallback_failed error=%s", exc)
+            return "", {"provider": "none", "error": str(exc)}
+
+    payload: dict[str, Any] = {
+        "model": ANTHROPIC_MODEL,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_content}],
+    }
+    try:
+        resp = requests.post(
+            f"{ANTHROPIC_BASE_URL}/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": ANTHROPIC_API_VERSION,
+                "content-type": "application/json",
+            },
+            json=payload,
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        text = data["content"][0]["text"] if data.get("content") else ""
+        usage = data.get("usage", {})
+        return text, {
+            "provider": "anthropic",
+            "model": ANTHROPIC_MODEL,
+            "input_tokens": usage.get("input_tokens"),
+            "output_tokens": usage.get("output_tokens"),
+        }
+    except Exception as exc:
+        log.warning("ask_service.claude_generate_failed error=%s", exc)
+        # Fall through to OpenRouter/Ollama
+        combined = f"{system_prompt}\n\n{user_content}"
+        try:
+            text, meta = _llm_generate(combined, purpose="synthesis", max_tokens=max_tokens, temperature=temperature)
+            return text, {**meta, "via": "fallback_after_claude_error"}
+        except Exception as exc2:
+            log.warning("ask_service.synthesis_fallback_failed error=%s", exc2)
+            return "", {"provider": "none", "error": str(exc2)}
+
+
+def _llm_generate_grok(
+    prompt: str,
+    max_tokens: int = 512,
+    temperature: float = 0.1,
+) -> tuple[str, dict[str, Any]]:
+    """
+    Part D — Call Grok (xAI) via the OpenAI-compatible API.
+    Used when ASK_SYNTHESIS_MODEL=grok for comparative evaluation.
+    Falls back to _llm_generate on error.
+    """
+    if not GROK_API_KEY:
+        return _llm_generate(prompt, purpose="synthesis", max_tokens=max_tokens, temperature=temperature)
+    try:
+        resp = requests.post(
+            f"{GROK_BASE_URL}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROK_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": GROK_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        text = data["choices"][0]["message"]["content"] if data.get("choices") else ""
+        usage = data.get("usage", {})
+        return text, {
+            "provider": "grok",
+            "model": GROK_MODEL,
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+        }
+    except Exception as exc:
+        log.warning("ask_service.grok_generate_failed error=%s", exc)
+        return _llm_generate(prompt, purpose="synthesis", max_tokens=max_tokens, temperature=temperature)
+
+
+# Part F — System prompt for answer synthesis (verbatim from spec)
+_SYNTHESIS_SYSTEM_PROMPT = """You are the answer-writer for an Irish estate-records research assistant. You receive
+structured retrieval results and write the final answer a historian or genealogist reads.
+Your job is to let them trust the answer and move faster — never to make them re-ask.
+
+INPUTS (structured fields; some may be empty):
+- question
+- resolved_entities: townland/parish/person with sql_id, kg_uri, and for people a list of
+  candidate individuals each {confidence, supporting_record_count, may_be_confused_with}
+- sql_result: rows + the exact metric and scope (the ONLY authoritative source for any count)
+- graph_context: linearised subgraph / community summary (context only, never a count)
+- discrepancies: list of {metric, sql_value, graph_value, likely_reason}
+- provenance: per fact, the source record(s)
+
+RULES:
+1. Counts and totals come ONLY from sql_result. A number appearing only in graph_context is
+   not a fact — say the records don't hold it.
+2. Lead with the direct answer in the first sentence, in plain language. No preamble, no
+   restating the question.
+3. State provenance inline and briefly: which source, how many records the answer rests on.
+4. Surface uncertainty honestly. If the entity is a person with multiple candidates, say how
+   many distinct individuals the name could refer to, whether the figure covers the confirmed
+   one or all candidates, and the disambiguating detail (place, date). Never silently merge or
+   pick one.
+5. If discrepancies is non-empty, state the disagreement in one sentence with both values and
+   the likely reason. Required, not optional.
+6. End with 2–4 next steps phrased as things the user can act on immediately and specific to
+   THIS entity — neighbouring townlands, the candidate individuals to disambiguate, "view the
+   N source records" — never generic suggestions.
+7. Be concise: the answer, the caveat, the next move. No hedging filler.
+8. Never fabricate a record, name, date, or source. If context is thin, say what is known and
+   what is not.
+
+TONE: precise, neutral, archival. You are a finding aid, not a storyteller."""
+
+
+def _claude_synthesize_answer(
+    question: str,
+    resolved_entities: list[dict[str, Any]],
+    sql_result: dict[str, Any],
+    graph_context: str,
+    discrepancies: list[dict[str, Any]],
+    provenance: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """
+    Part F — Produce the final answer using the structured synthesis system prompt.
+
+    The answer leads with the direct result, states provenance, surfaces
+    disambiguation, cites discrepancies when present, and ends with 2–4
+    concrete next steps for the researcher.
+
+    Delegates to Claude when ANTHROPIC_API_KEY is set, Grok when
+    ASK_SYNTHESIS_MODEL=grok, else falls back to OpenRouter/Ollama.
+    """
+    user_block: dict[str, Any] = {
+        "question": question,
+        "resolved_entities": resolved_entities,
+        "sql_result": sql_result,
+        "graph_context": graph_context or "(none)",
+        "discrepancies": discrepancies,
+        "provenance": provenance,
+    }
+    user_content = json.dumps(user_block, ensure_ascii=False, default=str)
+
+    if ASK_SYNTHESIS_MODEL == "grok":
+        combined = f"{_SYNTHESIS_SYSTEM_PROMPT}\n\nINPUT:\n{user_content}"
+        return _llm_generate_grok(combined, max_tokens=600, temperature=0.1)
+
+    if ASK_SYNTHESIS_MODEL in ("openrouter", "ollama"):
+        combined = f"{_SYNTHESIS_SYSTEM_PROMPT}\n\nINPUT:\n{user_content}"
+        try:
+            text, meta = _llm_generate(combined, purpose="synthesis", max_tokens=600, temperature=0.1)
+            return text, meta
+        except Exception as exc:
+            log.warning("ask_service.synthesis_fallback_failed error=%s", exc)
+            return "", {"provider": "none", "error": str(exc)}
+
+    # Default: Claude (with fallback if key missing)
+    return _llm_generate_claude(
+        system_prompt=_SYNTHESIS_SYSTEM_PROMPT,
+        user_content=user_content,
+        max_tokens=600,
+        temperature=0.1,
+    )
 
 
 def _llm_generate_validated_sql(

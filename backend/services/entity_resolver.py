@@ -85,6 +85,10 @@ class EntityResolution:
     centroid_lon: float | None = None
     warning: str | None = None
     candidates: list[dict] = field(default_factory=list)
+    # Part A: person identity candidates (populated when entity_type == "surname")
+    person_candidates: list[dict] = field(default_factory=list)
+    identity_is_ambiguous: bool = False
+    identity_disambiguation_note: str | None = None
 
 
 def _null(entity_type: str = "townland", warning: str | None = None) -> EntityResolution:
@@ -606,7 +610,33 @@ def _resolve_surname(raw: str) -> EntityResolution:
         conn.close()
 
     n = int(row["n"]) if row else 0
+
+    def _person_identity_payload(name: str) -> tuple[list[dict], bool, str | None]:
+        """Lazily call identity_resolver; returns (candidates_as_dicts, is_ambiguous, note)."""
+        try:
+            from backend.services.identity_resolver import resolve_person_identity
+            result = resolve_person_identity(name)
+            dicts = [
+                {
+                    "person_id": c.person_id,
+                    "display_name": c.display_name,
+                    "confidence": c.confidence,
+                    "supporting_mention_ids": c.supporting_mention_ids,
+                    "townland_norm": c.townland_norm,
+                    "civil_parish": c.civil_parish,
+                    "year_range": list(c.year_range) if c.year_range else None,
+                    "role": c.role,
+                    "may_be_confused_with": c.may_be_confused_with,
+                }
+                for c in result.person_candidates
+            ]
+            return dicts, result.is_ambiguous, result.disambiguation_note
+        except Exception as _exc:
+            log.debug("entity_resolver.identity_failed name=%r error=%s", name, _exc)
+            return [], False, None
+
     if n > 0:
+        p_candidates, p_ambiguous, p_note = _person_identity_payload(raw_norm.title())
         return EntityResolution(
             label=raw_norm.title(),
             label_norm=raw_norm,
@@ -615,6 +645,9 @@ def _resolve_surname(raw: str) -> EntityResolution:
             confidence=1.0,
             match_type="exact",
             entity_type="surname",
+            person_candidates=p_candidates,
+            identity_is_ambiguous=p_ambiguous,
+            identity_disambiguation_note=p_note,
         )
 
     # Try vector search for surnames
@@ -623,6 +656,7 @@ def _resolve_surname(raw: str) -> EntityResolution:
         hits = idx.search(raw, entity_type="surname", k=3, min_score=0.6)
         if hits:
             best = hits[0]
+            p_candidates, p_ambiguous, p_note = _person_identity_payload(best["label"])
             return EntityResolution(
                 label=best["label"],
                 label_norm=best["label"].upper(),
@@ -636,6 +670,9 @@ def _resolve_surname(raw: str) -> EntityResolution:
                     {"label": h["label"], "score": h["score"]}
                     for h in hits[1:3]
                 ],
+                person_candidates=p_candidates,
+                identity_is_ambiguous=p_ambiguous,
+                identity_disambiguation_note=p_note,
             )
 
     return _null("surname", warning=f"Surname '{raw}' not found in estate records.")
