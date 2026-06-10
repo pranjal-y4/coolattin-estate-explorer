@@ -1,37 +1,40 @@
 """
 scripts/rdf_uplift.py
 
-RDF uplift for the Coolattin Estate Records — D8 prototype.
+RDF uplift for the Coolattin Estate Records.
 
-Reads unified_processed.csv and generates a Turtle (.ttl) RDF graph
-representing persons, their townlands, years, and event types.
+Reads four SQLite tables (unified_record, townland, census_record,
+clearances_record) and writes a deterministic, idempotent Turtle file to
+data/seed/coolattin.ttl in the co: ontology.
+
+Classes generated
+-----------------
+  co:Person        — one per unified_record row
+  co:Event         — one per unified_record row (linked via co:hasEvent)
+  co:Townland      — one per townland row
+  co:CensusRecord  — one per census_record row
+  co:Clearance     — one per clearances_record row
 
 Usage
 -----
-  python3 scripts/rdf_uplift.py                      # generate TTL only
+  python3 scripts/rdf_uplift.py                      # generate TTL to data/seed/coolattin.ttl
   python3 scripts/rdf_uplift.py --import             # generate + POST to GraphDB
-  python3 scripts/rdf_uplift.py --limit 500          # sample first 500 rows
+  python3 scripts/rdf_uplift.py --limit 500          # sample first 500 unified_record rows
   python3 scripts/rdf_uplift.py --repo my-repo-name  # custom GraphDB repo name
-
-Output: data/coolattin_sample.ttl
-
-GraphDB REST endpoint (for --import):
-  Reads GRAPHDB_ENDPOINT env var (default: http://localhost:7200)
-  Repository name from --repo flag (default: coolattin)
 """
 from __future__ import annotations
 
 import argparse
-import csv
 import os
+import sqlite3
 import sys
 from pathlib import Path
 from urllib.parse import quote as _url_quote
 
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
-CSV_PATH = PROJECT_ROOT / "frontend" / "static" / "data" / "unified_processed.csv"
-OUT_PATH = PROJECT_ROOT / "data" / "coolattin_sample.ttl"
+DB_PATH = PROJECT_ROOT / "coolattin.db"
+OUT_PATH = PROJECT_ROOT / "data" / "seed" / "coolattin.ttl"
 
 
 # ── RDF vocabulary ────────────────────────────────────────────────────────────
@@ -45,10 +48,13 @@ PREFIXES = """\
 @prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
 """
 
-# Ontology declaration (minimal)
 ONTOLOGY_HEADER = """\
 co:Person        a rdfs:Class ; rdfs:label "Person" .
 co:Event         a rdfs:Class ; rdfs:label "Event" .
+co:Townland      a rdfs:Class ; rdfs:label "Townland" .
+co:CensusRecord  a rdfs:Class ; rdfs:label "CensusRecord" .
+co:Clearance     a rdfs:Class ; rdfs:label "Clearance" .
+
 co:townland      a rdf:Property ; rdfs:label "townland" .
 co:year          a rdf:Property ; rdfs:label "year" ; rdfs:range xsd:integer .
 co:eventType     a rdf:Property ; rdfs:label "eventType" .
@@ -58,99 +64,162 @@ co:parish        a rdf:Property ; rdfs:label "parish" .
 co:occupation    a rdf:Property ; rdfs:label "occupation" .
 co:hasEvent      a rdf:Property ; rdfs:label "hasEvent" .
 co:forPerson     a rdf:Property ; rdfs:label "forPerson" .
+co:civilParish   a rdf:Property ; rdfs:label "civilParish" .
+co:barony        a rdf:Property ; rdfs:label "barony" .
+co:county        a rdf:Property ; rdfs:label "county" .
+co:totalPopulation a rdf:Property ; rdfs:label "totalPopulation" ; rdfs:range xsd:integer .
+co:forTownland   a rdf:Property ; rdfs:label "forTownland" .
+co:count         a rdf:Property ; rdfs:label "count" ; rdfs:range xsd:integer .
 """
 
 
-def _safe_uri_local(s: str) -> str:
-    """Percent-encode a string for use as a URI local name."""
-    return _url_quote(s.strip().replace(" ", "_"), safe="")
+def _safe_uri(s: str) -> str:
+    return _url_quote(str(s).strip().replace(" ", "_"), safe="")
 
 
 def _ttl_str(s: str) -> str:
-    """Escape a string for Turtle literal output."""
-    return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    return str(s).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
-def _infer_event_type(row: dict) -> str:
-    """Determine primary event type from boolean flags."""
-    if row.get("has_emigration_record", "").strip().lower() in ("true", "1", "yes"):
+def _infer_event_type(row: sqlite3.Row) -> str:
+    if row["has_emigration_record"]:
         return "emigration"
-    if row.get("has_eviction_record", "").strip().lower() in ("true", "1", "yes"):
-        return "eviction"
-    if row.get("has_tenancy_record", "").strip().lower() in ("true", "1", "yes"):
-        return "tenancy"
-    legal = (row.get("legal_action") or "").strip().lower()
-    if legal:
+    if row["has_eviction_record"]:
         return "eviction"
     return "tenancy"
 
 
-def generate_ttl(rows: list[dict]) -> str:
-    """Convert a list of CSV row dicts into a Turtle string."""
-    lines: list[str] = [PREFIXES, ONTOLOGY_HEADER]
+# ── Per-table TTL generators ──────────────────────────────────────────────────
 
+def _person_event_blocks(rows: list[sqlite3.Row]) -> list[str]:
+    blocks: list[str] = []
     for row in rows:
-        rid = (row.get("record_id") or row.get("unique_id_no") or "").strip()
+        rid = (row["record_id"] or row["unique_id_no"] or "").strip()
         if not rid:
             continue
 
-        surname = (row.get("surname") or "").strip()
-        forename = (row.get("forename") or "").strip()
-        townland = (row.get("townland") or row.get("townland_official_name") or "").strip()
-        parish = (row.get("parish") or "").strip()
-        year_raw = (row.get("year") or "").strip()
-        estate = (row.get("estate") or "Fitzwilliam").strip()
-        role = (row.get("role") or "").strip()
-        occupation = (row.get("occupation") or "").strip()
-        event_type = _infer_event_type(row)
+        person_uri = f"ex:person_{_safe_uri(rid)}"
+        event_uri  = f"ex:event_{_safe_uri(rid)}"
 
-        person_uri = f"ex:person_{_safe_uri_local(rid)}"
-        event_uri = f"ex:event_{_safe_uri_local(rid)}"
+        p: list[str] = [person_uri, "  a co:Person"]
+        if row["surname"]:
+            p.append(f'  ; schema:familyName "{_ttl_str(row["surname"])}"')
+        if row["forename"]:
+            p.append(f'  ; schema:givenName "{_ttl_str(row["forename"])}"')
+        if row["townland"]:
+            p.append(f'  ; co:townland "{_ttl_str(row["townland"])}"')
+        if row["parish"]:
+            p.append(f'  ; co:parish "{_ttl_str(row["parish"])}"')
+        estate = row["estate"] or "Fitzwilliam"
+        p.append(f'  ; co:estate "{_ttl_str(estate)}"')
+        if row["role"]:
+            p.append(f'  ; co:role "{_ttl_str(row["role"])}"')
+        if row["occupation"]:
+            p.append(f'  ; co:occupation "{_ttl_str(row["occupation"])}"')
+        p.append(f"  ; co:hasEvent {event_uri}")
+        p.append(".")
+        blocks.append("\n".join(p))
 
-        triples: list[str] = [f"{person_uri}"]
-        triples.append(f'  a co:Person')
+        ev: list[str] = [event_uri, "  a co:Event"]
+        ev.append(f"  ; co:forPerson {person_uri}")
+        ev.append(f'  ; co:eventType "{_infer_event_type(row)}"')
+        if row["year"]:
+            ev.append(f"  ; co:year {int(row['year'])}")
+        ev.append(".")
+        blocks.append("\n".join(ev))
 
-        if surname:
-            triples.append(f'  ; schema:familyName "{_ttl_str(surname)}"')
-        if forename:
-            triples.append(f'  ; schema:givenName "{_ttl_str(forename)}"')
-        if townland:
-            triples.append(f'  ; co:townland "{_ttl_str(townland)}"')
-        if parish:
-            triples.append(f'  ; co:parish "{_ttl_str(parish)}"')
-        if estate:
-            triples.append(f'  ; co:estate "{_ttl_str(estate)}"')
-        if role:
-            triples.append(f'  ; co:role "{_ttl_str(role)}"')
-        if occupation:
-            triples.append(f'  ; co:occupation "{_ttl_str(occupation)}"')
-        triples.append(f'  ; co:hasEvent {event_uri}')
-        triples.append('.')
+    return blocks
 
-        event_triples: list[str] = [f"{event_uri}"]
-        event_triples.append(f'  a co:Event')
-        event_triples.append(f'  ; co:forPerson {person_uri}')
-        event_triples.append(f'  ; co:eventType "{event_type}"')
-        if year_raw:
-            try:
-                year_int = int(float(year_raw))
-                event_triples.append(f'  ; co:year {year_int}')
-            except ValueError:
-                pass
-        event_triples.append('.')
 
-        lines.append("\n".join(triples))
-        lines.append("\n".join(event_triples))
+def _townland_blocks(rows: list[sqlite3.Row]) -> list[str]:
+    blocks: list[str] = []
+    for row in rows:
+        tid = row["id"]
+        name = (row["name"] or "").strip()
+        if not name:
+            continue
 
-    return "\n\n".join(lines) + "\n"
+        t_uri = f"ex:townland_{tid}"
+        t: list[str] = [t_uri, "  a co:Townland"]
+        t.append(f'  ; rdfs:label "{_ttl_str(name)}"')
+        if row["civil_parish"]:
+            t.append(f'  ; co:civilParish "{_ttl_str(row["civil_parish"])}"')
+        if row["barony"]:
+            t.append(f'  ; co:barony "{_ttl_str(row["barony"])}"')
+        if row["county"]:
+            t.append(f'  ; co:county "{_ttl_str(row["county"])}"')
+        t.append(".")
+        blocks.append("\n".join(t))
+    return blocks
+
+
+def _census_blocks(rows: list[sqlite3.Row]) -> list[str]:
+    blocks: list[str] = []
+    for row in rows:
+        cid = row["id"]
+        if row["total"] is None:
+            continue
+
+        c_uri = f"ex:census_{cid}"
+        c: list[str] = [c_uri, "  a co:CensusRecord"]
+        c.append(f"  ; co:year {int(row['year'])}")
+        c.append(f"  ; co:totalPopulation {int(row['total'])}")
+        c.append(f"  ; co:forTownland ex:townland_{row['townland_id']}")
+        c.append(".")
+        blocks.append("\n".join(c))
+    return blocks
+
+
+def _clearance_blocks(rows: list[sqlite3.Row]) -> list[str]:
+    blocks: list[str] = []
+    for row in rows:
+        rid = row["id"]
+        if row["count"] is None:
+            continue
+
+        cl_uri = f"ex:clearance_{rid}"
+        cl: list[str] = [cl_uri, "  a co:Clearance"]
+        cl.append(f"  ; co:year {int(row['year'])}")
+        cl.append(f"  ; co:count {int(row['count'])}")
+        cl.append(f"  ; co:forTownland ex:townland_{row['townland_id']}")
+        cl.append(".")
+        blocks.append("\n".join(cl))
+    return blocks
+
+
+# ── Main generation ───────────────────────────────────────────────────────────
+
+def generate_ttl(db_path: Path, limit: int = 0) -> str:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    with conn:
+        unified = conn.execute(
+            "SELECT * FROM unified_record ORDER BY id"
+        ).fetchall()
+        if limit > 0:
+            unified = unified[:limit]
+
+        townlands  = conn.execute("SELECT * FROM townland ORDER BY id").fetchall()
+        census     = conn.execute("SELECT * FROM census_record ORDER BY id").fetchall()
+        clearances = conn.execute("SELECT * FROM clearances_record ORDER BY id").fetchall()
+
+    conn.close()
+
+    blocks: list[str] = [PREFIXES, ONTOLOGY_HEADER]
+    blocks.extend(_person_event_blocks(unified))
+    blocks.extend(_townland_blocks(townlands))
+    blocks.extend(_census_blocks(census))
+    blocks.extend(_clearance_blocks(clearances))
+
+    return "\n\n".join(blocks) + "\n"
 
 
 def import_to_graphdb(ttl_path: Path, endpoint: str, repo: str) -> None:
-    """POST the TTL file to a GraphDB repository via its REST API."""
     try:
         import requests
     except ImportError:
-        print("ERROR: 'requests' package required for --import. Install with: pip install requests", file=sys.stderr)
+        print("ERROR: 'requests' package required for --import.", file=sys.stderr)
         sys.exit(1)
 
     url = f"{endpoint.rstrip('/')}/repositories/{repo}/statements"
@@ -161,7 +230,7 @@ def import_to_graphdb(ttl_path: Path, endpoint: str, repo: str) -> None:
             url,
             data=fh,
             headers={"Content-Type": "text/turtle"},
-            timeout=120,
+            timeout=180,
         )
     if resp.status_code in (200, 204):
         print(f"Import successful (HTTP {resp.status_code}).")
@@ -171,41 +240,42 @@ def import_to_graphdb(ttl_path: Path, endpoint: str, repo: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate Turtle RDF from Coolattin unified records.")
+    parser = argparse.ArgumentParser(
+        description="Generate Turtle RDF from Coolattin SQLite database."
+    )
+    parser.add_argument("--db", default=str(DB_PATH),
+                        help="Path to SQLite database (default: coolattin.db).")
+    parser.add_argument("--out", default=str(OUT_PATH),
+                        help="Output .ttl path (default: data/seed/coolattin.ttl).")
     parser.add_argument("--limit", type=int, default=0,
-                        help="Max rows to include (default: all).")
+                        help="Max unified_record rows to include (default: all).")
     parser.add_argument("--import", dest="do_import", action="store_true",
                         help="POST the generated TTL to GraphDB after writing.")
     parser.add_argument("--repo", default="coolattin",
                         help="GraphDB repository name (default: coolattin).")
     parser.add_argument("--endpoint", default=os.environ.get("GRAPHDB_ENDPOINT", "http://localhost:7200"),
-                        help="GraphDB base URL (default: $GRAPHDB_ENDPOINT or http://localhost:7200).")
+                        help="GraphDB base URL.")
     args = parser.parse_args()
 
-    if not CSV_PATH.exists():
-        print(f"ERROR: CSV not found at {CSV_PATH}", file=sys.stderr)
+    db = Path(args.db)
+    out = Path(args.out)
+
+    if not db.exists():
+        print(f"ERROR: database not found at {db}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Reading {CSV_PATH} …")
-    with CSV_PATH.open(encoding="utf-8-sig") as fh:
-        reader = csv.DictReader(fh)
-        all_rows = list(reader)
+    print(f"Reading {db} …")
+    ttl = generate_ttl(db, limit=args.limit)
 
-    if args.limit and args.limit > 0:
-        all_rows = all_rows[: args.limit]
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(ttl, encoding="utf-8")
 
-    print(f"Loaded {len(all_rows)} rows. Generating Turtle …")
-
-    ttl_content = generate_ttl(all_rows)
-
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUT_PATH.write_text(ttl_content, encoding="utf-8")
-
-    triple_count = ttl_content.count(" .\n") + ttl_content.count(".\n\n")
-    print(f"Written {OUT_PATH} (~{len(ttl_content)//1024} KB, ~{triple_count} triples).")
+    size_kb = len(ttl) // 1024
+    triple_est = ttl.count("\n.")
+    print(f"Written {out} (~{size_kb} KB, ~{triple_est} subject blocks).")
 
     if args.do_import:
-        import_to_graphdb(OUT_PATH, args.endpoint, args.repo)
+        import_to_graphdb(out, args.endpoint, args.repo)
 
 
 if __name__ == "__main__":
