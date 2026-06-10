@@ -1,0 +1,332 @@
+{
+  "eval": "graphrag_enrichment",
+  "cases": [
+    {
+      "id": "r_01_ballinacor_barony",
+      "question": "Which barony does Ballinacor belong to?",
+      "intent": "relational",
+      "numeric_delta_ok": true,
+      "sql_value_on": "Arklow",
+      "sql_value_off": "Arklow",
+      "grounding_ok": true,
+      "grounding_rate": 1.0,
+      "terms_found": [
+        "Ballinacor",
+        "Barony"
+      ],
+      "terms_missing": [],
+      "path_used": "vector_seed(8) → 2-hop BFS → 104 triples",
+      "path_ok": true,
+      "provenance_path_present": true,
+      "sources_traced": [
+        "in_process_graph"
+      ],
+      "subgraph_node_count": 120,
+      "subgraph_rel_count": 104,
+      "seed_node_count": 8,
+      "community_summaries_n": 1,
+      "k_hops": 2,
+      "pruned": true,
+      "auto_usefulness": 5,
+      "latency_ms_on": 16601,
+      "latency_ms_off": 0,
+      "latency_overhead_ms": 16601,
+      "degraded": false,
+      "degradation_note": "",
+      "error": null,
+      "linearized_excerpt": "### Community context\n- Community 3104: 4 persons, 1 places (8 total nodes)\n\n### Subgraph triples\n(Person:Edward Cullen)-[HAS_EVENT]->(EvictionEvent:Eviction 1850)\n(Person:Edward Cullen)-[IN_COMMUNITY]->(Community:Community 75)\n(EmigrationEvent:Emigration 1848)-[IN_COMMUNITY]->(Community:Community 7"
+    },
+    {
+      "id": "r_02_ballynultagh_county",
+      "question": "What county and barony does Ballynultagh fall within?",
+      "intent": "relational",
+      "numeric_delta_ok": true,
+      "sql_value_on": "Shillelagh",
+      "sql_value_off": "Shillelagh",
+      "grounding_ok": false,
+      "grounding_rate": 0.5,
+      "terms_found": [
+        "Ballynultagh"
+      ],
+      "terms_missing": [
+        "Wicklow"
+      ],
+      "path_used": "vector_seed(8) → 2-hop BFS → 4 triples",
+      "path_ok": true,
+      "provenance_path_present": true,
+      "sources_traced": [
+        "in_process_graph"
+      ],
+      "subgraph_node_count": 120,
+      "subgraph_rel_count": 4,
+      "seed_node_count": 8,
+      "community_summaries_n": 1,
+      "k_hops": 2,
+      "pruned": true,
+      "auto_usefulness": 3,
+      "latency_ms_on": 217,
+      "latency_ms_off": 0,
+      "latency_overhead_ms": 217,
+      "degraded": false,
+      "degradation_note": "",
+      "error": null,
+      "linearized_excerpt": "### Community context\n- Community 2: 1 persons (858 total nodes)\n\n### Subgraph triples\n(Person:John Byrne)-[HAS_EVENT]->(EmigrationEvent:Emigration 1851)\n(Person:Nicholas Hopkins)-[HAS_EVENT]->(EmigrationEvent:Emigration 1851)\n(EmigrationEvent:Emigration 1847)-[DEPARTED_VIA]->(Voyage:Progress)\n(Pers"
+    },
+    {
+      "id": "r_03_parish_siblings",
+      "question": "What other townlands are in the same parish as Ballinacor?",
+      "intent": "relational",
+      "numeric_delta_ok": true,
+      "sql_value_on": "Kilbride",
+      "sql_value_off": "Kilbride",
+      "grounding_ok": true,
+      "grounding_rate": 1.0,
+      "terms_found": [
+        "Ballinacor",
+        "CivilParish"
+      ],
+      "terms_missing": [],
+      "path_used": "vector_seed(8) → 2-hop BFS → 69 triples",
+      "path_ok": true,
+      "provenance_path_present": true,
+      "sources_traced": [
+        "in_process_graph"
+      ],
+      "subgraph_node_count": 70,
+      "subgraph_rel_count": 69,
+      "seed_node_count": 8,
+      "community_summaries_n": 1,
+      "k_hops": 2,
+      "pruned": false,
+      "auto_usefulness": 5,
+      "latency_ms_on": 217,
+      "latency_ms_off": 0,
+      "latency_overhead_ms": 217,
+      "degraded": false,
+      "degradation_note": "",
+      "error": null,
+      "linearized_excerpt": "### Community context\n- Community 3104: 4 persons, 1 places (8 total nodes)\n\n### Subgraph triples\n(Townland:BALLINACOR EAST)-[HAS_OBSERVATION]->(CensusObservation:Census 1841)\n(Townland:BALLINACOR EAST)-[HAS_OBSERVATION]->(CensusObservation:Census 1851)\n(Townland:BALLINACOR EAST)-[HAS_OBSERVATION]->"
+    },
+    {
+      "id": "r_04_estate_overview",
+      "question": "Tell me about the Coolattin estate and its history",
+      "intent": "relational",
+      "numeric_delta_ok": true,
+      "sql_value_on": null,
+      "sql_value_off": null,
+      "grounding_ok": false,
+      "grounding_rate": 0.5,
+      "terms_found": [
+        "Coolattin"
+      ],
+      "terms_missing": [
+        "estate"
+      ],
+      "path_used": "vector_seed(8) → 2-hop BFS → 8 triples",
+      "path_ok": true,
+      "provenance_path_present": true,
+      "sources_traced": [
+        "in_process_graph"
+      ],
+      "subgraph_node_count": 120,
+      "subgraph_rel_count": 8,
+      "seed_node_count": 8,
+      "community_summaries_n": 1,
+      "k_hops": 2,
+      "pruned": true,
+      "auto_usefulness": 4,
+      "latency_ms_on": 215,
+      "latency_ms_off": 0,
+      "latency_overhead_ms": 215,
+      "degraded": false,
+      "degradation_note": "",
+      "error": null,
+      "linearized_excerpt": "### Community context\n- Community 39: 2 persons (473 total nodes)\n\n### Subgraph triples\n(Person:Thomas Dempsey)-[HAS_EVENT]->(EmigrationEvent:Emigration 1847)\n(Townland:STOOPS)-[WITHIN]->(CivilParish:Carnew)\n(Person:Mary Byrne)-[HAS_EVENT]->(EmigrationEvent:Emigration 1851)\n(EmigrationEvent:Emigrati"
+    },
+    {
+      "id": "r_05_ballinacor_monuments",
+      "question": "Tell me about the historical monuments in Ballinacor",
+      "intent": "relational",
+      "numeric_delta_ok": true,
+      "sql_value_on": null,
+      "sql_value_off": null,
+      "grounding_ok": true,
+      "grounding_rate": 1.0,
+      "terms_found": [
+        "Ballinacor"
+      ],
+      "terms_missing": [],
+      "path_used": "vector_seed(8) → 2-hop BFS → 104 triples",
+      "path_ok": true,
+      "provenance_path_present": true,
+      "sources_traced": [
+        "in_process_graph"
+      ],
+      "subgraph_node_count": 120,
+      "subgraph_rel_count": 104,
+      "seed_node_count": 8,
+      "community_summaries_n": 1,
+      "k_hops": 2,
+      "pruned": true,
+      "auto_usefulness": 5,
+      "latency_ms_on": 206,
+      "latency_ms_off": 0,
+      "latency_overhead_ms": 206,
+      "degraded": false,
+      "degradation_note": "",
+      "error": null,
+      "linearized_excerpt": "### Community context\n- Community 3104: 4 persons, 1 places (8 total nodes)\n\n### Subgraph triples\n(Person:Edward Cullen)-[HAS_EVENT]->(EvictionEvent:Eviction 1850)\n(Person:Edward Cullen)-[IN_COMMUNITY]->(Community:Community 75)\n(EmigrationEvent:Emigration 1848)-[IN_COMMUNITY]->(Community:Community 7"
+    },
+    {
+      "id": "r_06_famine_impact",
+      "question": "What was the impact of the Great Famine on the estate?",
+      "intent": "relational",
+      "numeric_delta_ok": true,
+      "sql_value_on": null,
+      "sql_value_off": null,
+      "grounding_ok": false,
+      "grounding_rate": 0.5,
+      "terms_found": [
+        "eviction"
+      ],
+      "terms_missing": [
+        "emigrat"
+      ],
+      "path_used": "vector_seed(8) → 2-hop BFS → 15 triples",
+      "path_ok": true,
+      "provenance_path_present": true,
+      "sources_traced": [
+        "in_process_graph"
+      ],
+      "subgraph_node_count": 18,
+      "subgraph_rel_count": 15,
+      "seed_node_count": 8,
+      "community_summaries_n": 3,
+      "k_hops": 2,
+      "pruned": false,
+      "auto_usefulness": 5,
+      "latency_ms_on": 218,
+      "latency_ms_off": 0,
+      "latency_overhead_ms": 218,
+      "degraded": false,
+      "degradation_note": "",
+      "error": null,
+      "linearized_excerpt": "### Community context\n- Community 1914: 1 persons (2 total nodes)\n- Community 2182: 1 persons (2 total nodes)\n- Community 1554: 1 persons (2 total nodes)\n- Community 1737: 1 persons (2 total nodes)\n- Community 2453: 1 persons (2 total nodes)\n\n### Subgraph triples\n(Person:- Byrne)-[HAS_EVENT]->(Evict"
+    },
+    {
+      "id": "mh_01_byrne_townlands",
+      "question": "Which townlands had Byrne families and what barony are those in?",
+      "intent": "relational",
+      "numeric_delta_ok": true,
+      "sql_value_on": 1290,
+      "sql_value_off": 1290,
+      "grounding_ok": true,
+      "grounding_rate": 1.0,
+      "terms_found": [
+        "Byrne",
+        "Townland"
+      ],
+      "terms_missing": [],
+      "path_used": "vector_seed(11) → 2-hop BFS → 69 triples",
+      "path_ok": true,
+      "provenance_path_present": true,
+      "sources_traced": [
+        "in_process_graph"
+      ],
+      "subgraph_node_count": 120,
+      "subgraph_rel_count": 69,
+      "seed_node_count": 11,
+      "community_summaries_n": 3,
+      "k_hops": 2,
+      "pruned": true,
+      "auto_usefulness": 5,
+      "latency_ms_on": 215,
+      "latency_ms_off": 0,
+      "latency_overhead_ms": 215,
+      "degraded": false,
+      "degradation_note": "",
+      "error": null,
+      "linearized_excerpt": "### Community context\n- Community 20: 2 persons (94 total nodes)\n- Community 1180: 1 persons (2 total nodes)\n- Community 1156: 1 persons (2 total nodes)\n- Community 67: 1 persons (2 total nodes)\n- Community 1737: 1 persons (2 total nodes)\n\n### Subgraph triples\n(Person:nan nan)-[LOCATED_IN [year=1842"
+    },
+    {
+      "id": "mh_02_glenlyon_voyage",
+      "question": "Tell me about the Glenlyon voyage and who was on it",
+      "intent": "relational",
+      "numeric_delta_ok": true,
+      "sql_value_on": null,
+      "sql_value_off": null,
+      "grounding_ok": false,
+      "grounding_rate": 0.5,
+      "terms_found": [
+        "Voyage"
+      ],
+      "terms_missing": [
+        "Glenlyon"
+      ],
+      "path_used": "vector_seed(8) → 2-hop BFS → 200 triples",
+      "path_ok": true,
+      "provenance_path_present": true,
+      "sources_traced": [
+        "in_process_graph"
+      ],
+      "subgraph_node_count": 108,
+      "subgraph_rel_count": 200,
+      "seed_node_count": 8,
+      "community_summaries_n": 3,
+      "k_hops": 2,
+      "pruned": true,
+      "auto_usefulness": 5,
+      "latency_ms_on": 216,
+      "latency_ms_off": 0,
+      "latency_overhead_ms": 216,
+      "degraded": false,
+      "degradation_note": "",
+      "error": null,
+      "linearized_excerpt": "### Community context\n- Community 74: 1 persons (2 total nodes)\n- Community 638: 4 persons (69 total nodes)\n- Community 459: 1 persons (2 total nodes)\n- Community 453: 1 persons (2 total nodes)\n- Community 450: 1 persons (2 total nodes)\n\n### Subgraph triples\n(EmigrationEvent:Emigration 1848)-[OCCURR"
+    },
+    {
+      "id": "cmp_01_emigration_ballynultagh_vs_kg",
+      "question": "Compare the emigration count from Ballynultagh in the estate records versus the knowledge graph",
+      "intent": "comparative",
+      "numeric_delta_ok": true,
+      "sql_value_on": 400,
+      "sql_value_off": 400,
+      "grounding_ok": true,
+      "grounding_rate": 1.0,
+      "terms_found": [
+        "Ballynultagh",
+        "EmigrationEvent"
+      ],
+      "terms_missing": [],
+      "path_used": "vector_seed(8) → 2-hop BFS → 4 triples",
+      "path_ok": true,
+      "provenance_path_present": true,
+      "sources_traced": [
+        "in_process_graph"
+      ],
+      "subgraph_node_count": 120,
+      "subgraph_rel_count": 4,
+      "seed_node_count": 8,
+      "community_summaries_n": 1,
+      "k_hops": 2,
+      "pruned": true,
+      "auto_usefulness": 3,
+      "latency_ms_on": 228,
+      "latency_ms_off": 0,
+      "latency_overhead_ms": 228,
+      "degraded": false,
+      "degradation_note": "",
+      "error": null,
+      "linearized_excerpt": "### Community context\n- Community 2: 1 persons (858 total nodes)\n\n### Subgraph triples\n(Person:John Byrne)-[HAS_EVENT]->(EmigrationEvent:Emigration 1851)\n(Person:Nicholas Hopkins)-[HAS_EVENT]->(EmigrationEvent:Emigration 1851)\n(EmigrationEvent:Emigration 1847)-[DEPARTED_VIA]->(Voyage:Progress)\n(Pers"
+    }
+  ],
+  "summary": {
+    "n": 9,
+    "numeric_delta_all_zero": true,
+    "grounding_ok_n": 5,
+    "grounding_ok_pct": 55.6,
+    "avg_usefulness": 4.44,
+    "avg_latency_on_ms": 2037.0,
+    "degraded_n": 0
+  }
+}
