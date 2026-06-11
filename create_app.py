@@ -140,6 +140,21 @@ def create_app(config_class=None) -> Flask:
     # ------------------------------------------------------------------ #
     _register_legacy_routes(app)
 
+    # Pre-warm the unified records cache in a background thread so the first
+    # HTTP request doesn't block for ~10s loading the CSV.
+    import threading
+
+    def _prewarm():
+        with app.app_context():
+            try:
+                from backend.services.unified_service import _get_all_records
+                _get_all_records()
+                log.info("create_app.prewarm_complete")
+            except Exception as exc:
+                log.warning("create_app.prewarm_failed error=%s", exc)
+
+    threading.Thread(target=_prewarm, daemon=True).start()
+
     log.info("create_app.ready | blueprints registered")
     return app
 

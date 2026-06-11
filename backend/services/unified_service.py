@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 
 # Process-level caches (same approach as original app.py, now in one place)
 _UNIFIED_CACHE: pd.DataFrame | None = None
+_UNIFIED_RECORDS_CACHE: list[dict] | None = None  # pre-converted list of dicts
 _CENTROIDS_CACHE: dict[str, tuple[float, float]] | None = None
 
 
@@ -35,7 +36,30 @@ def get_unified() -> pd.DataFrame:
         path = _data_dir() / "unified_processed.csv"
         _UNIFIED_CACHE = pd.read_csv(path)
         log.info("unified_service.loaded | rows=%d", len(_UNIFIED_CACHE))
-    return _UNIFIED_CACHE.copy()
+    return _UNIFIED_CACHE
+
+
+def _get_all_records() -> list[dict]:
+    """Return all unified records as a cached list of JSON-safe dicts.
+
+    The conversion from DataFrame → list[dict] is done once and stored;
+    subsequent calls return the same list in O(1). search_records() uses
+    this cache and filters in Python, avoiding per-request DataFrame copies
+    and the expensive astype(object).where(notna) pass.
+    """
+    global _UNIFIED_RECORDS_CACHE
+    if _UNIFIED_RECORDS_CACHE is not None:
+        return _UNIFIED_RECORDS_CACHE
+
+    df = get_unified()
+    noisy = ["surname_2", "forename_2", "surname_3", "forename_3"]
+    df = df.drop(columns=[c for c in noisy if c in df.columns], errors="ignore")
+    if "year" in df.columns:
+        df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+    df = df.astype(object).where(pd.notna(df), None)
+    _UNIFIED_RECORDS_CACHE = df.to_dict(orient="records")
+    log.info("unified_service.records_cache_built | rows=%d", len(_UNIFIED_RECORDS_CACHE))
+    return _UNIFIED_RECORDS_CACHE
 
 
 def get_centroids() -> dict[str, tuple[float, float]]:
@@ -57,34 +81,34 @@ def search_records(
     limit: int = 0,
 ) -> list[dict]:
     """
-    Search unified records with optional filters.
-    Returns JSON-safe list of dicts.
-    """
-    df = get_unified()
+    Search unified records with optional filters. Returns JSON-safe list of dicts.
 
+    Uses a process-level list[dict] cache so the expensive DataFrame→dict
+    conversion only happens once per process lifetime.
+    """
+    records = _get_all_records()
+
+    # Python-level filtering on the cached list — much faster than per-request
+    # DataFrame copies and astype/where passes.
     if surname:
-        df = df[df["surname"].fillna("").astype(str).str.lower().str.contains(surname.lower())]
+        sn_low = surname.lower()
+        records = [r for r in records if sn_low in str(r.get("surname") or "").lower()]
     if forename:
-        df = df[df["forename"].fillna("").astype(str).str.lower().str.contains(forename.lower())]
+        fn_low = forename.lower()
+        records = [r for r in records if fn_low in str(r.get("forename") or "").lower()]
     if townland:
-        df = df[df["townland"].fillna("").astype(str).str.lower().str.contains(townland.lower())]
+        tl_low = townland.lower()
+        records = [r for r in records if tl_low in str(r.get("townland") or "").lower()]
     if year:
-        df = df[df["year"].astype("Int64").astype(str).str.contains(year)]
+        records = [r for r in records if year in str(r.get("year") or "")]
     if estate:
-        df = df[df["estate"].fillna("").astype(str).str.lower().str.contains(estate.lower())]
+        es_low = estate.lower()
+        records = [r for r in records if es_low in str(r.get("estate") or "").lower()]
 
     if limit:
-        df = df.head(limit)
+        records = records[:limit]
 
-    # Remove noisy duplicate collision columns
-    noisy = ["surname_2", "forename_2", "surname_3", "forename_3"]
-    df = df.drop(columns=[c for c in noisy if c in df.columns], errors="ignore")
-
-    if "year" in df.columns:
-        df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
-
-    df = df.astype(object).where(pd.notna(df), None)
-    return df.to_dict(orient="records")
+    return records
 
 
 def get_stats() -> dict:

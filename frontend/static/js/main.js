@@ -1305,6 +1305,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     interactive: false
   }).addTo(map);
   map.fitBounds(L.latLngBounds([52.70, -6.75], [53.25, -6.05]));
+  // Force Leaflet to recalculate its container size after layout stabilises.
+  // Without this, tiles may not render when the map is inside a section that
+  // is painted after the initial DOMContentLoaded measurement.
+  setTimeout(() => map.invalidateSize(), 200);
 
   // Store references for highlighting
   let townlandGeoLayer = null;
@@ -1918,7 +1922,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
           const keyRaw = canonicalTownland(nm) || nm;
 
-          // Force match the dropdown options which might be uppercase
+          // Sync dropdown — match case-insensitively against loaded options
           const select = $("townlandSelect");
           let matchedVal = keyRaw;
           for (let opt of select.options) {
@@ -1927,8 +1931,18 @@ document.addEventListener("DOMContentLoaded", async () => {
               break;
             }
           }
-
           select.value = matchedVal;
+
+          // Directly render the panel for the clicked townland regardless of
+          // whether the dropdown options have finished loading.  The change
+          // event also fires so surname autocomplete and other listeners stay
+          // in sync, but we do not depend on it reaching renderTownlandPanel.
+          selectedTownlandName = matchedVal || keyRaw;
+          if (homeHeritageState.mode === "heritage") {
+            renderHomeHeritageSummary(selectedTownlandName);
+          } else {
+            renderTownlandPanel(selectedTownlandName);
+          }
           select.dispatchEvent(new Event("change"));
         });
       }

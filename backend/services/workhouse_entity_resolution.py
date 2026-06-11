@@ -456,7 +456,96 @@ def get_record_resolution(record_id: str) -> dict[str, Any]:
 
 
 def get_resolution_map(record_ids: list[str]) -> dict[str, dict[str, Any]]:
-    return {str(record_id): get_record_resolution(str(record_id)) for record_id in record_ids}
+    """
+    Return a map of record_id → resolution dict for all given record IDs.
+    Uses a single batched SQL query instead of one query per record, so it
+    is safe to call with thousands of IDs (e.g. the unfiltered records page).
+    """
+    if not record_ids:
+        return {}
+
+    # Only query records that actually have links — avoids a huge IN clause
+    # when most records have no workhouse match.
+    linked_ids: set[str] = set()
+    conn = get_db_conn()
+    try:
+        rows_all = conn.execute(
+            """
+            SELECT
+              l.unified_record_id, l.score, l.label, l.review_required,
+              l.supporting_evidence_json, l.conflicting_evidence_json, l.missing_evidence_json,
+              s.id AS mention_id, s.source_record_id, s.raw_name, s.raw_place, s.event_year,
+              s.age, s.occupation
+            FROM workhouse_unified_links l
+            JOIN source_mentions s ON s.id = l.mention_id
+            ORDER BY l.unified_record_id, l.score DESC
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    # Group rows by unified_record_id in memory
+    from collections import defaultdict
+    rows_by_id: dict[str, list[dict]] = defaultdict(list)
+    for row in rows_all:
+        rows_by_id[row["unified_record_id"]].append(dict(row))
+
+    result: dict[str, dict[str, Any]] = {}
+    requested = set(str(r) for r in record_ids)
+
+    for record_id in requested:
+        rows = rows_by_id.get(str(record_id), [])
+        linked: list[dict[str, Any]] = []
+        possible: list[dict[str, Any]] = []
+        supporting: list[str] = []
+        conflicting: list[str] = []
+        mention_ids: list[int] = []
+
+        for row in rows:
+            evidence = json.loads(row.get("supporting_evidence_json") or "[]")
+            conflicts = json.loads(row.get("conflicting_evidence_json") or "[]")
+            missing = json.loads(row.get("missing_evidence_json") or "[]")
+            payload = {
+                "source": "workhouse",
+                "source_record_id": row.get("source_record_id"),
+                "name": row.get("raw_name"),
+                "place": row.get("raw_place"),
+                "year": row.get("event_year"),
+                "age": row.get("age"),
+                "occupation": row.get("occupation"),
+                "confidence_score": row.get("score"),
+                "confidence": _LABEL_TO_CONFIDENCE.get(row.get("label"), "Low"),
+                "label": row.get("label"),
+                "why_it_matched": evidence,
+                "what_evidence_is_missing": missing,
+                "conflicting_evidence": conflicts,
+                "review_required": bool(row.get("review_required")),
+            }
+            mention_ids.append(int(row["mention_id"]))
+            supporting.extend(evidence)
+            conflicting.extend(conflicts)
+            if row.get("label") == "CONFIRMED_MATCH":
+                linked.append(payload)
+            elif row.get("label") == "POSSIBLE_MATCH":
+                possible.append(payload)
+
+        ambiguous = len(set(mention_ids)) != len(mention_ids) or len(possible) > 1
+        result[record_id] = {
+            "record_id": record_id,
+            "linked_workhouse_records": linked,
+            "possible_workhouse_matches": possible,
+            "please_check_records": possible,
+            "identity_is_ambiguous": ambiguous,
+            "identity_disambiguation_note": (
+                "Multiple plausible workhouse links were found for this identity. "
+                "Please review the possible matches before treating them as the same person."
+                if ambiguous else None
+            ),
+            "supporting_evidence": sorted(set(supporting)),
+            "conflicting_evidence": sorted(set(conflicting)),
+        }
+
+    return result
 
 
 def get_matches_for_record(record_id: str) -> dict[str, Any]:
