@@ -33,9 +33,10 @@ def api_unified_records():
         year=year, estate=estate, limit=limit,
     )
 
-    # Try persisted entity-resolution links first; fall back to in-memory fuzzy index.
+    # Use persisted entity-resolution links from the database.
+    # The legacy in-memory fuzzy index (get_match_index) is not used — it requires
+    # O(n×m) SequenceMatcher over 13k records and times out gunicorn workers.
     resolution_map: dict = {}
-    use_legacy = False
     try:
         from backend.services.workhouse_entity_resolution import (
             get_resolution_map,
@@ -43,56 +44,8 @@ def api_unified_records():
         )
         if has_persisted_links():
             resolution_map = get_resolution_map([str(r.get("record_id") or "") for r in recs])
-        else:
-            use_legacy = True
     except Exception:
-        use_legacy = True
-
-    if use_legacy:
-        try:
-            from backend.services.workhouse_service import get_match_index
-            _wh_idx = get_match_index()
-
-            def _legacy_to_new(m: dict, confirmed: bool) -> dict:
-                why = []
-                if m.get("location_match"):
-                    why.append("Electoral division matches townland")
-                if m.get("match_basis") and "date" in m.get("match_basis", ""):
-                    why.append("Year within ±1 of record year")
-                if m.get("occupation_match"):
-                    why.append("Occupation keyword overlap")
-                return {
-                    "name": m.get("raw_name") or "",
-                    "place": m.get("electoral_division") or m.get("raw_place") or "",
-                    "year": m.get("admitted_or_born") or "",
-                    "age": m.get("age") or "",
-                    "confidence_score": m.get("name_score"),
-                    "confidence": m.get("confidence", "Low"),
-                    "label": "CONFIRMED_MATCH" if confirmed else "POSSIBLE_MATCH",
-                    "why_it_matched": why or [m.get("match_basis", "Name-based match")],
-                    "what_evidence_is_missing": [] if confirmed else ["Further corroborating evidence needed"],
-                    "conflicting_evidence": [],
-                    "source_record_id": m.get("register_number") or "",
-                    "raw_name": m.get("raw_name") or "",
-                    "electoral_division": m.get("electoral_division") or "",
-                }
-
-            for r in recs:
-                rid = str(r.get("record_id") or "")
-                matches = _wh_idx.get(rid, [])
-                linked = [_legacy_to_new(m, True) for m in matches if m.get("confidence") == "High"]
-                possible = [_legacy_to_new(m, False) for m in matches if m.get("confidence") in ("Medium", "Low")]
-                resolution_map[rid] = {
-                    "linked_workhouse_records": linked,
-                    "possible_workhouse_matches": possible,
-                    "please_check_records": possible,
-                    "identity_is_ambiguous": False,
-                    "identity_disambiguation_note": None,
-                    "supporting_evidence": [],
-                    "conflicting_evidence": [],
-                }
-        except Exception:
-            pass
+        pass
 
     for r in recs:
         resolution = resolution_map.get(str(r.get("record_id") or ""), {})
