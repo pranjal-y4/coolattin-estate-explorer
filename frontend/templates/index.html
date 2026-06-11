@@ -40,10 +40,9 @@
   </div>
 </section>
 
-<!-- ── Photo strip + record mini-cards (below the fold) ── -->
+<!-- ── Photo strip (below the fold) ── -->
 <section class="section section-below-hero">
   <div class="container" style="max-width:960px;">
-    <!-- Wicklow photo strip -->
     <div class="photo-strip" style="margin-bottom:40px;">
       <a class="photo" href="https://en.wikipedia.org/wiki/County_Wicklow" target="_blank" rel="noreferrer">
         <img loading="lazy" src="{{ url_for('static', filename='images/wick1.jpg') }}" alt="Wicklow landscape" />
@@ -54,38 +53,6 @@
       <a class="photo" href="https://en.wikipedia.org/wiki/Glendalough" target="_blank" rel="noreferrer">
         <img loading="lazy" src="{{ url_for('static', filename='images/wick1.jpg') }}" alt="Glendalough" />
       </a>
-    </div>
-
-    <!-- Record type mini-cards -->
-    <div class="hero-cards">
-      <div class="mini-card">
-        <div class="mini-icon blue">📜</div>
-        <div>
-          <div class="mini-title" data-i18n="estateRecords">Estate Records</div>
-          <div class="mini-desc" data-i18n="estateRecordsDesc">Tenant lists, leases, and property records across 18th–19th centuries.</div>
-        </div>
-      </div>
-      <div class="mini-card">
-        <div class="mini-icon amber">🧳</div>
-        <div>
-          <div class="mini-title" data-i18n="emigrationRecords">Emigration Records</div>
-          <div class="mini-desc" data-i18n="emigrationRecordsDesc">Assisted emigration documents tracking families who left for new opportunities.</div>
-        </div>
-      </div>
-      <div class="mini-card">
-        <div class="mini-icon rose">🏠</div>
-        <div>
-          <div class="mini-title" data-i18n="evictionRecords">Eviction Records</div>
-          <div class="mini-desc" data-i18n="evictionRecordsDesc">Historical documentation of evictions and disputes during challenging times.</div>
-        </div>
-      </div>
-      <div class="mini-card">
-        <div class="mini-icon" style="background:#f3e8ff; color:#6b21a8;">🏥</div>
-        <div>
-          <div class="mini-title" data-i18n="workhouseRecords">Workhouse Records</div>
-          <div class="mini-desc" data-i18n="workhouseRecordsDesc">Workhouse admission and discharge records linked by name and electoral division context.</div>
-        </div>
-      </div>
     </div>
   </div>
 </section>
@@ -238,30 +205,30 @@
   </div>
 
   <div class="container cards-3">
-    <article class="record-card" data-kind="tenants">
+    <article class="record-card" data-kind="emigrations">
       <div class="record-head">
-        <div class="record-title">Byrne Family · Aghold</div>
-        <span class="tag blue" data-i18n="tenancyWorkhouse">Tenancy · Eviction · Workhouse</span>
+        <div class="record-title">Byrne Family · Coolboy</div>
+        <span class="tag blue">Tenancy · Eviction · Emigration</span>
       </div>
-      <p class="record-desc">The Byrnes were one of the most densely-recorded families in Aghold — appearing across tenancy ledgers, eviction proceedings (Tinahely Court House, 1840s–50s), and workhouse registers during the Famine years.</p>
+      <p class="record-desc">The Byrnes of Coolboy are one of the most thoroughly documented families in the Fitzwilliam archive — 51 records spanning tenancy surveys, ejectment proceedings, and assisted emigration lists between 1845 and 1868.</p>
       <div class="record-meta">
-        <div><span data-i18n="townland">Townland:</span> Aghold · Barony of Shillelagh</div>
-        <div><span>Period:</span> 1841–1856</div>
-        <div><span data-i18n="sources">Sources:</span> Fitzwilliam Papers · Workhouse Registers</div>
+        <div><span>Townland:</span> Coolboy · Barony of Shillelagh</div>
+        <div><span>Period:</span> 1845–1868 · 51 records</div>
+        <div><span>Sources:</span> Fitzwilliam Papers MS 4970 · MS 4972 · MS 4974-5</div>
       </div>
-      <button class="btn btn-soft btn-block" onclick="exploreOnMap('Aghold', 'Byrne')">Explore on Map</button>
+      <button class="btn btn-soft btn-block" onclick="exploreOnMap('Coolboy', 'Byrne')">Explore on Map</button>
     </article>
 
     <article class="record-card" data-kind="evictions">
       <div class="record-head">
         <div class="record-title">Fox Family · Coolboy</div>
-        <span class="tag rose" data-i18n="evictionLegal">Tenancy · Eviction · Emigration</span>
+        <span class="tag rose">Tenancy · Eviction · Emigration</span>
       </div>
-      <p class="record-desc">The Fox family of Coolboy appear in tenancy surveys, Ejectment Books (arrears and Notices to Quit), and the assisted emigration lists — a complete record of displacement and departure during the post-Famine clearances.</p>
+      <p class="record-desc">The Fox family of Coolboy appear across tenancy surveys, Ejectment Books recording arrears and Notices to Quit, and the assisted emigration lists — 43 records tracing displacement and departure during the post-Famine clearances of 1845–1852.</p>
       <div class="record-meta">
-        <div><span data-i18n="townland">Townland:</span> Coolboy · Barony of Shillelagh</div>
-        <div><span>Period:</span> 1847–1856</div>
-        <div><span data-i18n="sources">Sources:</span> Fitzwilliam Papers MS 4972 · MS 4974-5</div>
+        <div><span>Townland:</span> Coolboy · Barony of Shillelagh</div>
+        <div><span>Period:</span> 1845–1852 · 43 records</div>
+        <div><span>Sources:</span> Fitzwilliam Papers MS 4972 · MS 4974-5</div>
       </div>
       <button class="btn btn-soft btn-block" onclick="exploreOnMap('Coolboy', 'Fox')">Explore on Map</button>
     </article>
@@ -269,13 +236,13 @@
     <article class="record-card" data-kind="emigrations">
       <div class="record-head">
         <div class="record-title">Healy Family · Killinure</div>
-        <span class="tag amber" data-i18n="emigrationDeparture">Tenancy · Emigration</span>
+        <span class="tag amber">Tenancy · Eviction · Emigration</span>
       </div>
-      <p class="record-desc">Members of the Healy family of Killinure departed on Fitzwilliam-assisted emigration ships between 1847 and 1851, with departures from Liverpool and arrivals recorded at Quebec and New York. Tenancy records trace the holding before departure.</p>
+      <p class="record-desc">Members of the Healy family of Killinure are recorded across 52 entries spanning tenancy, eviction, and Fitzwilliam-assisted emigration. Ships departed from Liverpool with arrivals at Quebec and New York between 1847 and 1851.</p>
       <div class="record-meta">
-        <div><span data-i18n="townland">Townland:</span> Killinure · Barony of Shillelagh</div>
-        <div><span>Period:</span> 1841–1851</div>
-        <div><span data-i18n="sources">Sources:</span> Fitzwilliam Papers MS 4974-5</div>
+        <div><span>Townland:</span> Killinure · Barony of Shillelagh</div>
+        <div><span>Period:</span> 1847–1886 · 52 records</div>
+        <div><span>Sources:</span> Fitzwilliam Papers MS 4974-5 · MS 4970</div>
       </div>
       <button class="btn btn-soft btn-block" onclick="exploreOnMap('Killinure', 'Healy')">Explore on Map</button>
     </article>
@@ -284,27 +251,33 @@
 
 <script>
 function exploreOnMap(townland, surname) {
-  // Navigate to the map explorer section and pre-populate filters
   const exploreSection = document.getElementById('explore');
-  if (exploreSection) {
-    exploreSection.scrollIntoView({ behavior: 'smooth' });
-  }
-  // Pre-populate the townland and surname filters, then apply
-  setTimeout(function () {
+  if (exploreSection) exploreSection.scrollIntoView({ behavior: 'smooth' });
+
+  // Retry until townland options are loaded (data arrives async)
+  let attempts = 0;
+  function tryApply() {
+    attempts++;
     const tlSelect = document.getElementById('townlandSelect');
-    const snInput = document.getElementById('surnameInput');
+    const snInput  = document.getElementById('surnameInput');
     const applyBtn = document.getElementById('applyFiltersBtn');
-    if (tlSelect) {
-      for (let i = 0; i < tlSelect.options.length; i++) {
-        if (tlSelect.options[i].value.toLowerCase() === townland.toLowerCase()) {
-          tlSelect.value = tlSelect.options[i].value;
-          break;
-        }
+    if (!tlSelect || !snInput || !applyBtn) { if (attempts < 20) setTimeout(tryApply, 200); return; }
+
+    // Options populated = more than just "All townlands"
+    if (tlSelect.options.length <= 1 && attempts < 20) { setTimeout(tryApply, 200); return; }
+
+    // Match townland name case-insensitively
+    for (let i = 0; i < tlSelect.options.length; i++) {
+      if (tlSelect.options[i].value.toLowerCase() === townland.toLowerCase()) {
+        tlSelect.value = tlSelect.options[i].value;
+        tlSelect.dispatchEvent(new Event('change'));
+        break;
       }
     }
-    if (snInput) snInput.value = surname;
-    if (applyBtn) applyBtn.click();
-  }, 600);
+    snInput.value = surname;
+    applyBtn.click();
+  }
+  setTimeout(tryApply, 400);
 }
 </script>
 

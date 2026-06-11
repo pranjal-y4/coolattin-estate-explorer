@@ -2,7 +2,7 @@
 Entity-resolution helpers for persisted workhouse-to-unified-record linking.
 """
 
-from .candidates import generate_candidates
+from .candidates import build_unified_index, generate_candidates
 from .normalise import (
     normalise_person_fields,
     normalise_place_name,
@@ -11,6 +11,7 @@ from .normalise import (
 from .scoring import score_candidate
 
 __all__ = [
+    "build_unified_index",
     "generate_candidates",
     "normalise_person_fields",
     "normalise_place_name",

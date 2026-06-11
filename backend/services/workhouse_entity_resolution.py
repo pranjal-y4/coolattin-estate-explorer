@@ -19,6 +19,7 @@ from typing import Any
 from extensions import get_db_conn
 
 from backend.services.entity_resolution import (
+    build_unified_index,
     generate_candidates,
     normalise_person_fields,
     normalise_place_name,
@@ -287,6 +288,8 @@ def link_workhouse_records(
 ) -> dict[str, Any]:
     mentions = build_source_mentions(limit=limit)
     unified_records = _load_unified_records()
+    # Pre-build blocking index once; avoids O(n_workhouse × n_unified) scan
+    unified_idx = build_unified_index(unified_records)
 
     conn = get_db_conn()
     audit_rows: list[dict[str, Any]] = []
@@ -307,7 +310,7 @@ def link_workhouse_records(
             mention_id = _insert_source_mention(conn, mention)
             summary["source_mentions_created"] += 1
 
-            candidates = generate_candidates(mention, unified_records)
+            candidates = generate_candidates(mention, unified_records, unified_index=unified_idx)
             if not candidates:
                 summary["unresolved_records"] += 1
                 continue

@@ -262,23 +262,83 @@ def build_graph(limit: int = _MAX_PERSONS) -> dict:
     """
     Build a graph dict {nodes, edges, meta} suitable for D3.js force simulation.
 
-    Node types:
-      - Person   (id="p_<record_id>")
-      - Townland  (id="t_<name>")
-      - EventHub  (id="eh_emigration" | "eh_eviction" | "eh_tenancy")
-
-    Edges:
-      - Person → Townland  (label="from")
-      - Person → EventHub  (label="has_event")  one per record's primary event type
+    Serves the processed property graph from graph_nodes/graph_edges when available
+    (populated by scripts/build_graph.py); falls back to the dynamic SQLite build.
     """
     global _GRAPH_CACHE
     with _GRAPH_CACHE_LOCK:
         if _GRAPH_CACHE is not None:
             return _GRAPH_CACHE
 
-        result = _build_graph_inner(limit)
+        result = _build_from_processed_graph() or _build_graph_inner(limit)
         _GRAPH_CACHE = result
         return result
+
+
+def _build_from_processed_graph() -> dict | None:
+    """Serve the processed knowledge graph from graph_nodes/graph_edges (if populated)."""
+    import json as _json
+    from extensions import get_db_conn
+    conn = get_db_conn()
+    try:
+        node_count = conn.execute("SELECT COUNT(*) FROM graph_nodes").fetchone()[0]
+        if not node_count:
+            return None
+
+        _NODE_COLORS = {
+            "Townland": "#15803d",
+            "CivilParish": "#7c3aed",
+            "Barony": "#b45309",
+            "County": "#0369a1",
+            "Person": "#334155",
+            "EventHub": "#dc2626",
+        }
+        nodes: list[dict] = []
+        edges: list[dict] = []
+        node_ids: set[str] = set()
+
+        for r in conn.execute(
+            "SELECT node_id, label, name, props, community FROM graph_nodes LIMIT 1500"
+        ).fetchall():
+            nid = r["node_id"]
+            if nid in node_ids:
+                continue
+            node_ids.add(nid)
+            props = _json.loads(r["props"] or "{}")
+            color = _NODE_COLORS.get(r["label"], "#64748b")
+            size = 18 if r["label"] in ("CivilParish", "Barony", "County") else (
+                12 if r["label"] == "Townland" else 8
+            )
+            nodes.append({
+                "id": nid, "type": r["label"], "label": r["name"] or nid,
+                "color": color, "size": size, "community": r["community"],
+                **props,
+            })
+
+        for r in conn.execute(
+            "SELECT src, dst, rel_type, props FROM graph_edges LIMIT 3000"
+        ).fetchall():
+            if r["src"] not in node_ids or r["dst"] not in node_ids:
+                continue
+            props = _json.loads(r["props"] or "{}")
+            edges.append({
+                "source": r["src"], "target": r["dst"],
+                "label": r["rel_type"], "type": r["rel_type"],
+                **props,
+            })
+
+        meta = {
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "source": "processed_graph",
+            "townland_count": sum(1 for n in nodes if n["type"] == "Townland"),
+            "parish_count": sum(1 for n in nodes if n["type"] == "CivilParish"),
+        }
+        return {"nodes": nodes, "edges": edges, "meta": meta}
+    except Exception:
+        return None
+    finally:
+        conn.close()
 
 
 def _build_graph_inner(limit: int) -> dict:  # noqa: ARG001 — limit kept for API compat

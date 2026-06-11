@@ -73,6 +73,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const state = {
     records: [],
+    recordById: new Map(),   // record_id → record (O(1) lookup)
+    recordsByName: new Map(), // "forename|surname" → [records] (O(1) person grouping)
     townlandIndex: {},
     familyGroups: {},
     activeGroups: []
@@ -649,8 +651,20 @@ document.addEventListener("DOMContentLoaded", async () => {
   function buildIndexes(records) {
     state.townlandIndex = {};
     state.familyGroups = {};
+    state.recordById = new Map();
+    state.recordsByName = new Map();
 
     records.forEach((rec) => {
+      // O(1) lookup indexes
+      if (rec.record_id != null) state.recordById.set(String(rec.record_id), rec);
+      const _fn = (rec.forename || "").trim().toLowerCase();
+      const _sn = (rec.surname  || "").trim().toLowerCase();
+      if (_fn || (_sn && _sn !== "unknown")) {
+        const _nameKey = `${_fn}|${_sn}`;
+        if (!state.recordsByName.has(_nameKey)) state.recordsByName.set(_nameKey, []);
+        state.recordsByName.get(_nameKey).push(rec);
+      }
+
       const tl = rec.townland && String(rec.townland).trim();
       if (!tl) return;
       if (!state.townlandIndex[tl]) {
@@ -760,20 +774,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   };
 
   window.openRecordById = function (recordId) {
-    const rec = state.records.find((r) => String(r.record_id) === String(recordId));
+    const rec = state.recordById.get(String(recordId))
+              || state.records.find((r) => String(r.record_id) === String(recordId));
     if (!rec) return;
 
     const forename = (rec.forename || "").trim().toLowerCase();
     const surname  = (rec.surname  || "").trim().toLowerCase();
     const hasName  = forename || (surname && surname !== "unknown");
 
-    // Collect ALL records for the same person across every source
+    // O(1) lookup using the pre-built name index
     const allForPerson = hasName
-      ? state.records.filter(r => {
-          const rf = (r.forename || "").trim().toLowerCase();
-          const rs = (r.surname  || "").trim().toLowerCase();
-          return rf === forename && rs === surname;
-        })
+      ? (state.recordsByName.get(`${forename}|${surname}`) || [rec])
       : [rec];
 
     const personLabel = canonicalName(rec);
@@ -1096,6 +1107,24 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     state.records = data.map((r) => ({ ...r, year: normalizeYear(r.year) }));
     buildIndexes(state.records);
+    // Re-populate surname datalist for the currently selected townland,
+    // since records arrive async and the user may have selected a townland
+    // before this load completed.
+    const _surnameSuggest = document.getElementById("surnameSuggestions");
+    if (_surnameSuggest !== null) {
+      const _tl = (document.getElementById("townlandSelect")?.value || "").toLowerCase();
+      const _skipCT = new Set(["common grazing", "house lot"]);
+      const _pool = _tl ? state.records.filter(r => (r.townland || "").toLowerCase() === _tl) : state.records;
+      const _names = [...new Set(_pool.map(r => {
+        const sn = (r.surname || "").trim();
+        const ctSn = (r.chief_tenant_surname || "").trim();
+        const ctFn = (r.chief_tenant_forename || "").trim();
+        const ctValid = ctSn && /^[A-Za-z\s'-]+$/.test(ctSn) && !_skipCT.has(ctSn.toLowerCase()) && ctFn && ctFn !== "-" && ctFn !== "Multiple Chief Tenants";
+        return sn || (ctValid ? ctSn : "");
+      }).filter(Boolean))].sort((a, b) => a.localeCompare(b)).slice(0, 50);
+      _surnameSuggest.innerHTML = "";
+      _names.forEach(s => { const o = document.createElement("option"); o.value = s; _surnameSuggest.appendChild(o); });
+    }
   }
 
   async function loadOptions() {
@@ -1259,10 +1288,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const mapEl = $("wicklowMap");
   if (!mapEl) return;
+  if (typeof L === "undefined") {
+    mapEl.innerHTML = "<div style='display:flex;align-items:center;justify-content:center;height:100%;color:#64748b;font-size:13px;'>Map unavailable — check your internet connection and reload.</div>";
+    return;
+  }
   const map = L.map("wicklowMap", { minZoom: 8, maxZoom: 15 });
-  L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
-    attribution: "© OpenTopoMap contributors",
-    opacity: 0.55
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "© OpenStreetMap contributors",
+    opacity: 0.7,
+    maxZoom: 19,
   }).addTo(map);
   L.rectangle([[52.65, -6.9], [53.35, -5.9]], {
     color: "transparent",

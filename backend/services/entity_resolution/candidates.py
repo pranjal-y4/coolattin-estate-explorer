@@ -5,6 +5,7 @@ Candidate blocking and fuzzy candidate generation for workhouse mentions.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -22,17 +23,37 @@ def _fuzzy_ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio() * 100.0
 
 
+def build_unified_index(unified_records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """
+    Pre-build a blocking index keyed by phonetic surname.
+    Reduces generate_candidates from O(n_workhouse × n_unified) to
+    O(n_workhouse × avg_surname_bucket_size).
+    Also includes a '_place' bucket for place-matched lookups.
+    """
+    idx: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for rec in unified_records:
+        psn = rec.get("phonetic_surname") or ""
+        if psn:
+            idx[f"ps:{psn}"].append(rec)
+        place = rec.get("normalised_place") or ""
+        if place:
+            idx[f"pl:{place}"].append(rec)
+    return dict(idx)
+
+
 def generate_candidates(
     mention: dict[str, Any],
     unified_records: list[dict[str, Any]],
     *,
     max_candidates: int = 25,
+    unified_index: dict[str, list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Generate candidate unified records for a workhouse mention.
 
-    Candidate generation intentionally uses deterministic/fuzzy blocking rules,
-    not embeddings.
+    Pass ``unified_index`` (built once via ``build_unified_index``) to avoid
+    scanning all 13 k unified records for every mention — typically reduces
+    the search space from 13,707 to a few dozen per mention.
     """
     candidates: dict[str, dict[str, Any]] = {}
     m_name = mention.get("normalised_name") or ""
@@ -42,7 +63,29 @@ def generate_candidates(
     m_place = mention.get("normalised_place") or ""
     m_year = mention.get("event_year")
 
-    for record in unified_records:
+    # When an index is available, restrict the search to relevant surname/place
+    # buckets instead of iterating the entire unified corpus.
+    if unified_index is not None:
+        pool: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for bucket_key in (
+            f"ps:{m_phonetic_surname}" if m_phonetic_surname else "",
+            f"pl:{m_place}" if m_place else "",
+        ):
+            if not bucket_key:
+                continue
+            for rec in unified_index.get(bucket_key, []):
+                rid = str(rec.get("record_id") or "")
+                if rid and rid not in seen_ids:
+                    seen_ids.add(rid)
+                    pool.append(rec)
+        # Fall back to full scan only when no index bucket produced any candidates
+        if not pool:
+            pool = unified_records
+    else:
+        pool = unified_records
+
+    for record in pool:
         record_id = str(record.get("record_id") or "")
         if not record_id:
             continue
@@ -78,9 +121,10 @@ def generate_candidates(
         if not strategies:
             continue
 
+        name_ratio = _fuzzy_ratio(m_name, r_name)
         candidate = dict(record)
         candidate["matched_strategies"] = sorted(set(strategies))
-        candidate["blocking_name_ratio"] = round(_fuzzy_ratio(m_name, r_name), 2)
+        candidate["blocking_name_ratio"] = round(name_ratio, 2)
         candidates[record_id] = candidate
 
     ranked = sorted(
