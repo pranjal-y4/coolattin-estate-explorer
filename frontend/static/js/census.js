@@ -24,6 +24,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     year: 1841,
     selectedTownland: null,
     townlandDetails: null,
+    workhouseData: null,
     recordsByTownlandYear: {},
     summaryByYear: {},
     geoLayer: null,
@@ -211,7 +212,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       const nm = String(feature?.properties?.TL_ENGLISH || "").trim();
       layer.on("click", async () => {
         state.selectedTownland = nm;
-        state.townlandDetails = await fetchTownlandDetails(nm);
+        const [details, workhouseData] = await Promise.all([
+          fetchTownlandDetails(nm),
+          fetchWorkhouseByTownland(nm),
+        ]);
+        state.townlandDetails = details;
+        state.workhouseData = workhouseData;
         recolorMap();
         renderTownlandPanel(nm);
       });
@@ -297,6 +303,71 @@ document.addEventListener("DOMContentLoaded", async () => {
       console.error("census.js: fetchTownlandDetails error", e);
     }
     return null;
+  }
+
+  async function fetchWorkhouseByTownland(townlandName) {
+    try {
+      const res = await fetch(`/api/unified/workhouse-by-townland?townland=${encodeURIComponent(townlandName)}`);
+      if (res.ok) return await res.json();
+    } catch (e) {
+      console.error("census.js: fetchWorkhouseByTownland error", e);
+    }
+    return { linked: [], unlinked: [] };
+  }
+
+  function renderWorkhouseSection(wh) {
+    if (!wh) return "";
+    const linked = Array.isArray(wh.linked) ? wh.linked : [];
+    const unlinked = Array.isArray(wh.unlinked) ? wh.unlinked : [];
+    if (!linked.length && !unlinked.length) return "";
+
+    const renderLinkedCard = (r) => `
+      <div style="padding:10px;border:1px solid #d8b4fe;border-radius:8px;background:#faf5ff;margin-bottom:8px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+          <span style="font-weight:700;color:#4c1d95;font-size:13px;">${r.wh_forename || ""} ${r.wh_surname || r.raw_name || "Unknown"}</span>
+          <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:${r.match_label === "CONFIRMED_MATCH" ? "#dcfce7" : "#fff7ed"};color:${r.match_label === "CONFIRMED_MATCH" ? "#15803d" : "#92400e"};">${r.match_label === "CONFIRMED_MATCH" ? "Confirmed" : "Possible"}</span>
+        </div>
+        <div style="font-size:11px;color:#6b21a8;">Workhouse: ${r.raw_place || r.normalised_place || "-"} · Year: ${r.event_year || "-"} · Age: ${r.age || "-"}</div>
+        <div style="font-size:11px;color:#475569;">Estate record: ${r.estate_forename || ""} ${r.estate_surname || ""} · ${r.townland || ""} · ${r.estate_year || ""} · Role: ${r.role || "-"}</div>
+        <div style="font-size:10px;color:#7c3aed;margin-top:3px;">Match score: ${r.match_score != null ? (r.match_score * 100).toFixed(0) + "%" : "-"}</div>
+        <div style="font-size:10px;color:#92400e;background:#fef3c7;border-radius:4px;padding:3px 6px;margin-top:5px;">
+          ⚠ Please verify: this workhouse record may or may not refer to the same person as the estate record.
+        </div>
+      </div>`;
+
+    const renderUnlinkedCard = (r) => `
+      <div style="padding:8px;border:1px solid #e9d5ff;border-radius:8px;background:#f5f3ff;margin-bottom:6px;opacity:0.85;">
+        <div style="font-weight:600;color:#5b21b6;font-size:12px;">${r.raw_name || "Unknown"}</div>
+        <div style="font-size:11px;color:#6b21a8;">Place: ${r.raw_place || "-"} · Year: ${r.event_year || "-"} · Age: ${r.age || "-"}</div>
+        <div style="font-size:10px;color:#7c3aed;">Source: ${r.source_table || "workhouse register"}</div>
+      </div>`;
+
+    let html = `
+      <div style="margin-top:14px;padding:12px 14px;background:#faf5ff;border:1px solid #d8b4fe;border-radius:10px;">
+        <div style="font-size:11px;color:#4c1d95;font-weight:800;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">🏥 Workhouse Records</div>`;
+
+    if (linked.length) {
+      html += `
+        <div style="font-size:11px;font-weight:700;color:#5b21b6;margin-bottom:6px;">Linked to estate records (${linked.length})</div>
+        <div style="font-size:11px;color:#7c2d12;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:6px 8px;margin-bottom:8px;line-height:1.5;">
+          These workhouse records have been algorithmically matched to estate records in this townland.
+          <strong>Always verify that these refer to the same individual</strong> before drawing conclusions —
+          common names and shared places can produce false matches.
+        </div>
+        ${linked.map(renderLinkedCard).join("")}`;
+    }
+
+    if (unlinked.length) {
+      html += `
+        <div style="font-size:11px;font-weight:700;color:#5b21b6;margin-top:${linked.length ? "10px" : "0"};margin-bottom:6px;">Unlinked mentions (${unlinked.length})</div>
+        <div style="font-size:11px;color:#475569;margin-bottom:6px;">
+          Workhouse records mentioning this area, not yet matched to a specific estate record.
+        </div>
+        ${unlinked.map(renderUnlinkedCard).join("")}`;
+    }
+
+    html += `</div>`;
+    return html;
   }
 
   function renderTownlandPanel(townland) {
@@ -513,7 +584,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         </div>`;
       }
 
-      detailContainer.innerHTML = html;
+      // Add workhouse records section
+      const whSection = renderWorkhouseSection(state.workhouseData);
+      detailContainer.innerHTML = html + whSection;
     }
 
     // KPI cards for selected year (or nearest available year for estate-survey townlands)

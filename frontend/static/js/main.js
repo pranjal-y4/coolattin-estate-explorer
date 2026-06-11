@@ -181,7 +181,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     const tl = String(selectedTownland || "").trim().toLowerCase();
     if (!s) return true;
     return state.records.some((r) => {
-      if ((r.surname || "").toLowerCase() !== s) return false;
+      const sn = (r.surname || "").trim().toLowerCase();
+      const ctSn = (r.chief_tenant_surname || "").trim();
+      const ctFn = (r.chief_tenant_forename || "").trim();
+      const ctValid = ctSn && /^[A-Za-z\s'-]+$/.test(ctSn) && ctFn && ctFn !== "-" && ctFn !== "Multiple Chief Tenants";
+      const eff = sn || (ctValid ? ctSn.toLowerCase() : "");
+      if (eff !== s) return false;
       if (!tl) return true;
       return (r.townland || "").toLowerCase() === tl;
     });
@@ -599,8 +604,48 @@ document.addEventListener("DOMContentLoaded", async () => {
     `;
   }
 
+  function inlineWorkhouseHTML(rec) {
+    const linked = Array.isArray(rec.linked_workhouse_records) ? rec.linked_workhouse_records : [];
+    const possible = Array.isArray(rec.please_check_records) ? rec.please_check_records
+      : Array.isArray(rec.possible_workhouse_matches) ? rec.possible_workhouse_matches : [];
+    const all = [...linked, ...possible];
+    if (!all.length) return "";
+
+    const renderCard = (m, isConfirmed) => {
+      const bg = isConfirmed ? "#f0fdf4" : "#faf5ff";
+      const border = isConfirmed ? "#86efac" : "#d8b4fe";
+      const nameColor = isConfirmed ? "#14532d" : "#4c1d95";
+      const label = isConfirmed ? "Confirmed link" : "Please verify";
+      const labelBg = isConfirmed ? "#dcfce7" : "#ede9fe";
+      const labelColor = isConfirmed ? "#15803d" : "#6d28d9";
+      const name = m.name || m.raw_name || `${m.forename || ""} ${m.surname || ""}`.trim() || "Unknown";
+      const score = m.confidence_score != null ? ` · Score: ${(Number(m.confidence_score) * 100).toFixed(0)}%` : "";
+      return `
+        <div style="padding:8px 10px;border:1px solid ${border};border-radius:7px;background:${bg};margin-bottom:6px;">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+            <span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:999px;background:${labelBg};color:${labelColor};">${label}</span>
+            <span style="font-weight:700;color:${nameColor};font-size:12px;">${name}</span>
+          </div>
+          <div style="font-size:11px;color:#475569;">Place: ${m.place || m.electoral_division || m.raw_place || "-"} · Year: ${m.year || "-"} · Age: ${m.age || "-"}${score}</div>
+          ${m.why_it_matched && m.why_it_matched.length ? `<div style="font-size:10px;color:#6b7280;">Evidence: ${m.why_it_matched.join("; ")}</div>` : ""}
+          ${m.what_evidence_is_missing && m.what_evidence_is_missing.length ? `<div style="font-size:10px;color:#92400e;">Missing: ${m.what_evidence_is_missing.join("; ")}</div>` : ""}
+        </div>`;
+    };
+
+    return `
+      <div style="margin-top:8px;padding:10px 12px;background:#faf5ff;border:1px solid #d8b4fe;border-radius:8px;">
+        <div style="font-size:10px;font-weight:800;color:#4c1d95;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">🏥 Workhouse Records</div>
+        <div style="font-size:11px;color:#78350f;background:#fef3c7;border:1px solid #fde68a;border-radius:5px;padding:5px 8px;margin-bottom:8px;line-height:1.5;">
+          ⚠ These workhouse records were algorithmically matched to this estate record.
+          <strong>Please verify</strong> that they refer to the same individual before drawing conclusions.
+        </div>
+        ${linked.map(m => renderCard(m, true)).join("")}
+        ${possible.map(m => renderCard(m, false)).join("")}
+      </div>`;
+  }
+
   function renderRecordWithLinks(rec) {
-    return `${createRecordCard(rec)}${renderHouseholdLinks(rec)}`;
+    return `${createRecordCard(rec)}${renderHouseholdLinks(rec)}${inlineWorkhouseHTML(rec)}`;
   }
 
   function buildIndexes(records) {
@@ -1003,8 +1048,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     const s = String(surname || "").trim().toLowerCase();
     if (!s) return;
     const tlFilter = String(selectedTownland || "").trim().toLowerCase();
+    const _skipCT = new Set(["common grazing", "house lot"]);
     const rows = state.records.filter((r) => {
-      if ((r.surname || "").toLowerCase() !== s) return false;
+      const sn = (r.surname || "").trim().toLowerCase();
+      const ctSn = (r.chief_tenant_surname || "").trim();
+      const ctFn = (r.chief_tenant_forename || "").trim();
+      const ctValid = ctSn && /^[A-Za-z\s'-]+$/.test(ctSn) && !_skipCT.has(ctSn.toLowerCase()) && ctFn && ctFn !== "-" && ctFn !== "Multiple Chief Tenants";
+      const eff = sn || (ctValid ? ctSn.toLowerCase() : "");
+      if (eff !== s) return false;
       if (!tlFilter) return true;
       return (r.townland || "").toLowerCase() === tlFilter;
     });
@@ -1096,8 +1147,15 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       const qNorm = q.toLowerCase();
+      const skipCTNames = new Set(["common grazing", "house lot"]);
       const items = [...new Set(pool
-        .map((r) => (r.surname || "").trim())
+        .map((r) => {
+          const sn = (r.surname || "").trim();
+          const ctSn = (r.chief_tenant_surname || "").trim();
+          const ctFn = (r.chief_tenant_forename || "").trim();
+          const ctValid = ctSn && /^[A-Za-z\s'-]+$/.test(ctSn) && !skipCTNames.has(ctSn.toLowerCase()) && ctFn && ctFn !== "-" && ctFn !== "Multiple Chief Tenants";
+          return sn || (ctValid ? ctSn : "");
+        })
         .filter(Boolean)
         .filter((s) => (qNorm ? s.toLowerCase().startsWith(qNorm) : true))
       )].sort((a, b) => a.localeCompare(b)).slice(0, 50);

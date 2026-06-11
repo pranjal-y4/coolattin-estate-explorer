@@ -174,6 +174,47 @@ QUERY_MEMORY_SCHEMA_VERSION = "v1"
 QUERY_MEMORY_TABLE = "ask_query_memory"
 QUERY_FEEDBACK_TABLE = "ask_query_feedback"
 
+# ── Per-provider rate limiter (sliding window) ────────────────────────────────
+class _RateLimiter:
+    """Sliding-window rate limiter for outbound LLM API calls."""
+    def __init__(self, max_calls: int, window_seconds: float):
+        self._max = max_calls
+        self._window = window_seconds
+        self._calls: list[float] = []
+        self._lock = threading.Lock()
+
+    def is_allowed(self) -> bool:
+        now = time.time()
+        with self._lock:
+            self._calls = [t for t in self._calls if now - t < self._window]
+            if len(self._calls) >= self._max:
+                return False
+            self._calls.append(now)
+            return True
+
+    def wait_time(self) -> float:
+        now = time.time()
+        with self._lock:
+            expired = [t for t in self._calls if now - t < self._window]
+            if len(expired) < self._max:
+                return 0.0
+            return max(0.0, self._window - (now - expired[0]))
+
+
+# Rate limits: conservative defaults, tunable via env vars
+_RATE_LIMIT_CLAUDE = _RateLimiter(
+    int(os.environ.get("RATE_LIMIT_CLAUDE_RPM", "20")), 60.0
+)
+_RATE_LIMIT_GROK = _RateLimiter(
+    int(os.environ.get("RATE_LIMIT_GROK_RPM", "10")), 60.0
+)
+_RATE_LIMIT_OPENROUTER = _RateLimiter(
+    int(os.environ.get("RATE_LIMIT_OPENROUTER_RPM", "30")), 60.0
+)
+
+# Default townland when question requires one but none was provided
+_DEFAULT_TOWNLAND = os.environ.get("DEFAULT_TOWNLAND", "COOLBOY").strip().upper()
+
 VERIFIED_ANALYSIS_TEMPLATE_IDS: set[str] = {
     "tenant_land_gender_average",
     "widows_with_children_proportion",
@@ -2160,6 +2201,25 @@ def _orchestrated_pipeline_stream(
     warnings: list[str] = []
     if townland_resolution.get("warning"):
         warnings.append(str(townland_resolution["warning"]))
+
+    # Default to COOLBOY when question implies a specific place but none was provided
+    _q_lower = question.lower()
+    _needs_townland = (
+        not canonical_townland
+        and any(kw in _q_lower for kw in (
+            "this townland", "the townland", "that townland",
+            "where is", "which parish", "which barony",
+            "tell me about", "describe", "overview of",
+            "in the estate", "around here",
+        ))
+    )
+    if _needs_townland:
+        canonical_townland = _DEFAULT_TOWNLAND
+        townland_resolution = {**townland_resolution, "name_norm": canonical_townland}
+        warnings.append(
+            f"No specific townland was mentioned — defaulting to {_DEFAULT_TOWNLAND.title()}. "
+            "Refine your question with a townland name for more precise results."
+        )
     warnings.extend(_question_data_coverage_warnings(question))
 
     # Part A: Person identity resolution for surname questions
@@ -2267,7 +2327,9 @@ def _orchestrated_pipeline_stream(
 
     _routed_sql_ok = False
 
-    # ── ANALYTICAL lane (Phase 2: semantic_layer → deterministic SQL) ──────────
+    # ── ANALYTICAL lane (Phase 2: schema → LLM → SQL) ────────────────────────
+    # Sends the full annotated table schema to the LLM; the LLM writes SQL directly.
+    # Rule-based slot-fill is tried first (zero LLM calls) for high-confidence matches.
     if intent_route == _ANALYTICAL and not force_llm:
         try:
             from backend.services.semantic_layer import (
@@ -2293,7 +2355,41 @@ def _orchestrated_pipeline_stream(
                     )
 
             if not _routed_sql_ok:
-                # LLM slot-fill fallback within ANALYTICAL lane
+                # Schema-based LLM SQL generation for analytical queries
+                yield _sse(
+                    "progress", stage="schema_sql", status="started",
+                    label="Schema → SQL", detail="Sending table schema to LLM for query generation…",
+                )
+                try:
+                    _schema_sql, _schema_meta = _generate_sql(
+                        question=question,
+                        schema=_ANNOTATED_SCHEMA,
+                        townland_hint=canonical_townland,
+                        analysis=analysis,
+                        approved_examples=None,
+                    )
+                    if _schema_sql and not _schema_sql.startswith("SELECT 'error'"):
+                        sql = _schema_sql
+                        llm_meta = _schema_meta
+                        query_provenance.update({"strategy": "schema_based_llm_sql", "lane": "analytical_schema"})
+                        _routed_sql_ok = True
+                        ms = int((time.perf_counter() - t0) * 1000)
+                        yield _sse(
+                            "progress", stage="schema_sql", status="completed",
+                            label="Schema → SQL",
+                            detail=f"LLM generated SQL from schema (provider={_schema_meta.get('provider','?')})",
+                            duration_ms=ms,
+                        )
+                    else:
+                        yield _sse("progress", stage="schema_sql", status="completed",
+                                   label="Schema → SQL", detail="Schema SQL fallback to legacy path")
+                except Exception as _schema_exc:
+                    log.debug("orchestrated_pipeline.schema_sql_failed error=%s", _schema_exc)
+                    yield _sse("progress", stage="schema_sql", status="completed",
+                               label="Schema → SQL", detail=f"Schema SQL error — falling back")
+
+            if not _routed_sql_ok:
+                # LLM slot-fill as last fallback within ANALYTICAL lane
                 yield _sse(
                     "progress", stage="slot_filling", status="started",
                     label="Slot Filling", detail="LLM slot-fill for analytical query…",
@@ -2374,10 +2470,24 @@ def _orchestrated_pipeline_stream(
             log.warning("orchestrated_pipeline.subgraph_failed error=%s", _sg_exc)
 
     # ── In-process GraphRAG enrichment (flow.md §5) ───────────────────────────
+    # Scope: census/townland/parish/county/geographic queries ONLY.
+    # NOT used for emigration/eviction/people record lookups — SQL handles those.
     # Runs for RELATIONAL, COMPARATIVE, and FALLBACK intents.
-    # Graph results are corroboration only; counts still come from SQL.
-    # Graceful degradation: if graph not built, skip with a note.
-    if intent_route in (_RELATIONAL, _COMPARATIVE, "fallback"):
+    _q_lower_for_rag = question.lower()
+    _graphrag_geo_question = any(kw in _q_lower_for_rag for kw in (
+        "parish", "barony", "county", "townland", "where is", "which parish",
+        "census", "population", "geographical", "geography", "located", "situated",
+        "same parish", "same barony", "adjacent", "neighbouring", "neighboring",
+        "heritage", "monument", "ring fort", "holy well", "archaeological",
+        "within", "part of", "belong",
+    ))
+    # For FALLBACK: always run GraphRAG (it gives townland context alongside multi-SQL)
+    _should_run_graphrag = (
+        intent_route in (_RELATIONAL, _COMPARATIVE)
+        and _graphrag_geo_question
+    ) or intent_route == "fallback"
+
+    if _should_run_graphrag:
         try:
             from backend.services.graphrag import (
                 is_available as _graphrag_available,
@@ -2393,7 +2503,8 @@ def _orchestrated_pipeline_stream(
                 _entity_hints: dict[str, Any] = {}
                 if canonical_townland:
                     _entity_hints["canonical_townland"] = canonical_townland
-                if analysis.get("surname"):
+                # Only pass surname hint for geographical/census questions, not people lookups
+                if _graphrag_geo_question and analysis.get("surname"):
                     _entity_hints["surname"] = analysis["surname"]
                 _graphrag_result = _graphrag_retrieve(
                     question,
@@ -2423,6 +2534,70 @@ def _orchestrated_pipeline_stream(
         except Exception as _gr_exc:
             log.warning("orchestrated_pipeline.graphrag_failed error=%s", _gr_exc)
             query_provenance["graphrag"] = {"available": False, "error": str(_gr_exc)}
+
+    # ── FALLBACK multi-SQL: run predefined townland queries alongside GraphRAG ──
+    # For open-ended/FALLBACK questions, automatically surface key record categories.
+    _fallback_multi_sql_results: dict[str, Any] = {}
+    if intent_route == "fallback" and canonical_townland:
+        try:
+            _tl_esc = canonical_townland.replace("'", "''")
+            _multi_queries = {
+                "emigration": (
+                    f"SELECT COUNT(DISTINCT record_id) AS emigration_count, "
+                    f"MIN(year) AS first_year, MAX(year) AS last_year "
+                    f"FROM unified_record "
+                    f"WHERE has_emigration_record=1 AND townland_norm='{_tl_esc}'"
+                ),
+                "eviction": (
+                    f"SELECT COUNT(DISTINCT record_id) AS eviction_count "
+                    f"FROM unified_record "
+                    f"WHERE has_eviction_record=1 AND townland_norm='{_tl_esc}'"
+                ),
+                "tenancy": (
+                    f"SELECT COUNT(DISTINCT record_id) AS tenant_count "
+                    f"FROM unified_record "
+                    f"WHERE has_tenancy_record=1 AND townland_norm='{_tl_esc}'"
+                ),
+                "gender": (
+                    f"SELECT gender, COUNT(DISTINCT record_id) AS count "
+                    f"FROM unified_record "
+                    f"WHERE townland_norm='{_tl_esc}' AND gender IS NOT NULL "
+                    f"GROUP BY gender ORDER BY count DESC"
+                ),
+                "census": (
+                    f"SELECT cr.year, cr.total, cr.male, cr.female "
+                    f"FROM census_record cr "
+                    f"JOIN townland t ON t.id = cr.townland_id "
+                    f"WHERE UPPER(t.name) = '{_tl_esc}' "
+                    f"ORDER BY cr.year"
+                ),
+                "workhouse": (
+                    f"SELECT sm.raw_name, sm.event_year, sm.raw_place, "
+                    f"erc.label AS match_label, erc.score AS match_score "
+                    f"FROM source_mentions sm "
+                    f"LEFT JOIN entity_resolution_candidates erc ON erc.mention_id = sm.id "
+                    f"WHERE UPPER(COALESCE(sm.normalised_place, sm.raw_place)) LIKE '%{_tl_esc}%' "
+                    f"ORDER BY sm.event_year LIMIT 10"
+                ),
+            }
+            _conn_multi = get_db_conn()
+            try:
+                for _qname, _qsql in _multi_queries.items():
+                    try:
+                        _rows = _conn_multi.execute(_qsql).fetchall()
+                        _fallback_multi_sql_results[_qname] = [dict(r) for r in _rows]
+                    except Exception as _qe:
+                        log.debug("fallback_multi_sql.query_failed name=%s error=%s", _qname, _qe)
+            finally:
+                _conn_multi.close()
+            query_provenance["fallback_multi_sql"] = {
+                "queries_run": list(_fallback_multi_sql_results.keys()),
+                "townland": canonical_townland,
+            }
+            log.info("orchestrated_pipeline.fallback_multi_sql townland=%s queries=%d",
+                     canonical_townland, len(_fallback_multi_sql_results))
+        except Exception as _fms_exc:
+            log.warning("orchestrated_pipeline.fallback_multi_sql_failed error=%s", _fms_exc)
 
     # ── Part C: Vector recall over verbalised chunks (RELATIONAL / COMPARATIVE / FALLBACK) ──
     _chunk_context: list[dict[str, Any]] = []
@@ -3900,7 +4075,9 @@ def answer_question_stream(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def check_llm_status() -> dict[str, Any]:
-    """Return the currently usable LLM provider for the Ask page."""
+    """Return the currently usable LLM provider for the Ask page.
+    Priority: Claude → Grok → OpenRouter → Ollama.
+    """
     provider = (ASK_LLM_PROVIDER or "auto").lower()
 
     if provider in {"off", "none", "disabled"}:
@@ -3909,6 +4086,24 @@ def check_llm_status() -> dict[str, Any]:
             "provider": "disabled",
             "configured_provider": provider,
             "hint": "LLM generation is disabled by ASK_LLM_PROVIDER.",
+        }
+
+    if provider == "claude":
+        return {
+            "available": bool(ANTHROPIC_API_KEY),
+            "provider": "anthropic",
+            "configured_provider": provider,
+            "active_model": ANTHROPIC_MODEL,
+            "hint": "Using Claude (Anthropic) as primary LLM." if ANTHROPIC_API_KEY else "ANTHROPIC_API_KEY not set.",
+        }
+
+    if provider == "grok":
+        return {
+            "available": bool(GROK_API_KEY),
+            "provider": "grok",
+            "configured_provider": provider,
+            "active_model": GROK_MODEL,
+            "hint": "Using Grok (xAI) as primary LLM." if GROK_API_KEY else "GROK_API_KEY not set.",
         }
 
     if provider == "openrouter":
@@ -3921,9 +4116,31 @@ def check_llm_status() -> dict[str, Any]:
         status["configured_provider"] = provider
         return status
 
+    # Auto mode: report the highest-priority available provider
+    if ANTHROPIC_API_KEY and LLM_ALLOW_PAID:
+        return {
+            "available": True,
+            "provider": "anthropic",
+            "configured_provider": "auto",
+            "active_model": ANTHROPIC_MODEL,
+            "priority_order": ["claude", "grok", "openrouter", "ollama"],
+            "hint": "Using Claude (Anthropic) as primary. Grok and OpenRouter are fallbacks.",
+        }
+
+    if GROK_API_KEY and LLM_ALLOW_PAID:
+        return {
+            "available": True,
+            "provider": "grok",
+            "configured_provider": "auto",
+            "active_model": GROK_MODEL,
+            "priority_order": ["grok", "openrouter", "ollama"],
+            "hint": "Using Grok (xAI) as primary. OpenRouter is fallback.",
+        }
+
     if OPENROUTER_API_KEY:
         status = _openrouter_status()
         status["configured_provider"] = "auto"
+        status["priority_order"] = ["openrouter", "ollama"]
         return status
 
     try:
@@ -3931,7 +4148,8 @@ def check_llm_status() -> dict[str, Any]:
         status["configured_provider"] = "auto"
         if status.get("available"):
             status["hint"] = (
-                "Using local Ollama fallback. Set OPENROUTER_API_KEY to use OpenRouter."
+                "Using local Ollama fallback. Set ANTHROPIC_API_KEY, GROK_API_KEY, or "
+                "OPENROUTER_API_KEY for cloud LLM access."
             )
             return status
     except Exception:
@@ -3939,13 +4157,13 @@ def check_llm_status() -> dict[str, Any]:
 
     return {
         "available": False,
-        "provider": "openrouter",
+        "provider": "none",
         "configured_provider": "auto",
-        "has_api_key": False,
-        "active_model": OPENROUTER_MODEL,
-        "models": _candidate_openrouter_models()[:8],
-        "base_url": OPENROUTER_BASE_URL,
-        "hint": "Set OPENROUTER_API_KEY to enable the LLM rewrite and AI-enhanced SQL path.",
+        "priority_order": ["claude", "grok", "openrouter", "ollama"],
+        "hint": (
+            "No LLM configured. Set ANTHROPIC_API_KEY (Claude), GROK_API_KEY (Grok), "
+            "OPENROUTER_API_KEY, or run Ollama locally."
+        ),
     }
 
 
@@ -5638,14 +5856,37 @@ def _llm_generate(
     temperature: float = 0.0,
 ) -> tuple[str, dict[str, Any]]:
     """
-    Generate text with the configured LLM provider.
-    OpenRouter is preferred when OPENROUTER_API_KEY is present; Ollama remains
-    available as a local fallback for offline development.
+    Generate text using Claude → Grok → OpenRouter → Ollama priority order.
+    Rate-limited per provider; degrades gracefully when keys are missing or limits hit.
     """
     last_exc: Exception | None = None
     for provider in _llm_provider_order():
         try:
+            if provider == "claude":
+                if not _RATE_LIMIT_CLAUDE.is_allowed():
+                    log.info("ask_service.rate_limited provider=claude purpose=%s", purpose)
+                    continue
+                text, meta = _llm_generate_claude(
+                    system_prompt="You are a careful data assistant for a historical research tool. Follow the user's format instructions exactly.",
+                    user_content=prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+                if text:
+                    return text, meta
+                continue
+            if provider == "grok":
+                if not _RATE_LIMIT_GROK.is_allowed():
+                    log.info("ask_service.rate_limited provider=grok purpose=%s", purpose)
+                    continue
+                text, meta = _llm_generate_grok(prompt, max_tokens=max_tokens, temperature=temperature)
+                if text:
+                    return text, meta
+                continue
             if provider == "openrouter":
+                if not _RATE_LIMIT_OPENROUTER.is_allowed():
+                    log.info("ask_service.rate_limited provider=openrouter purpose=%s", purpose)
+                    continue
                 return _openrouter_generate(
                     prompt=prompt,
                     purpose=purpose,
@@ -5668,22 +5909,30 @@ def _llm_generate(
     if last_exc:
         raise RuntimeError(f"No LLM provider succeeded for {purpose}: {last_exc}")
     raise RuntimeError(
-        "No LLM provider configured. Set OPENROUTER_API_KEY or ASK_LLM_PROVIDER=ollama."
+        "No LLM provider configured. Set ANTHROPIC_API_KEY, GROK_API_KEY, OPENROUTER_API_KEY, or ASK_LLM_PROVIDER=ollama."
     )
 
 
 def _llm_provider_order() -> list[str]:
+    """Return provider list in priority order: Claude → Grok → OpenRouter → Ollama."""
     provider = (ASK_LLM_PROVIDER or "auto").lower()
     if provider in {"off", "none", "disabled"}:
         return []
-    if provider in {"openrouter", "ollama"}:
+    if provider in {"openrouter", "ollama", "claude", "grok"}:
         return [provider]
     if provider != "auto":
         log.warning("ask_service.unknown_llm_provider provider=%s", provider)
 
+    # Auto mode: prefer paid providers in priority order, then OpenRouter, then Ollama
+    order: list[str] = []
+    if ANTHROPIC_API_KEY and LLM_ALLOW_PAID:
+        order.append("claude")
+    if GROK_API_KEY and LLM_ALLOW_PAID:
+        order.append("grok")
     if OPENROUTER_API_KEY:
-        return ["openrouter", "ollama"]
-    return ["ollama", "openrouter"]
+        order.append("openrouter")
+    order.append("ollama")
+    return order
 
 
 def _openrouter_headers(include_json_content_type: bool = False) -> dict[str, str]:
