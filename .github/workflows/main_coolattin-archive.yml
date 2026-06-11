@@ -23,6 +23,11 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Strip heavy local-only packages for Azure deployment
+        run: |
+          grep -v -E "^(torch|sentence-transformers|psycopg)" requirements.txt > requirements-azure.txt
+          cp requirements-azure.txt requirements.txt
+
       - name: Install core dependencies for syntax check
         run: |
           pip install flask flask-limiter pandas rapidfuzz openpyxl requests rdflib jellyfish numpy
