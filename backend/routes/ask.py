@@ -21,11 +21,25 @@ bp = Blueprint("ask_api", __name__)
 log = logging.getLogger(__name__)
 
 
+_MAX_QUESTION_LEN = 600
+_MAX_TOWNLAND_HINT_LEN = 120
+
+
+def _sanitize_input(raw: str, max_len: int) -> str:
+    """Strip control characters and cap length.  User content only — never applied to system strings."""
+    import unicodedata
+    cleaned = "".join(
+        ch for ch in (raw or "")
+        if unicodedata.category(ch)[0] != "C" or ch in ("\n", "\t")
+    )
+    return cleaned.strip()[:max_len]
+
+
 @bp.post("/query")
 def ask_query():
     body = request.get_json(silent=True) or {}
-    question       = (body.get("question") or "").strip()
-    townland_hint  = (body.get("townland_hint") or body.get("townland") or "").strip() or None
+    question       = _sanitize_input(body.get("question") or "", _MAX_QUESTION_LEN)
+    townland_hint  = _sanitize_input(body.get("townland_hint") or body.get("townland") or "", _MAX_TOWNLAND_HINT_LEN) or None
     include_sql    = bool(body.get("show_sql") or body.get("debug_sql"))
     force_llm      = bool(body.get("force_llm"))
 

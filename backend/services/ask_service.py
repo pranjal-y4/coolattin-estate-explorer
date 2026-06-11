@@ -2470,9 +2470,13 @@ def _orchestrated_pipeline_stream(
             log.warning("orchestrated_pipeline.subgraph_failed error=%s", _sg_exc)
 
     # ── In-process GraphRAG enrichment (flow.md §5) ───────────────────────────
-    # Scope: census/townland/parish/county/geographic queries ONLY.
-    # NOT used for emigration/eviction/people record lookups — SQL handles those.
-    # Runs for RELATIONAL, COMPARATIVE, and FALLBACK intents.
+    # Runs for:
+    #   • RELATIONAL/COMPARATIVE + geographic keywords (original behaviour)
+    #   • FALLBACK (always — gives townland context alongside multi-SQL)
+    #   • Person+townland queries: any intent when a specific person name AND a
+    #     resolved townland are both present — GraphRAG supplies the local historical
+    #     and geographic context (parish, barony, neighbouring townlands) that the
+    #     SQL record rows lack, enabling a richer summary.
     _q_lower_for_rag = question.lower()
     _graphrag_geo_question = any(kw in _q_lower_for_rag for kw in (
         "parish", "barony", "county", "townland", "where is", "which parish",
@@ -2481,11 +2485,15 @@ def _orchestrated_pipeline_stream(
         "heritage", "monument", "ring fort", "holy well", "archaeological",
         "within", "part of", "belong",
     ))
-    # For FALLBACK: always run GraphRAG (it gives townland context alongside multi-SQL)
+    _has_person_in_townland = bool(
+        canonical_townland
+        and (analysis.get("forename") or analysis.get("surname") or analysis.get("canonical_name"))
+    )
     _should_run_graphrag = (
-        intent_route in (_RELATIONAL, _COMPARATIVE)
-        and _graphrag_geo_question
-    ) or intent_route == "fallback"
+        (intent_route in (_RELATIONAL, _COMPARATIVE) and _graphrag_geo_question)
+        or intent_route == "fallback"
+        or _has_person_in_townland
+    )
 
     if _should_run_graphrag:
         try:
@@ -2655,9 +2663,9 @@ def _orchestrated_pipeline_stream(
                     _rr_t0 = time.perf_counter()
                     _chunk_texts = [c.get("text", "") for c in _chunk_context[:6]]
                     _rerank_prompt = (
-                        f"Given the question: '{question}'\n\n"
-                        "Score each chunk 0–10 for relevance. Return a JSON array of integers, "
-                        "one per chunk, in the same order.\n\n"
+                        "Score each chunk 0–10 for relevance to the question below. "
+                        "Return a JSON array of integers, one per chunk, in the same order.\n\n"
+                        f"<user_question>\n{question}\n</user_question>\n\n"
                         + "\n\n".join(f"CHUNK {i}: {t[:400]}" for i, t in enumerate(_chunk_texts))
                     )
                     _rr_text, _ = _llm_generate_claude(
@@ -5121,7 +5129,9 @@ R10. Choose the CLOSEST canonical pattern from the schema above, then adapt it m
 SQLite query (shows the INTENT and any literal values like townland names or years):
 {sql}
 
-Question: {question}
+<user_question>
+{question}
+</user_question>
 ════════════════════════════════════════════════════════════════
 
 SPARQL:""".strip()
@@ -5213,7 +5223,9 @@ def _explain_result_mismatch(
 
     prompt = f"""Two systems answered the same historical-data question and produced different results.
 
-Question: {question}
+<user_question>
+{question}
+</user_question>
 
 {diff_desc}
 
@@ -5424,8 +5436,9 @@ Mandatory rules:
 Core semantic hints:
 {schema}
 
-Question:
+<user_question>
 {question}
+</user_question>
 
 SQL:""".strip()
 
@@ -5471,8 +5484,9 @@ Mandatory rules:
 Schema:
 {_VRTI_PG_SCHEMA}
 
-Question:
+<user_question>
 {question}
+</user_question>
 
 SQL:""".strip()
 
@@ -5683,7 +5697,9 @@ INPUTS (structured fields; some may be empty):
 - resolved_entities: townland/parish/person with sql_id, kg_uri, and for people a list of
   candidate individuals each {confidence, supporting_record_count, may_be_confused_with}
 - sql_result: rows + the exact metric and scope (the ONLY authoritative source for any count)
-- graph_context: linearised subgraph / community summary (context only, never a count)
+- graph_context: linearised property-graph subgraph and/or community summaries providing
+  geographic context (parish, barony, neighbouring townlands) and community relationships.
+  This is contextual enrichment — never a count source.
 - discrepancies: list of {metric, sql_value, graph_value, likely_reason}
 - provenance: per fact, the source record(s)
 
@@ -5699,11 +5715,16 @@ RULES:
    pick one.
 5. If discrepancies is non-empty, state the disagreement in one sentence with both values and
    the likely reason. Required, not optional.
-6. End with 2–4 next steps phrased as things the user can act on immediately and specific to
+6. When graph_context contains townland geographic data (parish, barony, community summary),
+   include it in the answer. For person queries, weave the townland's historical and geographic
+   context into the narrative: which parish/barony the townland belongs to, what community
+   the person lived in, and any neighbouring townland relationships. This context makes the
+   answer genuinely useful to a genealogist, not just a list of record facts.
+7. End with 2–4 next steps phrased as things the user can act on immediately and specific to
    THIS entity — neighbouring townlands, the candidate individuals to disambiguate, "view the
    N source records" — never generic suggestions.
-7. Be concise: the answer, the caveat, the next move. No hedging filler.
-8. Never fabricate a record, name, date, or source. If context is thin, say what is known and
+8. Be concise: the answer, the context, the caveat, the next move. No hedging filler.
+9. Never fabricate a record, name, date, or source. If context is thin, say what is known and
    what is not.
 
 TONE: precise, neutral, archival. You are a finding aid, not a storyteller."""

@@ -486,23 +486,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     return `<span style="font-size:11px;color:#64748b;margin-left:8px;">Years: ${years[0]}-${years[years.length - 1]}</span>`;
   }
 
-  async function fetchWorkhouseMatches(recordId) {
-    try {
-      const res = await fetch(`/api/workhouse/match/${encodeURIComponent(recordId)}`);
-      if (!res.ok) return { count: 0, matches: [], linked_workhouse_records: [], please_check_records: [] };
-      const js = await res.json();
-      return {
-        count: Number(js.count || 0),
-        matches: Array.isArray(js.matches) ? js.matches : [],
-        linked_workhouse_records: Array.isArray(js.linked_workhouse_records) ? js.linked_workhouse_records : [],
-        possible_workhouse_matches: Array.isArray(js.possible_workhouse_matches) ? js.possible_workhouse_matches : [],
-        please_check_records: Array.isArray(js.please_check_records) ? js.please_check_records : [],
-        identity_is_ambiguous: !!js.identity_is_ambiguous,
-        identity_disambiguation_note: js.identity_disambiguation_note || "",
-      };
-    } catch (_e) {
-      return { count: 0, matches: [], linked_workhouse_records: [], please_check_records: [] };
-    }
+  function workhouseBundleFromRecord(rec) {
+    // Use workhouse data already embedded in the record from /api/unified/records
+    const linked = Array.isArray(rec.linked_workhouse_records) ? rec.linked_workhouse_records : [];
+    const possible = Array.isArray(rec.possible_workhouse_matches) ? rec.possible_workhouse_matches : [];
+    const pleaseCheck = Array.isArray(rec.please_check_records) ? rec.please_check_records : possible;
+    const legacyMatches = Array.isArray(rec.workhouse_matches) ? rec.workhouse_matches : [];
+    return {
+      count: linked.length + possible.length || legacyMatches.length,
+      matches: legacyMatches,
+      linked_workhouse_records: linked,
+      possible_workhouse_matches: possible,
+      please_check_records: pleaseCheck,
+      identity_is_ambiguous: !!rec.identity_is_ambiguous,
+      identity_disambiguation_note: rec.identity_disambiguation_note || "",
+    };
   }
 
   function workhouseSectionHTML(bundle) {
@@ -789,41 +787,35 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const ordered = allForPerson.slice().sort((a, b) => (normalizeYear(a.year) || 0) - (normalizeYear(b.year) || 0));
 
-    Promise.all(
-      ordered.map(async (r) => {
-        const matchBundle = await fetchWorkhouseMatches(r.record_id);
-        return `${createRecordCard(r)}${renderHouseholdLinks(r)}${workhouseSectionHTML(matchBundle)}`;
-      })
-    ).then((chunks) => {
-      const tags = sourceTagsFromRecords(allForPerson);
-      const sourceList = tags.length ? tags.join(", ") : "Unknown";
-      const headerNote = allForPerson.length > 1
-        ? `<div style="padding:10px 14px;background:#f0fdf4;border-bottom:2px solid #bbf7d0;margin-bottom:10px;font-size:13px;color:#14532d;">
-            <strong>${allForPerson.length} records</strong> found for <strong>${personLabel}</strong> across: <strong>${sourceList}</strong>
-            <div style="font-size:11px;color:#15803d;margin-top:2px;">Records span all tenancies, emigrations, evictions and workhouse matches linked to this name.</div>
-          </div>`
-        : "";
-      body.innerHTML = headerNote + (chunks.join("") || "<div style='padding:20px;text-align:center;'>No records found.</div>");
+    const chunks = ordered.map((r) => {
+      const matchBundle = workhouseBundleFromRecord(r);
+      return `${createRecordCard(r)}${renderHouseholdLinks(r)}${workhouseSectionHTML(matchBundle)}`;
     });
+    const tags = sourceTagsFromRecords(allForPerson);
+    const sourceList = tags.length ? tags.join(", ") : "Unknown";
+    const headerNote = allForPerson.length > 1
+      ? `<div style="padding:10px 14px;background:#f0fdf4;border-bottom:2px solid #bbf7d0;margin-bottom:10px;font-size:13px;color:#14532d;">
+          <strong>${allForPerson.length} records</strong> found for <strong>${personLabel}</strong> across: <strong>${sourceList}</strong>
+          <div style="font-size:11px;color:#15803d;margin-top:2px;">Records span all tenancies, emigrations, evictions and workhouse matches linked to this name.</div>
+        </div>`
+      : "";
+    body.innerHTML = headerNote + (chunks.join("") || "<div style='padding:20px;text-align:center;'>No records found.</div>");
   };
 
-  window.openGroupDetails = async function (idx) {
+  window.openGroupDetails = function (idx) {
     const group = state.activeGroups[idx];
     if (!group) return;
     $("recordModalTitle").innerText = `${group.label} (${group.records.length} Records)`;
-    $("recordModalBody").innerHTML = "<div style='padding:20px;text-align:center;color:#64748b;'>Loading detailed records...</div>";
     openModal(recordModal);
 
     const ordered = group.records
       .slice()
       .sort((a, b) => (normalizeYear(a.year) || 0) - (normalizeYear(b.year) || 0));
 
-    const chunks = await Promise.all(
-      ordered.map(async (r) => {
-        const matchBundle = await fetchWorkhouseMatches(r.record_id);
-        return `${createRecordCard(r)}${renderHouseholdLinks(r)}${workhouseSectionHTML(matchBundle)}`;
-      })
-    );
+    const chunks = ordered.map((r) => {
+      const matchBundle = workhouseBundleFromRecord(r);
+      return `${createRecordCard(r)}${renderHouseholdLinks(r)}${workhouseSectionHTML(matchBundle)}`;
+    });
 
     const cards = chunks.join("");
     $("recordModalBody").innerHTML = cards || "<div style='padding:20px;text-align:center;'>No records found.</div>";

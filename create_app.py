@@ -17,6 +17,14 @@ from config import ActiveConfig
 
 log = logging.getLogger(__name__)
 
+try:
+    from flask_limiter import Limiter
+    from flask_limiter.util import get_remote_address
+    _LIMITER_AVAILABLE = True
+except ImportError:
+    _LIMITER_AVAILABLE = False
+    log.warning("create_app.flask_limiter_missing — rate limiting disabled; run: pip install flask-limiter")
+
 
 def create_app(config_class=None) -> Flask:
     """
@@ -60,6 +68,21 @@ def create_app(config_class=None) -> Flask:
     ensure_schema()
 
     # ------------------------------------------------------------------ #
+    # Rate limiting (flask-limiter, in-memory storage)                     #
+    # Protects the paid LLM endpoints from abuse.                          #
+    # ------------------------------------------------------------------ #
+    if _LIMITER_AVAILABLE:
+        limiter = Limiter(
+            key_func=get_remote_address,
+            app=app,
+            default_limits=[],
+            storage_uri="memory://",
+        )
+        app.extensions["limiter"] = limiter
+    else:
+        app.extensions["limiter"] = None
+
+    # ------------------------------------------------------------------ #
     # Blueprints                                                           #
     # Each URL prefix is registered here — not in the route files.        #
     # ------------------------------------------------------------------ #
@@ -81,6 +104,37 @@ def create_app(config_class=None) -> Flask:
     app.register_blueprint(ask_bp,       url_prefix="/api/ask")
     app.register_blueprint(kg_explore_bp, url_prefix="/api/kg")
 
+    # Apply rate limits to the LLM-backed ask routes after blueprint registration
+    _apply_ask_rate_limits(app)
+
+    # ------------------------------------------------------------------ #
+    # Security headers (applied to every response)                        #
+    # ------------------------------------------------------------------ #
+    @app.after_request
+    def _add_security_headers(response):
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=()",
+        )
+        # Only add CSP on HTML responses; SSE and JSON streams must not be blocked
+        if "text/html" in response.content_type:
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                (
+                    "default-src 'self'; "
+                    "script-src 'self' 'unsafe-inline' https://www.youtube.com https://www.youtube-nocookie.com https://www.google-analytics.com; "
+                    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                    "font-src 'self' https://fonts.gstatic.com; "
+                    "img-src 'self' data: https:; "
+                    "frame-src https://www.youtube.com https://www.youtube-nocookie.com; "
+                    "connect-src 'self';"
+                ),
+            )
+        return response
+
     # ------------------------------------------------------------------ #
     # Legacy compatibility routes                                          #
     # ------------------------------------------------------------------ #
@@ -88,6 +142,21 @@ def create_app(config_class=None) -> Flask:
 
     log.info("create_app.ready | blueprints registered")
     return app
+
+
+def _apply_ask_rate_limits(app: Flask) -> None:
+    """Apply per-IP rate limits to the LLM-backed /api/ask endpoints."""
+    limiter = app.extensions.get("limiter")
+    if limiter is None:
+        return
+    # /api/ask/query touches paid LLM APIs — strict cap per IP
+    limiter.limit("30 per minute; 200 per hour")(
+        app.view_functions["ask_api.ask_query"]
+    )
+    # /api/ask/feedback is cheaper but still writes to DB
+    limiter.limit("60 per minute")(
+        app.view_functions["ask_api.ask_feedback"]
+    )
 
 
 def _register_legacy_routes(app: Flask) -> None:

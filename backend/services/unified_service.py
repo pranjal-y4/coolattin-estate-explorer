@@ -111,11 +111,36 @@ def get_surname_list() -> list[str]:
     return sorted([x for x in df["surname"].dropna().astype(str).unique() if x])
 
 
+_SKIP_CT_NAMES = {"common grazing", "house lot", "multiple chief tenants"}
+
+
 def suggest_surnames(q: str = "", townland: str = "") -> list[str]:
     df = get_unified()
     if townland:
         df = df[df["townland"].fillna("").astype(str).str.lower() == townland.lower()]
-    s = df["surname"].dropna().astype(str)
+
+    # Primary surnames
+    primary = df["surname"].dropna().astype(str)
+
+    # Include valid chief_tenant_surnames as fallback (same rules as buildIndexes in main.js)
+    ct_sn = df["chief_tenant_surname"].fillna("").astype(str)
+    ct_fn = df["chief_tenant_forename"].fillna("").astype(str)
+    valid_ct_mask = (
+        ct_sn.str.len().gt(0)
+        & ct_sn.str.match(r"^[A-Za-z\s'\-]+$")
+        & ~ct_sn.str.lower().isin(_SKIP_CT_NAMES)
+        & ct_fn.str.len().gt(0)
+        & ~ct_fn.isin(["-", "Multiple Chief Tenants"])
+        # Only use CT surname when there's no direct surname on the record
+        & df["surname"].isna()
+    )
+    ct_surnames = ct_sn[valid_ct_mask]
+
+    import pandas as pd
+    all_surnames = pd.concat([primary, ct_surnames]).dropna().astype(str)
+    # Filter multi-word compound entries like "Grant, Richard And James"
+    all_surnames = all_surnames[~all_surnames.str.contains(",")]
+
     if q:
-        s = s[s.str.lower().str.startswith(q.lower())]
-    return sorted(s.unique().tolist())[:25]
+        all_surnames = all_surnames[all_surnames.str.lower().str.startswith(q.lower())]
+    return sorted(all_surnames.unique().tolist())[:50]
