@@ -160,10 +160,85 @@ document.addEventListener("DOMContentLoaded", () => {
     fallback:    { bg: "#f8fafc", border: "#cbd5e1", color: "#475467" },
   };
 
+  // Maps query_provenance.strategy → human-readable confidence tier
+  const _strategyConfidence = {
+    "semantic_layer_rule":        { label: "Deterministic",     bg: "#f0fdf4", border: "#86efac", color: "#166534" },
+    "verified_analysis":          { label: "Verified Template", bg: "#eff6ff", border: "#93c5fd", color: "#1e40af" },
+    "fallback_verified_analysis": { label: "Verified Template", bg: "#eff6ff", border: "#93c5fd", color: "#1e40af" },
+    "semantic_layer_llm":         { label: "Template-guided",   bg: "#f0f9ff", border: "#7dd3fc", color: "#075985" },
+    "memory_direct_reuse":        { label: "Memory Reuse",      bg: "#f0f9ff", border: "#7dd3fc", color: "#075985" },
+    "emergency_fallback":         { label: "LLM Fallback",      bg: "#fffbeb", border: "#fcd34d", color: "#92400e" },
+    "validated_sql_unavailable":  { label: "LLM Fallback",      bg: "#fffbeb", border: "#fcd34d", color: "#92400e" },
+    "llm_fallback":               { label: "LLM Fallback",      bg: "#fffbeb", border: "#fcd34d", color: "#92400e" },
+  };
+
+  function _chip(label, bg, border, color, title) {
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+    return `<span${titleAttr} style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;`
+      + `background:${bg};border:1px solid ${border};color:${color};font-size:10px;font-weight:700;">`
+      + `${escapeHtml(label)}</span>`;
+  }
+
   function renderProvenance(payload) {
     if (!provenanceEl) return;
     const provenance = payload?.query_provenance || payload?.structured_output?.query_provenance || {};
     const matches = Array.isArray(provenance?.approved_query_candidates) ? provenance.approved_query_candidates : [];
+    const confidenceBadgeEl = $("askConfidenceBadge");
+    const gateBadgeEl       = $("askGateBadge");
+    const verifierBadgeEl   = $("askVerifierBadge");
+
+    // ── Confidence tier badge ─────────────────────────────────────────────────
+    const strategy = provenance?.strategy || "";
+    if (confidenceBadgeEl) {
+      const conf = _strategyConfidence[strategy];
+      if (conf) {
+        confidenceBadgeEl.innerHTML = _chip(conf.label, conf.bg, conf.border, conf.color,
+          `Query strategy: ${strategy}`);
+        confidenceBadgeEl.style.display = "";
+      } else {
+        confidenceBadgeEl.innerHTML = "";
+        confidenceBadgeEl.style.display = "none";
+      }
+    }
+
+    // ── Numeric gate badge ────────────────────────────────────────────────────
+    if (gateBadgeEl) {
+      const gate = provenance?.numeric_gate_outcome;
+      if (gate && gate !== "not_applied") {
+        const gateStyles = {
+          pass:        { label: "✓ Gate pass",        bg: "#f0fdf4", border: "#86efac", color: "#166534" },
+          regenerated: { label: "⚠ Gate: regenerated", bg: "#fffbeb", border: "#fcd34d", color: "#92400e" },
+          fallback:    { label: "⚠ Gate: raw fallback", bg: "#fff1f2", border: "#fca5a5", color: "#9f1239" },
+        };
+        const gs = gateStyles[gate] || { label: gate, bg: "#f8fafc", border: "#cbd5e1", color: "#475467" };
+        gateBadgeEl.innerHTML = _chip(gs.label, gs.bg, gs.border, gs.color,
+          "Numeric-consistency gate outcome");
+        gateBadgeEl.style.display = "";
+      } else {
+        gateBadgeEl.innerHTML = "";
+        gateBadgeEl.style.display = "none";
+      }
+    }
+
+    // ── Cross-verifier badge ──────────────────────────────────────────────────
+    if (verifierBadgeEl) {
+      const verifier = provenance?.verifier;
+      if (verifier && verifier.verdict !== "skip") {
+        const vStyles = {
+          agree:    { label: "✓ Verified",       bg: "#f0fdf4", border: "#86efac", color: "#166534" },
+          disagree: { label: "⚠ Claims flagged", bg: "#fff1f2", border: "#fca5a5", color: "#9f1239" },
+        };
+        const vs = vStyles[verifier.verdict] || { label: verifier.verdict, bg: "#f8fafc", border: "#cbd5e1", color: "#475467" };
+        const vtitle = verifier.verdict === "disagree" && verifier.unsupported_claims?.length
+          ? `Unsupported: ${verifier.unsupported_claims.slice(0, 2).join("; ")}`
+          : `Verifier: ${verifier.verdict} via ${verifier.provider || "llm"}`;
+        verifierBadgeEl.innerHTML = _chip(vs.label, vs.bg, vs.border, vs.color, vtitle);
+        verifierBadgeEl.style.display = "";
+      } else {
+        verifierBadgeEl.innerHTML = "";
+        verifierBadgeEl.style.display = "none";
+      }
+    }
 
     // ── New-pipeline lane badge (only when route/lane present) ──────────────
     if (retrievalLaneEl) {
@@ -202,6 +277,20 @@ document.addEventListener("DOMContentLoaded", () => {
     if (provenance?.lane) {
       rows.splice(provenance?.route ? 1 : 0, 0, `Dispatch lane: ${provenance.lane}.`);
     }
+    // Source tables integrated into provenance (also hides the standalone element)
+    const srcTables = Array.isArray(payload?.source_tables) ? payload.source_tables : [];
+    if (srcTables.length) {
+      rows.push(`Source tables: ${srcTables.join(", ")}.`);
+      const srcTablesEl = $("askSourceTables");
+      if (srcTablesEl) srcTablesEl.style.display = "none";
+    }
+    // Entity match confidence
+    const tr = payload?.townland_resolution;
+    if (tr?.match_type) {
+      const pct = tr.confidence != null ? ` · ${Math.round(tr.confidence * 100)}% match` : "";
+      const fuzzyLabel = tr.match_type !== "exact" ? ` (fuzzy)` : "";
+      rows.push(`Entity: "${tr.name || ""}" resolved via ${tr.match_type}${fuzzyLabel}${pct}.`);
+    }
     if (provenance?.subgraph_node_count != null) {
       const sources = Array.isArray(provenance.subgraph_sources)
         ? provenance.subgraph_sources.join(", ")
@@ -211,9 +300,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (provenance?.phase6_todo) {
       rows.push(`Phase 6: ${provenance.phase6_todo}`);
     }
-
     if (provenance?.reused_memory_id) {
       rows.push(`Approved memory id reused: ${provenance.reused_memory_id}.`);
+    }
+    // Verifier detail when claims were flagged
+    const verifier = provenance?.verifier;
+    if (verifier?.verdict === "disagree" && verifier.unsupported_claims?.length) {
+      rows.push(`Verifier flagged: ${verifier.unsupported_claims.slice(0, 3).join(" | ")}`);
     }
     if (matches.length) {
       const preview = matches
@@ -597,14 +690,21 @@ document.addEventListener("DOMContentLoaded", () => {
     const color = ok ? "#166534" : "#9a3412";
     const label = ok ? "Connected to LLM" : "LLM not connected";
     const hint = payload?.hint ? ` ${payload.hint}` : "";
-    const detail = payload?.detail ? `Technical detail: ${payload.detail}` : "";
+    const detail = payload?.detail
+      ? `
+        <details style="margin-top:4px;">
+          <summary style="font-size:11px;color:#94a3b8;cursor:pointer;">Technical detail</summary>
+          <div style="margin-top:4px;font-size:11px;color:#94a3b8;line-height:1.45;">${escapeHtml(payload.detail)}</div>
+        </details>
+      `
+      : "";
     llmStatusEl.innerHTML = `
       <div style="display:inline-flex;align-items:center;gap:8px;padding:7px 10px;border-radius:999px;background:${bg};border:1px solid ${border};color:${color};font-size:12px;font-weight:700;">
         <span>${escapeHtml(label)}</span>
         <span style="font-weight:600;">Provider: ${escapeHtml(provider)} | Model: ${escapeHtml(model)}</span>
       </div>
       ${hint ? `<div style="margin-top:5px;font-size:12px;color:#64748b;">${escapeHtml(hint)}</div>` : ""}
-      ${detail ? `<div style="margin-top:4px;font-size:11px;color:#94a3b8;">${escapeHtml(detail)}</div>` : ""}
+      ${detail}
     `;
   }
 
@@ -689,6 +789,9 @@ document.addEventListener("DOMContentLoaded", () => {
     setFeedbackStatus("", "muted");
     if (provenanceEl) provenanceEl.innerHTML = "";
     if (retrievalLaneEl) retrievalLaneEl.innerHTML = "";
+    const _cbEl = $("askConfidenceBadge"); if (_cbEl) { _cbEl.innerHTML = ""; _cbEl.style.display = "none"; }
+    const _gbEl = $("askGateBadge");       if (_gbEl) { _gbEl.innerHTML = ""; _gbEl.style.display = "none"; }
+    const _vbEl = $("askVerifierBadge");   if (_vbEl) { _vbEl.innerHTML = ""; _vbEl.style.display = "none"; }
     if (suggestionsBlockEl) suggestionsBlockEl.style.display = "none";
     if (suggestionsEl) suggestionsEl.innerHTML = "";
     if (insightsBlockEl) insightsBlockEl.style.display = "none";

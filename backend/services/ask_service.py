@@ -42,32 +42,6 @@ from extensions import get_db_conn
 
 log = logging.getLogger(__name__)
 
-
-def _load_local_env_files() -> None:
-    """
-    Load local key=value env files without adding another dependency.
-    Existing process env wins over file values.
-    """
-    root = Path(__file__).resolve().parents[2]
-    for env_path in (root / ".env.local", root / ".env"):
-        if not env_path.exists():
-            continue
-        try:
-            for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-                line = raw_line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                key = key.strip()
-                value = value.strip().strip('"').strip("'")
-                if key and key not in os.environ:
-                    os.environ[key] = value
-        except OSError as exc:
-            log.warning("ask_service.env_load_failed path=%s error=%s", env_path, exc)
-
-
-_load_local_env_files()
-
 # ── LLM providers ─────────────────────────────────────────────────────────────
 ASK_LLM_PROVIDER = os.environ.get("ASK_LLM_PROVIDER", "auto").strip().lower()
 
@@ -89,6 +63,9 @@ ASK_GENERATE_VRTI_SQL_WITH_LLM = os.environ.get(
 ASK_ALLOW_HEURISTIC_FALLBACK = os.environ.get(
     "ASK_ALLOW_HEURISTIC_FALLBACK", ""
 ).strip().lower() in {"1", "true", "yes", "on"}
+
+# When false, skip paid-API calls (Anthropic, Grok) and fall back to free OpenRouter models.
+LLM_ALLOW_PAID = os.environ.get("LLM_ALLOW_PAID", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 # Feature flag: routed architecture (entity_resolver → intent_router → semantic/subgraph).
 # Default TRUE so the newer orchestrated pipeline is the standard runtime path.
@@ -325,6 +302,49 @@ Table: heritage_feature  — seeded from local heritage GeoJSON for Ask comparis
   feature_group TEXT     — e.g. 'holy_well', 'ring_fort'
   monument_class TEXT    — source class label such as 'Ritual site - holy well'
   source_dataset TEXT    — 'holywells' or 'asi'
+
+Table: source_mentions  — one row per name extracted from workhouse admissions/discharge records
+  id INTEGER PRIMARY KEY
+  source_table TEXT          — source dataset (e.g. 'do_workhouse' = Dunlavin/Shillelagh Union)
+  source_record_id TEXT      — UNIQUE identifier of the workhouse source record
+  raw_name TEXT              — name as it appears in the workhouse register
+  normalised_name TEXT       — cleaned/normalised version
+  forename TEXT
+  surname TEXT
+  raw_place TEXT
+  normalised_place TEXT
+  event_year INTEGER
+  age INTEGER
+  NOTE: Use this table (not unified_record) to count workhouse name mentions or workhouse records.
+        Example: SELECT COUNT(*) FROM source_mentions  -- total workhouse name extractions
+
+Table: entity_resolution_candidates  — scored candidate links produced during workhouse→estate matching
+  id INTEGER PRIMARY KEY
+  mention_id INTEGER         — FK → source_mentions.id
+  candidate_record_id TEXT   — FK → unified_record.record_id
+  score REAL                 — similarity score 0–1
+  label TEXT                 — 'CONFIRMED_MATCH' | 'POSSIBLE_MATCH' | 'REJECTED'
+  review_required INTEGER    — 1=needs human review
+  NOTE: Use this table to count entity resolution candidates.
+        Example: SELECT COUNT(*) FROM entity_resolution_candidates
+
+Table: workhouse_unified_links  — final accepted workhouse→estate record links (after review)
+  id INTEGER PRIMARY KEY
+  mention_id INTEGER         — FK → source_mentions.id
+  unified_record_id TEXT     — FK → unified_record.record_id
+  score REAL
+  label TEXT                 — 'CONFIRMED_MATCH' | 'POSSIBLE_MATCH' | 'REJECTED'
+  review_required INTEGER    — 1=needs human review
+
+IMPORTANT — estate filter: The `estate` column in unified_record is almost always NULL.
+  All records in the database belong to the Coolattin estate implicitly.
+  NEVER use `estate = 'Coolattin'` (or any estate filter) as a WHERE clause — it returns 0 rows.
+  Omit the estate column from all filters entirely.
+
+IMPORTANT — townland scope: `townland_norm = 'COOLATTIN'` refers to ONE specific townland
+  named Coolattin (a small area within the estate). It is NOT the whole estate.
+  For estate-wide queries (e.g. "all emigrants from the Coolattin estate") omit the townland
+  filter entirely — do not add any townland_norm or townland condition.
 
 Function: distance_km(lat1, lon1, lat2, lon2) → REAL  (great-circle km)
   Radius query example:
@@ -634,10 +654,11 @@ QUESTION_TEMPLATES: list[dict[str, Any]] = [
      "requires_townland": True},
 
     {"id": "townlands_in_parish",
-     "category": "geography", "description": "Townlands within a given parish",
+     "category": "geography", "description": "Townlands in the same parish as a given townland",
      "required_keywords": ["townland", "parish"],
-     "optional_keywords": ["in", "within", "list", "which", "all"],
-     "sql_template": "SELECT name, barony, county FROM townland WHERE civil_parish IS NOT NULL ORDER BY civil_parish, name LIMIT 100"},
+     "optional_keywords": ["in", "within", "list", "which", "all", "same parish", "other"],
+     "sql_template": "SELECT name, civil_parish, barony, county FROM townland WHERE civil_parish=(SELECT civil_parish FROM townland WHERE UPPER(name)='{townland_norm}' LIMIT 1) AND UPPER(name)!='{townland_norm}' ORDER BY name LIMIT 200",
+     "requires_townland": True},
 
     {"id": "townlands_by_county",
      "category": "geography", "description": "Townlands grouped by county",
@@ -648,7 +669,7 @@ QUESTION_TEMPLATES: list[dict[str, Any]] = [
     {"id": "townland_details",
      "category": "geography", "description": "Full details of a specific townland",
      "required_keywords": [],
-     "optional_keywords": ["details", "about", "information", "info", "townland"],
+     "optional_keywords": ["details", "about", "information", "info", "townland", "monument", "historical"],
      "sql_template": "SELECT name, name_gaelic, civil_parish, barony, county, centroid_lat, centroid_lon FROM townland WHERE UPPER(name)='{townland_norm}'",
      "requires_townland": True},
 
@@ -965,7 +986,20 @@ def _analyse_question(question: str, townland_hint: str | None) -> dict[str, Any
     else:
         group_by = None
 
-    wants_list = any(x in q for x in ["list", "show", "who", "which people", "names", "what all"])
+    wants_list = any(
+        x in q
+        for x in [
+            "list",
+            "show",
+            "who",
+            "which people",
+            "which townlands",
+            "what townlands",
+            "what other townlands",
+            "names",
+            "what all",
+        ]
+    )
     wants_count = any(x in q for x in ["how many", "count", "total", "number of"])
 
     if group_by:
@@ -1034,6 +1068,44 @@ def _analyse_question(question: str, townland_hint: str | None) -> dict[str, Any
         "asks_eviction": asks_eviction,
         "asks_tenancy": asks_tenancy,
     }
+
+
+def _same_parish_sql(question: str, analysis: dict[str, Any], townland_hint: str | None) -> str | None:
+    """
+    Deterministic SQL for "same parish as <townland>" questions.
+
+    This bypasses the heavier relational enrichment path for questions that can
+    be answered directly from SQLite's townland hierarchy.
+    """
+    q = (question or "").lower()
+    hint = _norm_townland(townland_hint) or _norm_townland(analysis.get("townland_norm"))
+    if not hint:
+        return None
+    if "same parish" not in q and "in the parish as" not in q:
+        return None
+
+    safe_hint = _sql_escape(hint)
+    parish_subquery = (
+        "SELECT civil_parish FROM townland "
+        f"WHERE UPPER(name)='{safe_hint}' LIMIT 1"
+    )
+
+    if analysis.get("output_mode") in {"count", "aggregate"}:
+        return f"""
+SELECT COUNT(*) AS same_parish_townland_count
+FROM townland
+WHERE civil_parish = ({parish_subquery})
+  AND UPPER(name) != '{safe_hint}'
+""".strip()
+
+    return f"""
+SELECT name, civil_parish, barony, county
+FROM townland
+WHERE civil_parish = ({parish_subquery})
+  AND UPPER(name) != '{safe_hint}'
+ORDER BY name
+LIMIT 200
+""".strip()
 
 
 def _analysis_prompt_block(analysis: dict[str, Any]) -> str:
@@ -1239,10 +1311,37 @@ def _match_and_build_template(
     """
     Score every template against the question.
     Returns (template_dict, built_sql) for the best match, or (None, None).
+
+    Minimum score threshold is 3 (= one required keyword × 2 + at least one
+    optional match).  This prevents false positives where a single ambiguous
+    substring (e.g. "ring" inside "during") matches a highly specific template.
     """
     q = question.lower()
     year = _extract_year(question)
     surname = _extract_surname(question)
+
+    # ── Out-of-scope exclusions ────────────────────────────────────────────
+    # Topics with no template coverage: return early so these questions reach
+    # the LLM-fallback path rather than a semantically wrong template.
+    _excluded_phrases = (
+        "workhouse",
+        "died of",
+        "religion", "religious",
+        "political",
+        "approach",
+        "average rent", "rent owed", "rent paid",
+        "under the age",
+        "children under",
+        "other irish", "other estate",
+        "weather", "climate",
+        "crop", "farming",
+        "entity resolution candidate",
+    )
+    if any(phrase in q for phrase in _excluded_phrases):
+        return None, None
+    # Widows-who-emigrated intersection: no template covers both conditions.
+    if "widow" in q and "emigra" in q:
+        return None, None
 
     best_tmpl: dict | None = None
     best_score: int = -1
@@ -1266,7 +1365,12 @@ def _match_and_build_template(
             best_score = score
             best_tmpl = tmpl
 
-    if not best_tmpl or best_score < 1:
+    # Require score ≥ 2: at least one required keyword (2 pts), or a template
+    # with no required keywords that matched at least two optional terms.
+    # The out-of-scope exclusion guards above are the primary false-positive
+    # defence; the score threshold catches residual substring coincidences
+    # (e.g. "in" inside a proper noun, "estate" in a narrative question).
+    if not best_tmpl or best_score < 2:
         return None, None
 
     # Substitute placeholders
@@ -1405,6 +1509,22 @@ def _try_verified_analysis(
     canonical_townland: str | None,
     analysis: dict[str, Any],
 ) -> dict[str, Any] | None:
+    q_lo = (question or "").lower()
+    # Guard: topics with no verified-analysis coverage must not be forced onto
+    # a curated SQL path.  Return None so the question falls through to
+    # template matching (which has its own exclusions) or the LLM fallback.
+    _va_excluded = (
+        "workhouse", "died of", "religion", "political",
+        "approach",
+        "average rent", "rent owed", "rent paid",
+        "other irish", "other estate", "weather", "climate",
+        "crop", "farming", "under the age", "children under",
+    )
+    if any(phrase in q_lo for phrase in _va_excluded):
+        return None
+    if "widow" in q_lo and "emigra" in q_lo:
+        return None
+
     surname = analysis.get("surname")
     if surname and analysis.get("primary_intent") == "people":
         if analysis.get("output_mode") == "count":
@@ -2124,6 +2244,7 @@ def _orchestrated_pipeline_stream(
     vrti_query_meta: dict[str, Any] = {}
     chart_hint: str | None = None
     _phase3_result = None
+    _graphrag_result = None  # In-process GraphRAG enrichment (flow.md §5)
     _chunk_context: list[dict[str, Any]] = []   # Part C — set later
     # approved_matches needed by _execute_with_recovery and memory marking
     approved_matches: list[dict[str, Any]] = []
@@ -2252,22 +2373,101 @@ def _orchestrated_pipeline_stream(
         except Exception as _sg_exc:
             log.warning("orchestrated_pipeline.subgraph_failed error=%s", _sg_exc)
 
+    # ── In-process GraphRAG enrichment (flow.md §5) ───────────────────────────
+    # Runs for RELATIONAL, COMPARATIVE, and FALLBACK intents.
+    # Graph results are corroboration only; counts still come from SQL.
+    # Graceful degradation: if graph not built, skip with a note.
+    if intent_route in (_RELATIONAL, _COMPARATIVE, "fallback"):
+        try:
+            from backend.services.graphrag import (
+                is_available as _graphrag_available,
+                retrieve_subgraph as _graphrag_retrieve,
+            )
+            if _graphrag_available():
+                _gr_t0 = time.perf_counter()
+                yield _sse(
+                    "progress", stage="querying_graphrag", status="started",
+                    label="GraphRAG",
+                    detail="Vector seed + k-hop traversal over in-process property graph…",
+                )
+                _entity_hints: dict[str, Any] = {}
+                if canonical_townland:
+                    _entity_hints["canonical_townland"] = canonical_townland
+                if analysis.get("surname"):
+                    _entity_hints["surname"] = analysis["surname"]
+                _graphrag_result = _graphrag_retrieve(
+                    question,
+                    intent=intent_route or "relational",
+                    entity_hints=_entity_hints,
+                )
+                _gr_ms = int((time.perf_counter() - _gr_t0) * 1000)
+                _gr_seed_n = len(_graphrag_result.seed_nodes)
+                _gr_rel_n = len(_graphrag_result.subgraph_rels)
+                yield _sse(
+                    "progress", stage="querying_graphrag", status="completed",
+                    label="GraphRAG",
+                    detail=(
+                        f"{_gr_seed_n} seed nodes · {_gr_rel_n} triples · "
+                        f"k={_graphrag_result.k_hops}"
+                        + (", pruned" if _graphrag_result.pruned else "")
+                        + (f" · {len(_graphrag_result.community_summaries)} communities" if _graphrag_result.community_summaries else "")
+                    ),
+                    duration_ms=_gr_ms,
+                )
+                query_provenance["graphrag"] = {
+                    "available": True,
+                    "seed_count": _gr_seed_n,
+                    "triple_count": _gr_rel_n,
+                    "k_hops": _graphrag_result.k_hops,
+                }
+        except Exception as _gr_exc:
+            log.warning("orchestrated_pipeline.graphrag_failed error=%s", _gr_exc)
+            query_provenance["graphrag"] = {"available": False, "error": str(_gr_exc)}
+
     # ── Part C: Vector recall over verbalised chunks (RELATIONAL / COMPARATIVE / FALLBACK) ──
     _chunk_context: list[dict[str, Any]] = []
     if intent_route in (_RELATIONAL, _COMPARATIVE, "fallback"):
         try:
             yield _sse(
                 "progress", stage="retrieving_vectors", status="started",
-                label="Vector Recall", detail="Searching dense chunk index for matching context…",
+                label="Vector Recall", detail="Embedding question and querying dense retrieval backend…",
             )
             _vt0 = time.perf_counter()
-            from backend.services.embedding_index import retrieve_chunks as _retrieve_chunks
-            _chunk_context = _retrieve_chunks(question, top_k=6)
+            from backend.services.embedding_index import retrieve_chunks_with_meta as _retrieve_chunks
+            _chunk_context, _chunk_meta = _retrieve_chunks(question, top_k=6)
             _vms = int((time.perf_counter() - _vt0) * 1000)
+            query_provenance["vector_retrieval"] = dict(_chunk_meta)
             yield _sse(
                 "progress", stage="retrieving_vectors", status="completed",
                 label="Vector Recall",
-                detail=f"{len(_chunk_context)} chunk(s) retrieved",
+                detail=(
+                    f"dense={_chunk_meta.get('dense_backend')} "
+                    f"status={_chunk_meta.get('dense_status')} "
+                    f"chunks={_chunk_meta.get('dense_count')}"
+                ),
+                duration_ms=_vms,
+            )
+            yield _sse(
+                "progress", stage="retrieving_sparse", status="started",
+                label="Sparse Recall", detail="Scoring keyword overlap over retrieval chunks…",
+            )
+            yield _sse(
+                "progress", stage="retrieving_sparse", status="completed",
+                label="Sparse Recall",
+                detail=(
+                    f"{_chunk_meta.get('sparse_count', 0)} keyword-ranked chunk(s) "
+                    f"via {_chunk_meta.get('sparse_backend', 'keyword_overlap')}"
+                ),
+                duration_ms=_vms,
+            )
+            yield _sse(
+                "progress", stage="fusing_results", status="started",
+                label="Fusing Results", detail="Combining dense and sparse rankings with RRF…",
+            )
+            yield _sse(
+                "progress", stage="fusing_results", status="completed",
+                label="Fusing Results",
+                detail=f"{_chunk_meta.get('fused_count', len(_chunk_context))} fused chunk(s) returned",
                 duration_ms=_vms,
             )
             # Rerank: Claude-based relevance pass when candidates > 3
@@ -2540,6 +2740,23 @@ def _orchestrated_pipeline_stream(
                 "relational context. Synthesise both in your answer."
             )
 
+    # ── In-process GraphRAG context injection (flow.md §5) ────────────────────
+    # Property-graph subgraph supplements the RDF subgraph (additive, not replacing).
+    if _graphrag_result and _graphrag_result.available and _graphrag_result.linearized:
+        if kg_context is None:
+            kg_context = {}
+        existing = kg_context.get("subgraph_linearized", "")
+        graphrag_block = "\n\n### Property-graph context\n" + _graphrag_result.linearized
+        kg_context["subgraph_linearized"] = (existing + graphrag_block).strip()
+        if intent_route == _COMPARATIVE:
+            kg_context["phase6_fusion_note"] = (
+                "This is a comparative question. "
+                "SQLite (relational counts) and RDF/GraphDB (SPARQL — open-world) "
+                "are the two comparison paradigms; the in-process property graph "
+                "provides additional qualitative context and corroboration. "
+                "SQL owns the authoritative counts. Surface any discrepancies explicitly."
+            )
+
     # ── Stage 4.5 — Querying GraphDB (non-fatal) ─────────────────────────────
     from backend.integrations import graphdb_sparql as _gdb
     graph_comparison: dict[str, Any] = {
@@ -2629,6 +2846,9 @@ def _orchestrated_pipeline_stream(
         yield _sse("progress", stage="querying_graphdb", status="completed",
                    label="Querying GraphDB", detail=_gdb_detail, duration_ms=_gdb_total_ms)
 
+    # Neo4j Cypher comparison removed — RQ6 now uses SQL vs SPARQL (two paradigms).
+    # The in-process graph supplies qualitative corroboration, not count comparison.
+
     # ── Phase 6 — Fusion & reconciliation ─────────────────────────────────────
     t0 = time.perf_counter()
     yield _sse("progress", stage="querying_fusion", status="started",
@@ -2704,6 +2924,11 @@ def _orchestrated_pipeline_stream(
         "provider": "none", "model": None, "mode": "not_requested",
     }
     try:
+        yield _sse(
+            "progress", stage="synthesising_answer", status="started",
+            label="Synthesising Answer",
+            detail="Combining SQL, graph, and retrieval context into the final answer…",
+        )
         # Part F — Claude synthesis when new pipeline is active
         # Builds a structured payload so the answer leads with the direct result,
         # cites provenance, surfaces disambiguation, and ends with next steps.
@@ -2753,14 +2978,74 @@ def _orchestrated_pipeline_stream(
                 "sql_strategy": query_provenance.get("strategy"),
             },
         )
+        # ── Numeric gate outcome ──────────────────────────────────────────────
+        _gate_outcome = llm_rewrite_meta.get("gate_outcome", "not_applied")
+        query_provenance["numeric_gate_outcome"] = _gate_outcome
+        if _gate_outcome == "fallback":
+            llm_rephrased_answer = ""
+            query_provenance["gate_blocked_synthesis"] = llm_rewrite_meta.get("gate_blocked_text", "")
+            query_provenance["gate_violations"] = llm_rewrite_meta.get("gate_violations", [])
+            warnings.append(
+                "Numeric-consistency gate: the synthesised answer introduced unsupported figures "
+                "on two attempts and was discarded — the raw data answer is shown instead."
+            )
+        elif _gate_outcome == "regenerated":
+            warnings.append(
+                "Numeric-consistency gate: the first synthesis attempt contained unsupported "
+                "numbers and was regenerated."
+            )
         if llm_rephrased_answer:
             summary_block["llm_rephrased_text"] = llm_rephrased_answer
+
+        # ── Cross-verifier (all LLM-generated answers) ───────────────────────
+        _strategy = query_provenance.get("strategy", "")
+        _is_llm_fallback = any(
+            s in _strategy
+            for s in ("emergency_fallback", "validated_sql_unavailable",
+                      "llm_fallback", "fallback_llm_sql", "semantic_layer_llm")
+        )
+        if llm_rephrased_answer and _is_llm_fallback:
+            try:
+                _verifier = _cross_verify_synthesis(
+                    question=question,
+                    synthesis_text=llm_rephrased_answer,
+                    sql_result=_sql_result_for_synthesis,
+                )
+                query_provenance["verifier"] = _verifier
+                if _verifier.get("verdict") == "disagree":
+                    _claims = _verifier.get("unsupported_claims", [])
+                    if _claims:
+                        _claim_str = "; ".join(str(c) for c in _claims[:3])
+                        warnings.append(
+                            f"Cross-verifier flagged claims not found in result data: {_claim_str}"
+                        )
+                    else:
+                        warnings.append("Cross-verifier flagged potential unsupported claims.")
+            except Exception as _vex:
+                log.debug("orchestrated_pipeline.cross_verify_failed error=%s", _vex)
+                query_provenance["verifier"] = {"verdict": "skip", "reason": str(_vex)}
+        else:
+            query_provenance.setdefault("verifier", {"verdict": "skip", "reason": "deterministic_route"})
+
+        _gate_detail = f" · gate={_gate_outcome}" if _gate_outcome != "not_applied" else ""
+        yield _sse(
+            "progress", stage="synthesising_answer", status="completed",
+            label="Synthesising Answer",
+            detail=f"Synthesis complete via {llm_rewrite_meta.get('provider') or 'llm'}{_gate_detail}",
+        )
     except Exception as exc:
         llm_rewrite_meta = {
             "provider": "unavailable", "model": None,
             "mode": "not_generated", "error": str(exc),
         }
         warnings.append(f"LLM rewrite unavailable: {exc}")
+        query_provenance["numeric_gate_outcome"] = "not_applied"
+        query_provenance.setdefault("verifier", {"verdict": "skip", "reason": "synthesis_error"})
+        yield _sse(
+            "progress", stage="synthesising_answer", status="completed",
+            label="Synthesising Answer",
+            detail="Synthesis skipped — falling back to direct answer text.",
+        )
 
     structured_output = {
         "queries": {
@@ -2805,6 +3090,8 @@ def _orchestrated_pipeline_stream(
     ms = int((time.perf_counter() - t0) * 1000)
     yield _sse("progress", stage="preparing_output", status="completed",
                label="Preparing Output", detail="PDF generated", duration_ms=ms)
+    yield _sse("progress", stage="done", status="completed",
+               label="Done", detail="Ask response ready.")
 
     # ── Final result ──────────────────────────────────────────────────────────
     payload: dict[str, Any] = {
@@ -2852,6 +3139,16 @@ def _orchestrated_pipeline_stream(
             "k_hops":         _phase3_result.k_hops,
             "pruned":         _phase3_result.pruned,
         } if _phase3_result else None,
+        "graphrag_context": {
+            "linearized":          _graphrag_result.linearized,
+            "seed_nodes":          _graphrag_result.seed_nodes,
+            "community_summaries": _graphrag_result.community_summaries,
+            "path_used":           _graphrag_result.path_used,
+            "k_hops":              _graphrag_result.k_hops,
+            "pruned":              _graphrag_result.pruned,
+            "sources_used":        _graphrag_result.sources_used,
+            "degradation_note":    _graphrag_result.degradation_note,
+        } if _graphrag_result else None,
     }
     if include_sql:
         payload["sql"] = safe_sql
@@ -3727,35 +4024,38 @@ def _openrouter_status() -> dict[str, Any]:
         })
     except Exception as exc:
         log.warning("ask_service.openrouter_status_failed error=%s", exc)
-        friendly_hint, technical_detail = _friendly_openrouter_connection_issue(exc)
+        friendly_hint, technical_detail, issue_code = _friendly_openrouter_connection_issue(exc)
         return cache_status({
             **base_status,
             "available": False,
-            "connection_state": "unreachable",
+            "connection_state": issue_code,
             "hint": friendly_hint,
             "detail": technical_detail,
         })
 
 
-def _friendly_openrouter_connection_issue(exc: Exception) -> tuple[str, str]:
+def _friendly_openrouter_connection_issue(exc: Exception) -> tuple[str, str, str]:
     detail = str(exc)
     lower = detail.lower()
     if any(token in lower for token in ["nameresolutionerror", "failed to resolve", "nodename nor servname"]):
         return (
-            "OpenRouter is configured, but this server could not resolve openrouter.ai. "
-            "The Ask page will still show the database answer, but the LLM rewrite is temporarily unavailable.",
+            "OpenRouter is configured, but this server cannot currently reach OpenRouter. "
+            "The Ask page can still show the database answer, but the LLM rewrite is temporarily unavailable.",
             detail,
+            "dns_unreachable",
         )
     if "timed out" in lower or "timeout" in lower:
         return (
-            "OpenRouter is configured, but the connection timed out. "
-            "The Ask page will still show the database answer, but the LLM rewrite is temporarily unavailable.",
+            "OpenRouter is configured, but the server connection to OpenRouter timed out. "
+            "The Ask page can still show the database answer, but the LLM rewrite is temporarily unavailable.",
             detail,
+            "timeout",
         )
     return (
-        "OpenRouter is configured, but the live connection check failed. "
-        "The Ask page will still show the database answer, but the LLM rewrite is temporarily unavailable.",
+        "OpenRouter is configured, but the server could not complete the live connection check. "
+        "The Ask page can still show the database answer, but the LLM rewrite is temporarily unavailable.",
         detail,
+        "unreachable",
     )
 
 
@@ -4114,6 +4414,26 @@ def _question_data_coverage_warnings(question: str) -> list[str]:
     if "1821" in q and any(token in q for token in ["population", "census", "trend"]):
         warnings.append(
             "The Ask census table begins in 1841, so any population trend answer uses 1841–1861 rather than 1821–1861."
+        )
+    if any(token in q for token in ["age", " old", "years old", "elderly", "children", "child"]):
+        warnings.append(
+            "Age data is sparse in the Coolattin records — many entries omit individual ages, "
+            "so age-based counts may understate the true figures."
+        )
+    if any(token in q for token in ["gender", "male", "female", "men", "women", "sex"]):
+        warnings.append(
+            "Gender is recorded for most emigration and tenancy entries but may be absent for "
+            "eviction-only records; household-member counts can differ from individual counts."
+        )
+    if any(token in q for token in ["ship", "vessel", "voyage", "sailed", "aboard"]):
+        warnings.append(
+            "Ship name is recorded for most emigration entries but may be blank for early sailings "
+            "(pre-1847) or records transcribed without a departure document."
+        )
+    if any(token in q for token in ["religion", "catholic", "protestant", "church", "faith", "denomination"]):
+        warnings.append(
+            "Religious denomination is not captured in the Coolattin estate records — "
+            "no religion-based analysis is possible from this dataset."
         )
     return warnings
 
@@ -4950,7 +5270,7 @@ def _llm_generate_claude(
     Falls back to _llm_generate (OpenRouter/Ollama) when ANTHROPIC_API_KEY is unset.
     Never raises — returns ("", meta) on error.
     """
-    if not ANTHROPIC_API_KEY:
+    if not ANTHROPIC_API_KEY or not LLM_ALLOW_PAID:
         # Graceful fallback: pack system + user into a single prompt
         combined = f"{system_prompt}\n\n{user_content}"
         try:
@@ -5010,7 +5330,7 @@ def _llm_generate_grok(
     Used when ASK_SYNTHESIS_MODEL=grok for comparative evaluation.
     Falls back to _llm_generate on error.
     """
-    if not GROK_API_KEY:
+    if not GROK_API_KEY or not LLM_ALLOW_PAID:
         return _llm_generate(prompt, purpose="synthesis", max_tokens=max_tokens, temperature=temperature)
     try:
         resp = requests.post(
@@ -5040,6 +5360,99 @@ def _llm_generate_grok(
     except Exception as exc:
         log.warning("ask_service.grok_generate_failed error=%s", exc)
         return _llm_generate(prompt, purpose="synthesis", max_tokens=max_tokens, temperature=temperature)
+
+
+# ── Numeric-consistency helpers ──────────────────────────────────────────────
+
+def _synthesis_allowed_numbers(
+    sql_result: dict[str, Any],
+    graph_context: str,
+    question: str = "",
+) -> set[str]:
+    """
+    Build the set of numeric tokens that synthesis prose is permitted to use.
+    Derived from the SQL result rows, graph context, and the question itself.
+    Digit-subsequences are included so "6,016" permits "over 6,000".
+
+    The question's own numeric tokens (e.g. a year like 1841) are included so
+    that historically contextual years mentioned in the question are never
+    flagged as unsupported hallucinations — they are part of the user's input,
+    not an LLM fabrication.
+    """
+    rows_str = json.dumps(sql_result.get("rows", [])[:20], ensure_ascii=False, default=str)
+    base = _extract_numeric_tokens(
+        rows_str + " " + (graph_context or "") + " " + (question or "")
+    )
+    expanded: set[str] = set(base)
+    for tok in base:
+        stripped = tok.lstrip("-")
+        if stripped.isdigit() and len(stripped) > 1:
+            for start in range(len(stripped)):
+                for end in range(start + 1, len(stripped) + 1):
+                    expanded.add(str(int(stripped[start:end])))
+    return expanded
+
+
+def _cross_verify_synthesis(
+    question: str,
+    synthesis_text: str,
+    sql_result: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Independent verifier — confirms every factual claim in synthesis_text is
+    supported by sql_result rows.  Uses Grok when available (and LLM_ALLOW_PAID),
+    else falls back to OpenRouter/Ollama free models.
+
+    Returns {verdict: "agree"|"disagree"|"skip", unsupported_claims: [...],
+             model, provider, agreement_rate: 0..1}
+    """
+    if not synthesis_text or not sql_result.get("rows"):
+        return {"verdict": "skip", "unsupported_claims": [], "model": None,
+                "provider": None, "agreement_rate": None, "reason": "no_content"}
+
+    rows_preview = json.dumps(sql_result.get("rows", [])[:10], ensure_ascii=False, default=str)
+    verifier_prompt = (
+        "You are a fact-checker for a historical research assistant.\n\n"
+        f"DATA (complete result set the answer was generated from):\n{rows_preview}\n\n"
+        f"ANSWER TO CHECK:\n{synthesis_text}\n\n"
+        "TASK: Identify every factual claim in the ANSWER that is NOT directly supported "
+        "by the DATA above.\n"
+        "- A claim is unsupported if it states a specific fact, number, name, or date "
+        "that cannot be found in the DATA.\n"
+        "- Ignore vague contextual phrases like 'based on records' or 'historically'.\n"
+        "- Do NOT check for world-knowledge accuracy — only internal data consistency.\n\n"
+        "Respond with ONLY valid JSON (no markdown, no explanation):\n"
+        '{"verdict": "agree", "unsupported_claims": []} '
+        "if all claims are supported, or "
+        '{"verdict": "disagree", "unsupported_claims": ["exact claim text", ...]}'
+        " if any are not."
+    )
+    try:
+        if GROK_API_KEY and LLM_ALLOW_PAID:
+            text, meta = _llm_generate_grok(verifier_prompt, max_tokens=220, temperature=0.0)
+        else:
+            text, meta = _llm_generate(verifier_prompt, purpose="verify", max_tokens=220, temperature=0.0)
+
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"```(?:json)?", "", cleaned).strip().rstrip("`").strip()
+        parsed = json.loads(cleaned)
+        verdict = parsed.get("verdict", "skip")
+        if verdict not in ("agree", "disagree"):
+            verdict = "skip"
+        unsupported = [str(c) for c in parsed.get("unsupported_claims", []) if c]
+        agreement_rate = 0.0 if verdict == "disagree" else 1.0
+        return {
+            "verdict": verdict,
+            "unsupported_claims": unsupported,
+            "model": meta.get("model"),
+            "provider": meta.get("provider"),
+            "agreement_rate": agreement_rate,
+        }
+    except Exception as exc:
+        log.debug("ask_service.cross_verify_failed error=%s", exc)
+        return {"verdict": "skip", "unsupported_claims": [], "model": None,
+                "provider": None, "agreement_rate": None, "reason": str(exc)}
 
 
 # Part F — System prompt for answer synthesis (verbatim from spec)
@@ -5087,15 +5500,19 @@ def _claude_synthesize_answer(
     provenance: dict[str, Any],
 ) -> tuple[str, dict[str, Any]]:
     """
-    Part F — Produce the final answer using the structured synthesis system prompt.
+    Part F — Produce the final answer with an embedded numeric-consistency gate.
 
-    The answer leads with the direct result, states provenance, surfaces
-    disambiguation, cites discrepancies when present, and ends with 2–4
-    concrete next steps for the researcher.
-
-    Delegates to Claude when ANTHROPIC_API_KEY is set, Grok when
-    ASK_SYNTHESIS_MODEL=grok, else falls back to OpenRouter/Ollama.
+    Gate behaviour:
+      1. Generate answer with the standard system prompt.
+      2. Extract every number from the answer and compare against the allowlist
+         built from sql_result rows + graph_context.
+      3. If a violation is found, regenerate once with a stricter prompt addendum.
+      4. If the second attempt still violates, return ("", meta | gate_outcome="fallback")
+         so the caller falls back to the deterministic raw answer.
+      meta["gate_outcome"]: "pass" | "regenerated" | "fallback" | "not_applied"
     """
+    allowed_numbers = _synthesis_allowed_numbers(sql_result, graph_context or "", question)
+
     user_block: dict[str, Any] = {
         "question": question,
         "resolved_entities": resolved_entities,
@@ -5106,26 +5523,65 @@ def _claude_synthesize_answer(
     }
     user_content = json.dumps(user_block, ensure_ascii=False, default=str)
 
-    if ASK_SYNTHESIS_MODEL == "grok":
-        combined = f"{_SYNTHESIS_SYSTEM_PROMPT}\n\nINPUT:\n{user_content}"
-        return _llm_generate_grok(combined, max_tokens=600, temperature=0.1)
+    def _call_llm(system_prompt: str) -> tuple[str, dict[str, Any]]:
+        if ASK_SYNTHESIS_MODEL == "grok":
+            combined = f"{system_prompt}\n\nINPUT:\n{user_content}"
+            return _llm_generate_grok(combined, max_tokens=600, temperature=0.1)
+        if ASK_SYNTHESIS_MODEL in ("openrouter", "ollama"):
+            combined = f"{system_prompt}\n\nINPUT:\n{user_content}"
+            return _llm_generate(combined, purpose="synthesis", max_tokens=600, temperature=0.1)
+        return _llm_generate_claude(
+            system_prompt=system_prompt,
+            user_content=user_content,
+            max_tokens=600,
+            temperature=0.1,
+        )
 
-    if ASK_SYNTHESIS_MODEL in ("openrouter", "ollama"):
-        combined = f"{_SYNTHESIS_SYSTEM_PROMPT}\n\nINPUT:\n{user_content}"
-        try:
-            text, meta = _llm_generate(combined, purpose="synthesis", max_tokens=600, temperature=0.1)
-            return text, meta
-        except Exception as exc:
-            log.warning("ask_service.synthesis_fallback_failed error=%s", exc)
-            return "", {"provider": "none", "error": str(exc)}
+    def _gate_violations(text: str) -> list[str]:
+        if not text:
+            return []
+        # Strip markdown ordered-list markers (e.g. "1. " "2. " at line start)
+        # before extraction to avoid false positives from numbered formatting.
+        stripped = re.sub(r"(?m)^\s*\d+\.\s+", " ", text)
+        generated = _extract_numeric_tokens(stripped)
+        return sorted(n for n in generated if n not in allowed_numbers)
 
-    # Default: Claude (with fallback if key missing)
-    return _llm_generate_claude(
-        system_prompt=_SYNTHESIS_SYSTEM_PROMPT,
-        user_content=user_content,
-        max_tokens=600,
-        temperature=0.1,
+    try:
+        text, meta = _call_llm(_SYNTHESIS_SYSTEM_PROMPT)
+    except Exception as exc:
+        log.warning("ask_service.synthesis_failed error=%s", exc)
+        return "", {"provider": "none", "error": str(exc), "gate_outcome": "not_applied"}
+
+    violations = _gate_violations(text)
+    if not violations:
+        return text, {**meta, "gate_outcome": "pass"}
+
+    log.info("ask_service.numeric_gate_violation unsupported=%s", violations[:5])
+
+    # Retry once with a stricter addendum
+    _allowed_sample = ", ".join(sorted(allowed_numbers)[:30])
+    strict_suffix = (
+        "\n\nCRITICAL CONSTRAINT: The ONLY numbers you may state in your answer are those "
+        f"that appear in the sql_result rows. Permitted values include: {_allowed_sample}. "
+        "Do not introduce any other numeric value. If you cannot answer without an unsupported "
+        "number, state what is known and omit the unsupported figure."
     )
+    try:
+        text2, meta2 = _call_llm(_SYNTHESIS_SYSTEM_PROMPT + strict_suffix)
+    except Exception as exc2:
+        log.warning("ask_service.synthesis_retry_failed error=%s", exc2)
+        return "", {**meta, "gate_outcome": "fallback",
+                    "gate_violations": violations, "gate_retry_error": str(exc2),
+                    "gate_blocked_text": text[:600]}
+
+    violations2 = _gate_violations(text2)
+    if not violations2:
+        return text2, {**meta2, "gate_outcome": "regenerated", "gate_violations_first": violations}
+
+    log.warning("ask_service.numeric_gate_fallback violations=%s", violations2[:5])
+    return "", {**meta2, "gate_outcome": "fallback",
+                "gate_violations": violations2, "gate_violations_first": violations,
+                "gate_blocked_text": text2[:600]}
 
 
 def _llm_generate_validated_sql(
@@ -5610,6 +6066,10 @@ def _dynamic_fallback_sql(question: str, townland_hint: str | None) -> str:
     asks_people = bool(analysis.get("asks_people")) or analysis.get("primary_intent") == "people"
     asks_parish = bool(analysis.get("asks_parish"))
 
+    same_parish_sql = _same_parish_sql(question, analysis, hint)
+    if same_parish_sql:
+        return same_parish_sql
+
     # Non-person geography intent: parish-focused questions.
     if asks_parish and asks_people and hint:
         where_parts = [f"townland_norm='{_sql_escape(hint)}'"]
@@ -6051,6 +6511,26 @@ def _dynamic_fallback_vrti_postgres_sql(question: str, townland_hint: str | None
     hint = analysis.get("townland_norm") or ""
     year = analysis.get("year")
     radius_km = analysis.get("radius_km") or 20
+
+    if hint and ("same parish" in q or "in the parish as" in q):
+        return f"""
+SELECT
+  t.name,
+  t.civil_parish,
+  t.barony,
+  t.county,
+  t.kg_uri
+FROM vrti_townland t
+WHERE t.civil_parish = (
+  SELECT civil_parish
+  FROM vrti_townland
+  WHERE UPPER(name)='{_sql_escape(hint)}'
+  LIMIT 1
+)
+  AND UPPER(t.name)!='{_sql_escape(hint)}'
+ORDER BY t.name
+LIMIT 200
+""".strip()
 
     if analysis.get("asks_parish") and analysis.get("output_mode") in {"list", "grouped"}:
         return """

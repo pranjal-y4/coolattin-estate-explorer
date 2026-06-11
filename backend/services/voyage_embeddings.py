@@ -1,25 +1,27 @@
 """
 backend/services/voyage_embeddings.py
 
-Part B — Voyage AI dense embeddings client.
+Cohere Embed v3 dense embeddings client (replaces Voyage AI).
 
-Uses the Voyage REST API (no SDK dependency — just requests).
-Model: voyage-3 (general-purpose; handles historical Irish-English text well).
+Model: embed-english-v3.0 (1024-dim; same column width as Voyage — no schema change).
 
-Hybrid retrieval fuses Voyage dense scores with the existing TF-IDF sparse
-scores via Reciprocal Rank Fusion (RRF).  The sparse hard filter
-(required_keywords) is preserved as the precision floor; Voyage adds recall
-for semantically similar but differently worded queries.
+CRITICAL — input_type asymmetry:
+  corpus chunks → Cohere input_type "search_document"  (embed_documents / ingest path)
+  query text    → Cohere input_type "search_query"     (embed_query / retrieval path)
+  Passing the same type for both silently tanks retrieval quality.
 
-Public API
-----------
-embed_texts(texts, input_type)  → list of float vectors
-embed_query(text)               → single float vector
-embed_documents(texts)          → list of float vectors
-rrf_fuse(dense_ranked, sparse_ranked, k=60) → fused list
+Rate limits (trial key): 1,000 calls/month total; 5 calls/min on Embed endpoint.
+Proactive inter-call sleep: 12 s (60 / 5). 429 backoff honours Retry-After as safety net.
 
-The module degrades gracefully when VOYAGE_API_KEY is unset or the API
-returns an error: it logs at WARNING and returns empty vectors.
+Public API (identical signatures to the previous Voyage implementation):
+  embed_texts(texts, input_type)  → list of float vectors
+  embed_query(text)               → single float vector
+  embed_documents(texts)          → list of float vectors
+  cosine_similarity(a, b)         → float
+  rrf_fuse(...)                   → fused list
+  build_person_passport(...)      → str
+  build_place_passport(...)       → str
+  build_community_summary(...)    → str
 """
 from __future__ import annotations
 
@@ -29,38 +31,74 @@ import threading
 import time
 from typing import Any
 
-import requests
-
 log = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
+
 
 def _getenv(key: str, default: str = "") -> str:
     """Read from os.environ (already loaded by ask_service._load_local_env_files)."""
     return os.environ.get(key, default).strip()
 
-VOYAGE_API_KEY: str = ""  # populated on first use via _init_key()
+
+def _get_embedding_provider() -> str:
+    """Return the active embedding provider: 'local' | 'cohere' | 'voyage'."""
+    raw = os.environ.get("EMBEDDING_PROVIDER", "local")
+    p = (raw or "local").lower().strip()
+    return p if p in ("local", "cohere", "voyage") else "local"
+
+
+COHERE_API_KEY: str = ""
+COHERE_MODEL: str = "embed-english-v3.0"
+COHERE_OUTPUT_DIMENSION: int = 1024
+COHERE_MAX_BATCH: int = 96       # Cohere Embed v3 per-request text limit
+COHERE_CALL_INTERVAL: float = 12.0  # 60 s / 5 calls/min — proactive gap
+
+# Keep VOYAGE_ aliases so ask_pgvector._vector_dimension() still resolves 1024
+# without needing any changes to that module.
+VOYAGE_API_KEY: str = ""
 VOYAGE_MODEL: str = "voyage-3"
-VOYAGE_BASE_URL = "https://api.voyageai.com/v1"
-VOYAGE_TIMEOUT = 30  # seconds
-VOYAGE_MAX_BATCH = 128  # Voyage hard limit per request
+VOYAGE_OUTPUT_DIMENSION: int = COHERE_OUTPUT_DIMENSION
 
 _init_lock = threading.Lock()
-_key_loaded = False
+_key_loaded: bool = False
+_client = None  # cohere.ClientV2 instance, populated by _init_key()
+
+# Maps the public-facing input_type names (kept compatible with Voyage API callers)
+# to Cohere's required values.  Translation happens only inside _api_embed —
+# all cache keys and caller contracts still use the Voyage-style names.
+_COHERE_INPUT_TYPE: dict[str, str] = {
+    "document": "search_document",
+    "query": "search_query",
+}
 
 
 def _init_key() -> None:
-    global VOYAGE_API_KEY, VOYAGE_MODEL, _key_loaded
+    global COHERE_API_KEY, COHERE_MODEL, VOYAGE_API_KEY, _key_loaded, _client
     if _key_loaded:
         return
     with _init_lock:
         if _key_loaded:
             return
-        VOYAGE_API_KEY = _getenv("VOYAGE_API_KEY")
-        model = _getenv("VOYAGE_MODEL")
+        COHERE_API_KEY = _getenv("COHERE_API_KEY")
+        model = _getenv("COHERE_MODEL")
         if model:
-            VOYAGE_MODEL = model
+            COHERE_MODEL = model
+        VOYAGE_API_KEY = COHERE_API_KEY  # keep legacy alias readable
         _key_loaded = True
+
+        if COHERE_API_KEY:
+            try:
+                import cohere  # type: ignore
+                _client = cohere.ClientV2(api_key=COHERE_API_KEY)
+                log.info(
+                    "voyage_embeddings.cohere_init model=%s dim=%d",
+                    COHERE_MODEL,
+                    COHERE_OUTPUT_DIMENSION,
+                )
+            except Exception as exc:
+                log.warning("voyage_embeddings.cohere_init_failed error=%s", exc)
+                _client = None
 
 
 # ── In-process document cache ─────────────────────────────────────────────────
@@ -79,14 +117,81 @@ def _cache_get(text: str) -> list[float] | None:
 def _cache_set(text: str, vec: list[float]) -> None:
     with _doc_cache_lock:
         if len(_DOC_CACHE) >= _DOC_CACHE_MAX:
-            # Evict 10 % oldest entries (dict insertion order)
             evict = list(_DOC_CACHE.keys())[: _DOC_CACHE_MAX // 10]
             for k in evict:
                 del _DOC_CACHE[k]
         _DOC_CACHE[text] = vec
 
 
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+# Proactive: sleep to stay within 5 calls/min (12 s between calls).
+# The 429 backoff in embed_texts is a separate safety net for burst scenarios.
+
+_rate_lock = threading.Lock()
+_last_call_at: float = 0.0
+
+
+def _proactive_sleep() -> None:
+    global _last_call_at
+    with _rate_lock:
+        elapsed = time.time() - _last_call_at
+        gap = COHERE_CALL_INTERVAL - elapsed
+        if gap > 0:
+            time.sleep(gap)
+        _last_call_at = time.time()
+
+
+# ── API call counter ──────────────────────────────────────────────────────────
+
+_api_call_count_lock = threading.Lock()
+_api_call_count: int = 0
+
+
+def get_api_call_count() -> int:
+    with _api_call_count_lock:
+        return _api_call_count
+
+
+def reset_api_call_count() -> None:
+    global _api_call_count
+    with _api_call_count_lock:
+        _api_call_count = 0
+
+
+# ── Single-batch embedding call ───────────────────────────────────────────────
+
+
+def _api_embed(texts: list[str], input_type: str) -> list[list[float]]:
+    """
+    One Cohere embed API call for a single pre-sized batch.
+
+    input_type must be the Cohere native value: 'search_document' or 'search_query'.
+    Increments the module-level API call counter.
+    Raises on API error; the caller in embed_texts handles retries.
+
+    Hard assertion: returned embedding dimension must equal COHERE_OUTPUT_DIMENSION (1024).
+    """
+    global _api_call_count
+    _proactive_sleep()
+    response = _client.embed(  # type: ignore[union-attr]
+        model=COHERE_MODEL,
+        texts=texts,
+        input_type=input_type,
+        embedding_types=["float"],
+    )
+    with _api_call_count_lock:
+        _api_call_count += 1
+    vecs: list[list[float]] = list(response.embeddings.float_ or [])
+    if vecs and len(vecs[0]) != COHERE_OUTPUT_DIMENSION:
+        raise RuntimeError(
+            f"cohere_embed.dimension_mismatch expected={COHERE_OUTPUT_DIMENSION} "
+            f"actual={len(vecs[0])} model={COHERE_MODEL}"
+        )
+    return vecs
+
+
 # ── Core embedding call ───────────────────────────────────────────────────────
+
 
 def embed_texts(
     texts: list[str],
@@ -95,22 +200,32 @@ def embed_texts(
     use_cache: bool = True,
 ) -> list[list[float]]:
     """
-    Embed a list of texts using the Voyage REST API.
+    Embed a list of texts using the configured provider (EMBEDDING_PROVIDER env var).
 
-    input_type: "query" | "document"
+    input_type: "query" | "document"  (Voyage-compatible names)
+    provider=local  → BAAI/bge-large-en-v1.5 via SentenceTransformers (no API key)
+    provider=cohere → Cohere Embed v3 (requires COHERE_API_KEY)
+    provider=voyage → alias for cohere (legacy)
     Returns empty list on API error.
     """
+    provider = _get_embedding_provider()
+    if provider == "local":
+        from backend.services.local_embeddings import embed_texts_local
+        return embed_texts_local(texts, input_type=input_type)
+
     _init_key()
-    if not VOYAGE_API_KEY:
+    if not COHERE_API_KEY or _client is None:
         log.debug("voyage_embeddings.no_key — dense embeddings disabled")
         return []
     if not texts:
         return []
 
+    cohere_input_type = _COHERE_INPUT_TYPE.get(input_type, "search_document")
+
     results: list[list[float] | None] = [None] * len(texts)
     uncached_indices: list[int] = []
 
-    # Fill from cache
+    # Fill from cache (documents only)
     if use_cache and input_type == "document":
         for i, t in enumerate(texts):
             hit = _cache_get(t)
@@ -123,34 +238,63 @@ def embed_texts(
 
     if uncached_indices:
         uncached_texts = [texts[i] for i in uncached_indices]
-        # Batch in chunks of VOYAGE_MAX_BATCH
         fetched_vecs: list[list[float]] = []
-        for batch_start in range(0, len(uncached_texts), VOYAGE_MAX_BATCH):
-            batch = uncached_texts[batch_start: batch_start + VOYAGE_MAX_BATCH]
-            try:
-                resp = requests.post(
-                    f"{VOYAGE_BASE_URL}/embeddings",
-                    headers={
-                        "Authorization": f"Bearer {VOYAGE_API_KEY}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": VOYAGE_MODEL,
-                        "input": batch,
-                        "input_type": input_type,
-                    },
-                    timeout=VOYAGE_TIMEOUT,
+        _RETRY_DELAYS = [2, 4, 8, 16, 32]
+
+        for batch_start in range(0, len(uncached_texts), COHERE_MAX_BATCH):
+            batch = uncached_texts[batch_start: batch_start + COHERE_MAX_BATCH]
+            succeeded = False
+
+            for attempt, retry_delay in enumerate([0] + _RETRY_DELAYS):
+                if retry_delay:
+                    time.sleep(retry_delay)
+                try:
+                    batch_vecs = _api_embed(batch, cohere_input_type)
+                    fetched_vecs.extend(batch_vecs)
+                    succeeded = True
+                    break
+                except Exception as exc:
+                    exc_name = type(exc).__name__
+                    is_rate_limit = "429" in str(exc) or "TooManyRequests" in exc_name
+                    if is_rate_limit and attempt < len(_RETRY_DELAYS):
+                        wait_secs = max(
+                            retry_delay or COHERE_CALL_INTERVAL,
+                            COHERE_CALL_INTERVAL,
+                        )
+                        try:
+                            if hasattr(exc, "headers") and exc.headers:
+                                ra = exc.headers.get("Retry-After")
+                                if ra:
+                                    wait_secs = int(ra)
+                        except Exception:
+                            pass
+                        log.warning(
+                            "voyage_embeddings.rate_limited attempt=%d wait=%ds",
+                            attempt + 1,
+                            wait_secs,
+                        )
+                        time.sleep(wait_secs)
+                        continue
+                    if attempt < len(_RETRY_DELAYS):
+                        log.debug(
+                            "voyage_embeddings.api_error_retrying attempt=%d error=%s",
+                            attempt + 1,
+                            exc,
+                        )
+                        continue
+                    log.warning(
+                        "voyage_embeddings.api_error model=%s batch_size=%d error=%s",
+                        COHERE_MODEL,
+                        len(batch),
+                        exc,
+                    )
+                    fetched_vecs.extend([[] for _ in batch])
+                    break
+
+            if not succeeded and len(fetched_vecs) < batch_start + len(batch):
+                fetched_vecs.extend(
+                    [[] for _ in range(batch_start + len(batch) - len(fetched_vecs))]
                 )
-                resp.raise_for_status()
-                data = resp.json()
-                batch_vecs = [item["embedding"] for item in data["data"]]
-                fetched_vecs.extend(batch_vecs)
-            except Exception as exc:
-                log.warning(
-                    "voyage_embeddings.api_error model=%s batch_size=%d error=%s",
-                    VOYAGE_MODEL, len(batch), exc,
-                )
-                fetched_vecs.extend([[] for _ in batch])
 
         for list_idx, orig_idx in enumerate(uncached_indices):
             vec = fetched_vecs[list_idx] if list_idx < len(fetched_vecs) else []
@@ -162,17 +306,18 @@ def embed_texts(
 
 
 def embed_query(text: str) -> list[float]:
-    """Embed a single query string. Returns [] on failure."""
+    """Embed a single query string with input_type='search_query'. Returns [] on failure."""
     vecs = embed_texts([text], input_type="query", use_cache=False)
     return vecs[0] if vecs else []
 
 
 def embed_documents(texts: list[str]) -> list[list[float]]:
-    """Embed document chunks. Results are cached."""
+    """Embed document chunks with input_type='search_document'. Results are cached."""
     return embed_texts(texts, input_type="document", use_cache=True)
 
 
 # ── Cosine similarity ─────────────────────────────────────────────────────────
+
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
@@ -186,6 +331,7 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 # ── Reciprocal Rank Fusion ────────────────────────────────────────────────────
+
 
 def rrf_fuse(
     dense_ranked: list[dict[str, Any]],
@@ -207,7 +353,6 @@ def rrf_fuse(
     sparse_rank: dict[str, int] = {item["id"]: i + 1 for i, item in enumerate(sparse_ranked)}
 
     all_ids: set[str] = set(dense_rank) | set(sparse_rank)
-    # Build a lookup for item metadata
     item_by_id: dict[str, dict[str, Any]] = {}
     for item in dense_ranked:
         item_by_id[item["id"]] = item
@@ -237,6 +382,7 @@ def rrf_fuse(
 # Produce verbalised text chunks for offline embedding at three granularities:
 #   person_passports, place_passports, community_summaries.
 # Called by the chunk refresh job (triggered on ingest cadence).
+
 
 def build_person_passport(
     display_name: str,

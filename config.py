@@ -11,6 +11,33 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent        # Coolattin-app/ (project root)
 
 
+def _load_local_env_files(root: Path = BASE_DIR) -> None:
+    """
+    Load local key=value env files before config values are resolved.
+
+    Existing process env wins over file values so Azure/App Service settings
+    still take precedence over local development files.
+    """
+    for env_path in (root / ".env.local", root / ".env"):
+        if not env_path.exists():
+            continue
+        try:
+            for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+        except OSError:
+            continue
+
+
+_load_local_env_files()
+
+
 def _resolve_database_path() -> Path:
     raw = os.environ.get("DATABASE_PATH", "").strip()
     if not raw:
@@ -47,6 +74,15 @@ class Config:
     GRAPHDB_REQUEST_TIMEOUT: int = int(os.environ.get("GRAPHDB_REQUEST_TIMEOUT", "15"))
 
     # ------------------------------------------------------------------ #
+    # In-process GraphRAG (property graph — no external server)           #
+    # Build the graph: python3 scripts/build_graph.py                     #
+    # ------------------------------------------------------------------ #
+    GRAPHRAG_ENABLED: bool = os.environ.get("GRAPHRAG_ENABLED", "true").lower() == "true"
+    GRAPHRAG_VECTOR_TOP_K: int = int(os.environ.get("GRAPHRAG_VECTOR_TOP_K", "8"))
+    GRAPHRAG_K_HOPS: int = int(os.environ.get("GRAPHRAG_K_HOPS", "2"))
+    GRAPHRAG_MAX_NODES: int = int(os.environ.get("GRAPHRAG_MAX_NODES", "120"))
+
+    # ------------------------------------------------------------------ #
     # Refresh / staleness TTL (days)                                      #
     # ------------------------------------------------------------------ #
     CENSUS_STALE_AFTER_DAYS: int = 7
@@ -60,6 +96,12 @@ class Config:
     DATA_SEED_DIR: Path = BASE_DIR / "data" / "seed"
     DATA_SNAPSHOT_DIR: Path = BASE_DIR / "data" / "source_snapshots"
     EXPORTS_DIR: Path = BASE_DIR / "exports"
+
+    # ------------------------------------------------------------------ #
+    # Embedding provider                                                   #
+    # Values: local | cohere | voyage  (local = BAAI/bge-large-en-v1.5)  #
+    # ------------------------------------------------------------------ #
+    EMBEDDING_PROVIDER: str = os.environ.get("EMBEDDING_PROVIDER", "local")
 
     # ------------------------------------------------------------------ #
     # Logging                                                              #

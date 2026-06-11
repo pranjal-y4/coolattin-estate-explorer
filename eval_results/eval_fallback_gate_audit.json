@@ -1,0 +1,389 @@
+{
+  "phase": "fallback_gate_audit",
+  "timestamp": "2026-06-10T23:04:36.730647+00:00",
+  "metrics": {
+    "n_total": 9,
+    "n_completed": 9,
+    "n_timed_out": 0,
+    "n_inscope": 6,
+    "n_outscope": 3,
+    "exec_acc_n": 6,
+    "exec_acc_pass": 2,
+    "exec_acc_rate": 33.3,
+    "answered_n": 9,
+    "hallucinated_n": 0,
+    "hallucination_rate": 0.0,
+    "verifier_tested_n": 0,
+    "verifier_caught_n": 0,
+    "verifier_catch_rate": null,
+    "verifier_ran_n": 0,
+    "synth_attempted_n": 9,
+    "gate_caught_n": 9,
+    "gate_pass_n": 0,
+    "gate_catch_rate": 100.0,
+    "outscope_completed_n": 3,
+    "outscope_with_answer_n": 3,
+    "outscope_refused_n": 0,
+    "outscope_refusal_rate": 0.0
+  },
+  "results": [
+    {
+      "id": "gen_01_mortality",
+      "catalogue_code": "G",
+      "category": "general",
+      "is_out_of_scope": true,
+      "question": "How many people died of Famine-related causes on the Coolattin estate?",
+      "oracle_sql": null,
+      "oracle_value": null,
+      "oracle_sql_ok": null,
+      "live_status": "ok",
+      "live_sql": "SELECT 'No death data available' AS message",
+      "live_rows": [
+        {
+          "message": "No death data available"
+        }
+      ],
+      "live_answer": "No death data available",
+      "llm_synthesized": "",
+      "live_elapsed_s": 36.65,
+      "live_error": null,
+      "exec_acc": null,
+      "has_hallucination": false,
+      "unsupported_numbers": [],
+      "verifier_verdict": "skip",
+      "verifier_unsupported": [],
+      "gate_outcome": "fallback",
+      "gate_caught": true,
+      "gate_blocked_synthesis": "No death records for Famine-related causes on the Coolattin estate are held in the current database — the query returned no data on this metric.\n\n**What is known:** The townland of Coolattin (sql_id 994) was successfully identified in the records, but no mortality data linked to it has been indexed in the system. This is a data-availability gap, not necessarily a historical absence; Coolattin was a large Fitzwilliam estate in Co. Wicklow with documented Famine-era activity, but those figures are not surfaced here.\n\n**Next steps you can act on now:**\n\n1. **Consult the Coolattin Estate Papers** ",
+      "gate_violations": [
+        "1",
+        "1845",
+        "1852",
+        "1864",
+        "2",
+        "3",
+        "4",
+        "994"
+      ],
+      "llm_synthesized_attempt": true,
+      "query_strategy": "fallback_llm_sql",
+      "refused": false
+    },
+    {
+      "id": "gen_02_religion",
+      "catalogue_code": "G",
+      "category": "general",
+      "is_out_of_scope": true,
+      "question": "What religion were the Coolattin tenants?",
+      "oracle_sql": null,
+      "oracle_value": null,
+      "oracle_sql_ok": null,
+      "live_status": "ok",
+      "live_sql": "SELECT 'I could not produce a validated SQL query that safely answers this question. Please rephrase it with a clearer townland, surname, year, ship, record type, or measure.' AS message",
+      "live_rows": [
+        {
+          "message": "I could not produce a validated SQL query that safely answers this question. Please rephrase it with a clearer townland, surname, year, ship, record type, or measure."
+        }
+      ],
+      "live_answer": "I could not produce a validated SQL query that safely answers this question. Please rephrase it with a clearer townland, surname, year, ship, record type, or measure.",
+      "llm_synthesized": "",
+      "live_elapsed_s": 43.51,
+      "live_error": null,
+      "exec_acc": null,
+      "has_hallucination": false,
+      "unsupported_numbers": [],
+      "verifier_verdict": "skip",
+      "verifier_unsupported": [],
+      "gate_outcome": "fallback",
+      "gate_caught": true,
+      "gate_blocked_synthesis": "The available records do not contain a retrievable answer to this question in the current form. The SQL query could not be validated against the Coolattin townland data (sql_id 994), and no graph context was returned, so no religion figures can be stated.\n\n**What is known:** Coolattin is a confirmed townland (sql_id 994; kg_uri `place/present-day/townland/Coolattin/v1kzs91`), so the entity is resolved — the gap is in the query structure, not the place identification.\n\n**Next steps you can act on immediately:**\n\n1. **Rephrase by record type** — ask \"What religion is recorded for tenants in Cool",
+      "gate_violations": [
+        "1",
+        "1766",
+        "1851",
+        "2",
+        "3",
+        "4",
+        "91",
+        "994"
+      ],
+      "llm_synthesized_attempt": true,
+      "query_strategy": "validated_sql_unavailable",
+      "refused": false
+    },
+    {
+      "id": "gen_05_politics",
+      "catalogue_code": "G",
+      "category": "general",
+      "is_out_of_scope": true,
+      "question": "Were any Coolattin tenants involved in political movements during the 1840s?",
+      "oracle_sql": null,
+      "oracle_value": null,
+      "oracle_sql_ok": null,
+      "live_status": "ok",
+      "live_sql": "SELECT 'I could not produce a validated SQL query that safely answers this question. Please rephrase it with a clearer townland, surname, year, ship, record type, or measure.' AS message",
+      "live_rows": [
+        {
+          "message": "I could not produce a validated SQL query that safely answers this question. Please rephrase it with a clearer townland, surname, year, ship, record type, or measure."
+        }
+      ],
+      "live_answer": "I could not produce a validated SQL query that safely answers this question. Please rephrase it with a clearer townland, surname, year, ship, record type, or measure.",
+      "llm_synthesized": "",
+      "live_elapsed_s": 51.4,
+      "live_error": null,
+      "exec_acc": null,
+      "has_hallucination": false,
+      "unsupported_numbers": [],
+      "verifier_verdict": "skip",
+      "verifier_unsupported": [],
+      "gate_outcome": "fallback",
+      "gate_caught": true,
+      "gate_blocked_synthesis": "The structured estate records held in this system do not contain a validated query result that can confirm or deny Coolattin tenant involvement in political movements during the 1840s.\n\n**What is known:** Coolattin (sql_id 994) is a resolved townland in the Fitzwilliam/Coolattin estate records. The system holds tenancy, rental, and emigration data for this estate, but political affiliation or movement membership is not a discrete field in those record types — so no count or list can be drawn from the database.\n\n**What the records cannot answer here:** \"Political movements\" is not a structured ",
+      "gate_violations": [
+        "1847",
+        "1849",
+        "1850",
+        "2",
+        "3",
+        "4974",
+        "5",
+        "994"
+      ],
+      "llm_synthesized_attempt": true,
+      "query_strategy": "validated_sql_unavailable",
+      "refused": false
+    },
+    {
+      "id": "er_wh_02_confirmed_matches",
+      "catalogue_code": "I",
+      "category": "entity",
+      "is_out_of_scope": false,
+      "question": "How many workhouse-to-estate links are confirmed matches?",
+      "oracle_sql": "SELECT COUNT(*) AS n FROM workhouse_unified_links WHERE label='CONFIRMED_MATCH'",
+      "oracle_value": 3,
+      "oracle_sql_ok": true,
+      "live_status": "ok",
+      "live_sql": "SELECT COUNT(*) FROM workhouse_unified_links WHERE label='CONFIRMED_MATCH'",
+      "live_rows": [
+        {
+          "COUNT(*)": 3
+        }
+      ],
+      "live_answer": "I found 3 count(*).",
+      "llm_synthesized": "",
+      "live_elapsed_s": 45.08,
+      "live_error": null,
+      "exec_acc": true,
+      "has_hallucination": false,
+      "unsupported_numbers": [],
+      "verifier_verdict": "skip",
+      "verifier_unsupported": [],
+      "gate_outcome": "fallback",
+      "gate_caught": true,
+      "gate_blocked_synthesis": "**3 workhouse-to-estate links are confirmed matches**, drawn from the `workhouse_unified_links` table (1 record, `label = 'CONFIRMED_MATCH'`).\n\n**Discrepancy:** The graph database returns 0 for this same metric against the SQL value of 3 — likely due to a schema mismatch or incomplete data loading in GraphDB. Treat the SQL figure as authoritative here.\n\n---\n\n**Next steps:**\n\n1. **View the 3 source records** — query `workhouse_unified_links WHERE label='CONFIRMED_MATCH'` to inspect the specific workhouse and estate identifiers in each confirmed pair.\n2. **Check unconfirmed links** — run the sam",
+      "gate_violations": [
+        "0",
+        "1",
+        "2",
+        "4"
+      ],
+      "llm_synthesized_attempt": true,
+      "query_strategy": "fallback_llm_sql",
+      "refused": false
+    },
+    {
+      "id": "er_wh_03_review_needed",
+      "catalogue_code": "I",
+      "category": "entity",
+      "is_out_of_scope": false,
+      "question": "How many workhouse-to-estate record links require human review?",
+      "oracle_sql": "SELECT COUNT(*) AS n FROM workhouse_unified_links WHERE review_required=1",
+      "oracle_value": 136,
+      "oracle_sql_ok": true,
+      "live_status": "ok",
+      "live_sql": "SELECT COUNT(*) FROM workhouse_unified_links WHERE review_required=1",
+      "live_rows": [
+        {
+          "COUNT(*)": 136
+        }
+      ],
+      "live_answer": "I found 136 count(*).",
+      "llm_synthesized": "",
+      "live_elapsed_s": 54.73,
+      "live_error": null,
+      "exec_acc": true,
+      "has_hallucination": false,
+      "unsupported_numbers": [],
+      "verifier_verdict": "skip",
+      "verifier_unsupported": [],
+      "gate_outcome": "fallback",
+      "gate_caught": true,
+      "gate_blocked_synthesis": "**136 workhouse-to-estate record links currently require human review**, drawn from a single query against `workhouse_unified_links` (1 row returned, `review_required = 1`).\n\n**Discrepancy:** The graph database returns 0 for this same metric against 136 in SQL — almost certainly a schema mismatch or incomplete data load into GraphDB. Treat the SQL figure as authoritative until the graph is reconciled.\n\n---\n\n**Next steps:**\n\n1. **View the 136 flagged records** by querying `workhouse_unified_links WHERE review_required = 1` with full columns to triage by link type, date range, or confidence scor",
+      "gate_violations": [
+        "0",
+        "2",
+        "4"
+      ],
+      "llm_synthesized_attempt": true,
+      "query_strategy": "fallback_llm_sql",
+      "refused": false
+    },
+    {
+      "id": "er_wh_04_mentions_count",
+      "catalogue_code": "I",
+      "category": "entity",
+      "is_out_of_scope": false,
+      "question": "How many individual name mentions were extracted from workhouse records for entity resolution?",
+      "oracle_sql": "SELECT COUNT(*) AS n FROM source_mentions",
+      "oracle_value": 8214,
+      "oracle_sql_ok": true,
+      "live_status": "ok",
+      "live_sql": "SELECT COUNT(DISTINCT record_id) AS person_count FROM unified_record WHERE townland_norm = 'DO WORKHOUSE'",
+      "live_rows": [
+        {
+          "person_count": 0
+        }
+      ],
+      "live_answer": "I found 0 person count for Do Workhouse.",
+      "llm_synthesized": "",
+      "live_elapsed_s": 43.94,
+      "live_error": null,
+      "exec_acc": false,
+      "has_hallucination": false,
+      "unsupported_numbers": [],
+      "verifier_verdict": "skip",
+      "verifier_unsupported": [],
+      "gate_outcome": "fallback",
+      "gate_caught": true,
+      "gate_blocked_synthesis": "The SQL query against the unified record table returns **0** distinct records linked to the townland normalised as \"DO WORKHOUSE\" (sql_id 529).\n\n**Discrepancy:** The knowledge graph holds a value of 13,707 for this metric, against 0 in the SQL database. The likely reason is a schema mismatch or incomplete data loading into the relational layer — the graph figure cannot be treated as authoritative here, but the gap is substantial enough to flag as a data-integrity issue rather than a genuine zero.\n\n**What is known:** The entity \"DO WORKHOUSE\" was matched by fuzzy normalisation, which introduces",
+      "gate_violations": [
+        "1",
+        "13707",
+        "2",
+        "3",
+        "4",
+        "529"
+      ],
+      "llm_synthesized_attempt": true,
+      "query_strategy": "semantic_layer_llm",
+      "refused": false
+    },
+    {
+      "id": "fbl_04_children_emigrated",
+      "catalogue_code": "A",
+      "category": "fallback",
+      "is_out_of_scope": false,
+      "question": "How many children under the age of 18 emigrated from the Coolattin estate?",
+      "oracle_sql": "SELECT COUNT(DISTINCT record_id) AS n FROM unified_record WHERE has_emigration_record=1 AND age IS NOT NULL AND age < 18",
+      "oracle_value": 2610,
+      "oracle_sql_ok": true,
+      "live_status": "ok",
+      "live_sql": "SELECT COUNT(DISTINCT record_id) AS emigrated_children_under_18\nFROM unified_record\nWHERE has_emigration_record = 1\n  AND age < 18\n  AND townland_norm = 'COOLATTIN'",
+      "live_rows": [
+        {
+          "emigrated_children_under_18": 95
+        }
+      ],
+      "live_answer": "I found 95 emigrated children under 18 for Coolattin.",
+      "llm_synthesized": "",
+      "live_elapsed_s": 41.55,
+      "live_error": null,
+      "exec_acc": false,
+      "has_hallucination": false,
+      "unsupported_numbers": [],
+      "verifier_verdict": "skip",
+      "verifier_unsupported": [],
+      "gate_outcome": "fallback",
+      "gate_caught": true,
+      "gate_blocked_synthesis": "**95 children under the age of 18 are recorded as having emigrated from the Coolattin estate**, based on 95 distinct records in the unified_record table where emigration is confirmed and age is under 18 (townland: COOLATTIN, sql_id 994).\n\n**Discrepancy to note:** The graph database returns a figure of 6,016 for the same metric against 95 in the SQL database. This is almost certainly a schema mismatch or incomplete data loading in GraphDB rather than a genuine difference in the underlying records — the SQL count of 95 is the authoritative figure here.\n\n**Next steps:**\n1. **View the 95 source re",
+      "gate_violations": [
+        "2",
+        "3",
+        "4",
+        "6016",
+        "994"
+      ],
+      "llm_synthesized_attempt": true,
+      "query_strategy": "fallback_llm_sql",
+      "refused": false
+    },
+    {
+      "id": "fbl_06_widows_emigrated",
+      "catalogue_code": "A",
+      "category": "fallback",
+      "is_out_of_scope": false,
+      "question": "How many widows emigrated from the Coolattin estate?",
+      "oracle_sql": "SELECT COUNT(DISTINCT record_id) AS n FROM unified_record WHERE is_widow=1 AND has_emigration_record=1",
+      "oracle_value": 15,
+      "oracle_sql_ok": true,
+      "live_status": "ok",
+      "live_sql": "SELECT COUNT(DISTINCT record_id) AS widows_emigrated\nFROM unified_record\nWHERE is_widow = 1\n  AND has_emigration_record = 1\n  AND townland_norm = 'COOLATTIN'",
+      "live_rows": [
+        {
+          "widows_emigrated": 1
+        }
+      ],
+      "live_answer": "I found 1 widows emigrated for Coolattin.",
+      "llm_synthesized": "",
+      "live_elapsed_s": 35.45,
+      "live_error": null,
+      "exec_acc": false,
+      "has_hallucination": false,
+      "unsupported_numbers": [],
+      "verifier_verdict": "skip",
+      "verifier_unsupported": [],
+      "gate_outcome": "fallback",
+      "gate_caught": true,
+      "gate_blocked_synthesis": "**1 widow** with an emigration record is found in the Coolattin estate records (sql_id 994), drawn from 1 matching record in the unified_record table.\n\n**Discrepancy to note:** The knowledge graph returns a figure of 6,016 against the SQL value of 1. This is almost certainly a schema mismatch or incomplete data loading in GraphDB — the graph value should not be treated as a count of widows from Coolattin specifically. The SQL result is the authoritative figure here.\n\n**Caveats:** The SQL query relies on two flags (`is_widow = 1` and `has_emigration_record = 1`) applied to the normalised townla",
+      "gate_violations": [
+        "2",
+        "3",
+        "4",
+        "6016",
+        "994"
+      ],
+      "llm_synthesized_attempt": true,
+      "query_strategy": "fallback_llm_sql",
+      "refused": false
+    },
+    {
+      "id": "fbl_07_er_candidate_count",
+      "catalogue_code": "I",
+      "category": "fallback",
+      "is_out_of_scope": false,
+      "question": "How many entity resolution candidates were generated when matching workhouse records to estate tenants?",
+      "oracle_sql": "SELECT COUNT(*) AS n FROM entity_resolution_candidates",
+      "oracle_value": 22928,
+      "oracle_sql_ok": true,
+      "live_status": "ok",
+      "live_sql": "SELECT 'I could not produce a validated SQL query that safely answers this question. Please rephrase it with a clearer townland, surname, year, ship, record type, or measure.' AS message",
+      "live_rows": [
+        {
+          "message": "I could not produce a validated SQL query that safely answers this question. Please rephrase it with a clearer townland, surname, year, ship, record type, or measure."
+        }
+      ],
+      "live_answer": "I could not produce a validated SQL query that safely answers this question. Please rephrase it with a clearer townland, surname, year, ship, record type, or measure.",
+      "llm_synthesized": "",
+      "live_elapsed_s": 41.5,
+      "live_error": null,
+      "exec_acc": false,
+      "has_hallucination": false,
+      "unsupported_numbers": [],
+      "verifier_verdict": "skip",
+      "verifier_unsupported": [],
+      "gate_outcome": "fallback",
+      "gate_caught": true,
+      "gate_blocked_synthesis": "The records held in this system cannot answer this question as posed — no validated query could be constructed to count entity resolution candidates from workhouse-to-estate matching, and no supporting rows were returned.\n\n**What is known:** The entity label \"DO WORKHOUSE\" was matched to sql_id 529 via a fuzzy match only (no confirmed kg_uri), so even the townland anchor is uncertain. Graph context holds nothing additional.\n\n**Why the query failed:** The question asks about an analytical process (entity resolution candidate generation) rather than a record attribute — this system stores estate",
+      "gate_violations": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "529"
+      ],
+      "llm_synthesized_attempt": true,
+      "query_strategy": "validated_sql_unavailable",
+      "refused": false
+    }
+  ]
+}

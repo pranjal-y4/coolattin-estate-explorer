@@ -105,6 +105,7 @@
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <h2 style="margin:0;font-size:18px;color:#0f172a;">Result</h2>
           <span id="askRetrievalLane"></span>
+          <span id="askConfidenceBadge"></span>
         </div>
         <a id="askPdfLink" class="btn btn-ghost" href="#" target="_blank" rel="noopener" style="display:none;font-size:12px;">
           ↓ Download PDF
@@ -261,7 +262,11 @@
 
           <!-- Query Provenance -->
           <div>
-            <div class="ask-section-label">Query Provenance</div>
+            <div class="ask-section-label" style="display:flex;align-items:center;gap:8px;">
+              Query Provenance
+              <span id="askGateBadge" style="display:none;"></span>
+              <span id="askVerifierBadge" style="display:none;"></span>
+            </div>
             <div id="askProvenance" style="display:grid;gap:5px;font-size:12px;color:#475467;"></div>
           </div>
 

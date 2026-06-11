@@ -1,0 +1,36 @@
+gold_id,wh_raw_name,wh_place_ed,wh_year,wh_age,wh_birth_year,u_record_id,u_canonical_name,u_townland,u_year,u_age,u_birth_year,gold_label,confidence,labelling_rationale
+G01,Bryan John,Killinure,1859,16,1843,CL13529,John Bryan,Killinure,1847,6,1841,TRUE_MATCH,HIGH,Same forename+surname+townland; birth-year gap 2; independent person appearing in estate record (1847 age 6) and workhouse (1859 age 16 — same individual 12 years later)
+G02,Healy Peter,Killinure,1859,23,1836,CL11980,Peter Healy,Killinure,1848,15,1833,TRUE_MATCH,HIGH,Same forename+surname+townland; birth-year gap 3; plausible same person in both records
+G03,Healy Peter,Killinure,1859,23,1836,CL8968,Peter Healy,Killinure,1853,12,1841,TRUE_MATCH,MEDIUM,Same forename+surname+townland; birth-year gap 5 (within tolerance); possibly same person
+G04,Kinsella Patrick,Carnew,1865,30,1835,CL1528,Pat Kinsela,Carnew,1868,40,1828,TRUE_MATCH,MEDIUM,Same forename (Patrick=Pat); phonetic surname match (KINSLA); same townland; birth-year gap 7; occupation match
+G05,Neal Mary,Kilpipe,1851,25,1826,CL11915,Mary Neal,Kilpipe,1848,16,1832,TRUE_MATCH,MEDIUM,Same forename+surname+townland; birth-year gap 6; timeline close
+G06,Summers Simon,Coolattin,1857,51,1806,CL10502,Simon Summers,Coolattin,1851,37,1814,TRUE_MATCH,MEDIUM,Same forename+surname+townland; birth-year gap 8 (marginal); rare surname in area
+G07,Hickey Thomas,Carnew,1849,6,1843,CL2294,Thomas Hickey,Carnew,1847,,,"TRUE_MATCH",HIGH,Same forename+surname+townland; same-era timeline; age-6 child in 1849 / estate record 1847
+G08,Hickey Thomas,Carnew,1851,11,1840,CL2547,Thomas Hickey,Carnew,1848,,,"TRUE_MATCH",MEDIUM,Same forename+surname+townland; timeline close; different age record — possible same Thomas Hickey
+G09,Armstrong David,Carnew,1855,70,1785,CL4828,David Armstrong,Carnew,1859,,,"POSSIBLE",MEDIUM,Same forename+surname+townland; no birth year on unified side; older man
+G10,Kenny David,Carnew,1857,12,1845,CL2289,David Kenny,Carnew,1847,,,"POSSIBLE",MEDIUM,Same forename+surname+townland; child in both records; timeline broadly compatible
+G11,Byrne Michael,Coolattin,1856,60,1796,CL2014,Michael Byrne,Coolattin,1845,,,"POSSIBLE",MEDIUM,Same forename+surname+townland; same era; no age on unified side
+G12,Doyle Elizabeth,Kilballyowen,1850,44,1806,CL9778,Elizabeth Doyle,Kilballyowen,1848,25,1823,TRUE_MATCH,MEDIUM,Same forename+surname+townland; timeline strongly aligned; birth-year gap 17 (outside tolerance — marginal)
+G13,Byrne John,Coolattin,1853,25,1828,CL9317,John Byrne,Coolattin,1850,11,1839,UNCERTAIN,LOW,Same forename+surname+townland; birth-year gap 11; could be same person or different John Byrne
+G14,Byrne John,Coolattin,1853,25,1828,CL11320,John Byrne,Coolattin,1849,11,1838,UNCERTAIN,LOW,Same forename+surname+townland; birth-year gap 10; same issue as G13
+G15,Collins John,Carnew Kilcavan,1858,40,1818,CL8945,John Collins,Kilcavan,1850,27,1823,TRUE_MATCH,MEDIUM,Same forename+surname; ED "Carnew Kilcavan" contains townland "Kilcavan"; birth-year gap 5
+G16,Broughan James,Killinure,1849,4,1845,CL13531,James Bryan,Killinure,1847,3,1844,FALSE_MATCH,HIGH,Different surnames (Broughan ≠ Bryan); name similarity score inflated by fuzzy match; birth-year close but wrong person
+G17,Healy Peter,Killinure,1859,23,1836,CL8966,Mary-Anne Healy,Killinure,1853,16,1837,FALSE_MATCH,HIGH,Different forename and gender (Peter male; Mary-Anne female); same Healy family from Killinure; name similarity 57% only from shared surname
+G18,Healy Peter,Killinure,1859,23,1836,CL8965,Mick Healy,Killinure,1853,19,1834,FALSE_MATCH,HIGH,Different forename (Peter ≠ Mick); same family; score inflated by shared surname + place + similar byr
+G19,Bryan John,Killinure,1859,16,1843,CL13531,James Bryan,Killinure,1847,3,1844,FALSE_MATCH,HIGH,Different forename (John ≠ James); siblings at Killinure; score inflated by surname+place+similar byr
+G20,Fleming Catherine,Killinure,1850,6,1844,CL7866,William Fleming,Killinure,1847,6,1841,FALSE_MATCH,HIGH,Different forename and gender (Catherine female; William male); same Fleming family; score inflated
+G21,Fleming Catherine,Killinure,1850,6,1844,CL7865,Eliza Fleming,Killinure,1847,8,1839,FALSE_MATCH,HIGH,Different forename (Catherine ≠ Eliza); same Fleming family; partial name match 65% from surname
+G22,Byrne Judith,Coolattin,1855,17,1838,CL9317,John Byrne,Coolattin,1850,11,1839,FALSE_MATCH,HIGH,Different forename and gender (Judith female; John male); same Byrne family; birth-year gap 1 but wrong individual
+G23,Byrne Judith,Coolattin,1855,17,1838,CL13688,Judy Byrne,Coolattin,1851,10,1841,UNCERTAIN,MEDIUM,Judith=Judy (same name variant); same place; birth-year gap 3; plausible same person but gender/age context unclear
+G24,Doyle Anna,Coolkenna,1854,17,1837,CL11487,Catherine Doyle,Coolkenna,1847,7,1840,FALSE_MATCH,HIGH,Different forename (Anna ≠ Catherine); partial name similarity 64% only; same family
+G25,Murphy Julia,Carnew,1856,36,1820,CL9401,Mary Murphy,Carnew,1849,26,1823,FALSE_MATCH,MEDIUM,Different forename (Julia ≠ Mary); partial similarity 70% from surname; birth-year gap 3 but wrong individual
+G26,Healy Peter,Killinure,1859,23,1836,CL13529,John Bryan,Killinure,1847,6,1841,FALSE_MATCH,HIGH,Different surname (Healy ≠ Bryan) and forename (Peter ≠ John); only connected by same townland
+G27,Doyle Elizabeth,Kilballyowen,1850,44,1806,CL9773,Ellen Doyle,Kilballyowen,1848,50,1798,FALSE_MATCH,MEDIUM,Different forename (Elizabeth ≠ Ellen); same place+surname; birth-year gap 8 within tolerance but forenames differ
+G28,Connors Matty,Carnew,1866,35,1831,CL467,Moses Connors,Carnew,1868,30,1838,FALSE_MATCH,MEDIUM,Different forename (Matty ≠ Moses); same surname+place; birth-year gap 7
+G29,Shea Mary,Aghold,1845,2,1843,CL1316,James Shea,Aghold,1868,23,1845,FALSE_MATCH,HIGH,Different forename+gender (Mary ≠ James); birth-year gap 2 — different people (2-year-old vs young adult)
+G30,Doyle Maryanne,Aghold,1863,30,1833,CL2266,Hugh Doyle,Aghold,1847,,,"FALSE_MATCH",HIGH,Different forename+gender (Maryanne female; Hugh male); coincidental surname+place match
+G31,Driver Robert,Aghold,,24,,CL2909,George Driver,Aghold,1849,,,"FALSE_MATCH",HIGH,Different forename (Robert ≠ George); same surname+place; no year/age on either side to confirm
+G32,Whelan Patrick,Aghold,,50,,CL479,Michael Whelan,Aghold,1868,,,"FALSE_MATCH",HIGH,Different forename (Patrick ≠ Michael); same surname+place; no birth year
+G33,Kenny John,Aghold,,28,,CL409,Peter Kenny,Aghold,1868,,,"FALSE_MATCH",HIGH,Different forename (John ≠ Peter); same surname+place; no date alignment possible
+G34,Coe Samuel,Aghold,,22,,CL50,Samuel Coe,Aghold,1868,,,"UNCERTAIN",MEDIUM,Same forename+surname+townland; no date on workhouse side; plausible same person (Samuel Coe at Aghold) but unverifiable without dates
+G35,Doyle Jane,Kilpipe,1855,25,1830,CL8610,Thomas Doyle,Kilpipe,1854,28,1826,FALSE_MATCH,HIGH,Different forename+gender (Jane female; Thomas male); birth-year gap 4 but wrong individual — same Doyle family

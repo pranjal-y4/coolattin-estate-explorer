@@ -347,15 +347,18 @@ def get_index() -> EmbeddingIndex:
     return _INDEX
 
 
-# ── Part B: Voyage-powered hybrid chunk retrieval ────────────────────────────
-# Separate from the template index above.  Retrieves over verbalised person /
-# place / community chunks built by voyage_embeddings.build_*_passport().
+# ── Part B: Ask-page chunk retrieval ─────────────────────────────────────────
+# Separate from the template index above.
 #
-# The sparse hard filter (required_keywords) is kept as a precision floor;
-# Voyage dense scores add recall for variant phrasings.
+# Dense retrieval prefers the persistent pgvector store when configured.
+# If pgvector/PostgreSQL is unavailable, the code falls back to the existing
+# in-memory Voyage cosine search.
+#
+# Sparse retrieval is explicit keyword-overlap scoring over chunk text. This is
+# intentionally described as keyword overlap, not TF-IDF.
 #
 # Chunk store: module-level list of {"id", "text", "embedding", "metadata"}.
-# Rebuilt by refresh_chunk_index() which is called on the ingest cadence.
+# The text/metadata corpus is shared by the pgvector and fallback dense paths.
 
 _chunk_lock = threading.Lock()
 _CHUNKS: list[dict[str, Any]] = []
@@ -363,99 +366,37 @@ _CHUNKS_BUILT_AT: float = 0.0
 _CHUNKS_TTL: float = 3600.0  # rebuild at most once per hour
 
 
-def refresh_chunk_index(force: bool = False) -> int:
-    """
-    Build or refresh the Voyage chunk index from the live database.
-    Returns the number of chunks indexed.
-    Called lazily on first retrieve_chunks() call and forced on ingest.
-    """
+def _ensure_chunk_corpus(force: bool = False) -> list[dict[str, Any]]:
     global _CHUNKS_BUILT_AT
 
     now = time.time()
     with _chunk_lock:
         if not force and _CHUNKS and (now - _CHUNKS_BUILT_AT) < _CHUNKS_TTL:
-            return len(_CHUNKS)
+            return list(_CHUNKS)
 
     try:
+        from backend.services.retrieval_chunks import build_retrieval_chunks
+
+        chunks = build_retrieval_chunks()
+        with _chunk_lock:
+            _CHUNKS.clear()
+            _CHUNKS.extend(chunks)
+            _CHUNKS_BUILT_AT = time.time()
+            return list(_CHUNKS)
+    except Exception as exc:
+        log.warning("embedding_index.chunk_corpus_failed error=%s", exc)
+        return []
+
+
+def refresh_chunk_index(force: bool = False) -> int:
+    """
+    Build or refresh the in-memory Voyage chunk index from the live database.
+    Returns the number of chunks indexed.
+    Called lazily on fallback retrieval and may also be forced in tests.
+    """
+    try:
         from backend.services.voyage_embeddings import embed_documents
-        from extensions import get_db_conn
-
-        chunks: list[dict[str, Any]] = []
-        conn = get_db_conn()
-        try:
-            # Place passports — one per townland
-            tl_rows = conn.execute(
-                """SELECT name, name_gaelic, civil_parish, barony, county,
-                          description, id
-                   FROM townland WHERE name IS NOT NULL LIMIT 500"""
-            ).fetchall()
-            for row in tl_rows:
-                stats_row = conn.execute(
-                    """SELECT SUM(cr.count) AS evictions,
-                              (SELECT total FROM census_record
-                               WHERE townland_id=? AND year=1851 LIMIT 1) AS pop_1851
-                       FROM clearances_record cr WHERE cr.townland_id=?""",
-                    (row["id"], row["id"]),
-                ).fetchone()
-                from backend.services.voyage_embeddings import build_place_passport
-                stats = {}
-                if stats_row:
-                    if stats_row["pop_1851"]:
-                        stats["population_1851"] = stats_row["pop_1851"]
-                    if stats_row["evictions"]:
-                        stats["total_evictions"] = stats_row["evictions"]
-                text = build_place_passport(
-                    name=row["name"],
-                    civil_parish=row["civil_parish"],
-                    barony=row["barony"],
-                    county=row["county"],
-                    description=row["description"],
-                    stats=stats,
-                )
-                chunks.append({
-                    "id": f"place:{row['name'].upper()}",
-                    "text": text,
-                    "metadata": {
-                        "type": "place",
-                        "name": row["name"],
-                        "civil_parish": row["civil_parish"],
-                    },
-                })
-
-            # Community summaries — one per civil_parish
-            parish_rows = conn.execute(
-                """SELECT t.civil_parish,
-                          COUNT(DISTINCT t.id) AS tl_count,
-                          SUM(cr.count) AS total_evictions,
-                          MIN(cr.year) AS min_year, MAX(cr.year) AS max_year
-                   FROM townland t
-                   LEFT JOIN clearances_record cr ON cr.townland_id = t.id
-                   WHERE t.civil_parish IS NOT NULL
-                   GROUP BY t.civil_parish"""
-            ).fetchall()
-            for pr in parish_rows:
-                emig_row = conn.execute(
-                    """SELECT COUNT(DISTINCT u.record_id) AS n
-                       FROM unified_record u
-                       WHERE u.has_emigration_record=1 AND u.parish=?""",
-                    (pr["civil_parish"],),
-                ).fetchone()
-                from backend.services.voyage_embeddings import build_community_summary
-                yr = (pr["min_year"], pr["max_year"]) if pr["min_year"] else None
-                text = build_community_summary(
-                    parish=pr["civil_parish"],
-                    townland_count=pr["tl_count"] or 0,
-                    total_emigrants=(emig_row["n"] if emig_row else 0),
-                    total_evictions=int(pr["total_evictions"] or 0),
-                    year_range=yr,
-                )
-                chunks.append({
-                    "id": f"community:{pr['civil_parish'].upper()}",
-                    "text": text,
-                    "metadata": {"type": "community", "civil_parish": pr["civil_parish"]},
-                })
-        finally:
-            conn.close()
+        chunks = _ensure_chunk_corpus(force=force)
 
         if not chunks:
             log.warning("embedding_index.chunk_refresh: no chunks built")
@@ -488,71 +429,154 @@ def refresh_chunk_index(force: bool = False) -> int:
         return 0
 
 
-def retrieve_chunks(
+def retrieve_chunks_with_meta(
     query: str,
     top_k: int = 8,
     required_keywords: list[str] | None = None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """
-    Hybrid chunk retrieval: Voyage dense + keyword sparse → RRF → top_k.
+    Hybrid chunk retrieval: pgvector/Voyage dense + keyword sparse → RRF → top_k.
 
     required_keywords: if provided, chunks must contain all keywords (sparse
     hard filter; exact match against lowercase chunk text).
-    Returns a list of chunk dicts with added "voyage_score" and "rrf_score".
+    Returns (chunks, meta).
     """
+    meta: dict[str, Any] = {
+        "pgvector_status": "skipped",
+        "pgvector_reason": "not_started",
+        "dense_backend": "pgvector",
+        "dense_status": "skipped",
+        "dense_reason": "not_started",
+        "dense_count": 0,
+        "sparse_backend": "keyword_overlap",
+        "sparse_status": "completed",
+        "sparse_count": 0,
+        "fusion_backend": "rrf",
+        "fusion_status": "completed",
+        "fused_count": 0,
+    }
+
+    corpus = _ensure_chunk_corpus()
+    if not corpus:
+        meta["dense_reason"] = "no_chunk_corpus"
+        meta["sparse_status"] = "skipped"
+        meta["fusion_status"] = "skipped"
+        return [], meta
+
+    dense_ranked: list[dict[str, Any]] = []
+    dense_meta: dict[str, Any] = {}
     try:
-        from backend.services.voyage_embeddings import embed_query, rrf_fuse, cosine_similarity
+        from backend.services.ask_pgvector import dense_retrieve as _dense_retrieve_pg
+
+        dense_ranked, dense_meta = _dense_retrieve_pg(query, top_k=max(top_k * 4, 24))
+        meta["pgvector_status"] = dense_meta.get("status", "skipped")
+        meta["pgvector_reason"] = dense_meta.get("reason")
+        if dense_meta.get("status") in ("completed", "completed_with_failures"):
+            dense_ranked = [
+                {**row, "voyage_score": row.get("similarity_score", 0.0)}
+                for row in dense_ranked
+            ]
+            meta["dense_backend"] = "pgvector"
+            meta["dense_status"] = dense_meta.get("status")
+            meta["dense_reason"] = dense_meta.get("reason")
+            meta["dense_count"] = len(dense_ranked)
+        else:
+            meta["dense_backend"] = "pgvector"
+            meta["dense_status"] = "skipped"
+            meta["dense_reason"] = dense_meta.get("reason")
     except Exception as exc:
-        log.debug("embedding_index.retrieve_chunks: voyage unavailable error=%s", exc)
-        return []
+        log.debug("embedding_index.retrieve_chunks pgvector_unavailable error=%s", exc)
+        meta["pgvector_status"] = "skipped"
+        meta["pgvector_reason"] = f"pgvector_exception:{exc}"
+        meta["dense_backend"] = "pgvector"
+        meta["dense_status"] = "skipped"
+        meta["dense_reason"] = f"pgvector_exception:{exc}"
 
-    # Lazy build
-    with _chunk_lock:
-        chunks = list(_CHUNKS)
-
-    if not chunks:
-        built = refresh_chunk_index()
-        if not built:
-            return []
-        with _chunk_lock:
-            chunks = list(_CHUNKS)
-
-    if not chunks:
-        return []
-
-    q_vec = embed_query(query)
-    if not q_vec:
-        return []
+    if not dense_ranked:
+        if meta.get("pgvector_status") != "completed":
+            log.info(
+                "embedding_index.retrieve_chunks pgvector_skipped reason=%s",
+                meta.get("pgvector_reason") or meta.get("dense_reason"),
+            )
+        try:
+            from backend.services.voyage_embeddings import (
+                cosine_similarity,
+                embed_query,
+            )
+        except Exception as exc:
+            log.debug("embedding_index.retrieve_chunks: voyage unavailable error=%s", exc)
+            meta["dense_backend"] = "voyage_in_memory"
+            meta["dense_status"] = "skipped"
+            meta["dense_reason"] = f"voyage_import_failed:{exc}"
+            meta["sparse_status"] = "completed"
+        else:
+            with _chunk_lock:
+                chunks = list(_CHUNKS)
+            if not any((chunk.get("embedding") or []) for chunk in chunks):
+                built = refresh_chunk_index()
+                if built:
+                    with _chunk_lock:
+                        chunks = list(_CHUNKS)
+            q_vec = embed_query(query)
+            if q_vec:
+                dense_scored: list[tuple[float, dict[str, Any]]] = []
+                for chunk in chunks:
+                    vec = chunk.get("embedding") or []
+                    if not vec:
+                        continue
+                    score = cosine_similarity(q_vec, vec)
+                    dense_scored.append((score, chunk))
+                dense_scored.sort(key=lambda x: x[0], reverse=True)
+                dense_ranked = [
+                    {"id": c["id"], **c, "voyage_score": s}
+                    for s, c in dense_scored[: max(top_k * 4, 24)]
+                ]
+                meta["dense_backend"] = "voyage_in_memory"
+                meta["dense_status"] = "fallback"
+                meta["dense_reason"] = meta.get("pgvector_reason") or "pgvector_unavailable"
+                meta["dense_count"] = len(dense_ranked)
+            else:
+                meta["dense_backend"] = "voyage_in_memory"
+                meta["dense_status"] = "skipped"
+                meta["dense_reason"] = "query_embedding_unavailable"
 
     q_lower = query.lower()
-
-    # Dense ranking
-    dense_scored: list[tuple[float, dict]] = []
-    for chunk in chunks:
-        vec = chunk.get("embedding") or []
-        if not vec:
-            continue
-        score = cosine_similarity(q_vec, vec)
-        dense_scored.append((score, chunk))
-    dense_scored.sort(key=lambda x: x[0], reverse=True)
-    dense_ranked = [
-        {"id": c["id"], **c, "voyage_score": s}
-        for s, c in dense_scored
-    ]
-
-    # Sparse ranking: keyword count over chunk text
-    sparse_scored: list[tuple[float, dict]] = []
-    for chunk in chunks:
-        text_lower = chunk["text"].lower()
+    sparse_scored: list[tuple[float, dict[str, Any]]] = []
+    for chunk in corpus:
+        text_lower = str(chunk.get("text") or "").lower()
         if required_keywords and not all(kw in text_lower for kw in required_keywords):
             continue
         kw_score = sum(1 for w in q_lower.split() if len(w) > 3 and w in text_lower)
         sparse_scored.append((float(kw_score), chunk))
     sparse_scored.sort(key=lambda x: x[0], reverse=True)
     sparse_ranked = [{"id": c["id"], **c, "kw_score": s} for s, c in sparse_scored]
+    meta["sparse_count"] = len(sparse_ranked)
 
     if not sparse_ranked and required_keywords:
-        return []
+        meta["fusion_status"] = "skipped"
+        return [], meta
+
+    try:
+        from backend.services.voyage_embeddings import rrf_fuse
+    except Exception as exc:
+        log.debug("embedding_index.retrieve_chunks: rrf unavailable error=%s", exc)
+        meta["fusion_status"] = "skipped"
+        meta["fusion_reason"] = f"rrf_import_failed:{exc}"
+        return dense_ranked[:top_k], meta
 
     fused = rrf_fuse(dense_ranked, sparse_ranked)
-    return fused[:top_k]
+    meta["fused_count"] = len(fused[:top_k])
+    return fused[:top_k], meta
+
+
+def retrieve_chunks(
+    query: str,
+    top_k: int = 8,
+    required_keywords: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    chunks, _ = retrieve_chunks_with_meta(
+        query=query,
+        top_k=top_k,
+        required_keywords=required_keywords,
+    )
+    return chunks

@@ -73,11 +73,22 @@ def _norm(s: object) -> str:
 
 
 def _parse_year(s: object) -> int | None:
-    """Extract a 4-digit 19th-century year from free-text date strings."""
+    """Extract a year from free-text date strings.
+
+    Handles both 4-digit years (e.g. '4 Novr 1842') and 2-digit years common in
+    the Shillelagh register (e.g. '25 February 42', '11 October 44').  Two-digit
+    values in the range 30–79 are assumed to be 1830–1879.
+    """
     if s is None or (isinstance(s, float) and pd.isna(s)):
         return None
-    m = re.search(r"\b(18[0-9]{2}|19[0-9]{2})\b", str(s))
-    return int(m.group(1)) if m else None
+    text = str(s)
+    m = re.search(r"\b(18[0-9]{2}|19[0-9]{2})\b", text)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"\b([3-7][0-9])\b", text)
+    if m:
+        return 1800 + int(m.group(1))
+    return None
 
 
 def _split_workhouse_name(name: str) -> tuple[str, str]:
@@ -163,6 +174,7 @@ def get_workhouse() -> list[dict]:
         forename, surname = _split_workhouse_name(str(raw_name))
         rows.append({
             "source_sheet": "1-127",
+            "source_record_id": f"1-127:{_safe_int(r.get('Number in Register')) or (len(rows) + 1)}",
             "raw_name": str(raw_name).strip(),
             "forename": forename.title() if forename else None,
             "surname": surname.title() if surname else None,
@@ -189,6 +201,7 @@ def get_workhouse() -> list[dict]:
         died_left = safe_str("Date when died or left workhouse")
         rows.append({
             "source_sheet": "from 128",
+            "source_record_id": f"from 128:{len(rows) + 1}",
             "raw_name": str(raw_name).strip(),
             "forename": forename.title() if forename else None,
             "surname": surname.title() if surname else None,
@@ -411,6 +424,17 @@ def get_match_index() -> dict[str, list[dict]]:
 
 def get_matches_for_record(record_id: str) -> dict:
     """Return workhouse matches for a given unified record_id."""
+    try:
+        from backend.services.workhouse_entity_resolution import (
+            get_matches_for_record as _persisted_matches_for_record,
+            has_persisted_links,
+        )
+
+        if has_persisted_links():
+            return _persisted_matches_for_record(record_id)
+    except Exception as exc:
+        log.debug("workhouse_service.persisted_links_unavailable error=%s", exc)
+
     idx = get_match_index()
     matches = idx.get(str(record_id), [])
     return {"record_id": record_id, "count": len(matches), "matches": matches}

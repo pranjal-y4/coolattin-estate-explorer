@@ -15,15 +15,18 @@
 | D2 — Revised Research Questions | **Partial** | RQs defined in tracking plan; not in dissertation |
 | D3 — Unified Dataset Audit | **Not done** | No formal audit table produced |
 | D4 — Geospatial Alignment Audit | **Not done** | Alignment code works; audit figures not collected |
-| D5 — Workhouse Linkage Prototype (place-first) | **Partial** | Name matching done; place-first filter NOT implemented |
-| D6 — Explainable Ask Improvements | **Mostly done** | SQL, route, provenance, coverage notes all wired up |
+| D5 — Workhouse Linkage Prototype (place-first) | **Done** | Full ER pipeline with phonetic blocking, fuzzy scoring, confidence bands, and persisted SQLite tables |
+| D6 — Explainable Ask Improvements | **Mostly done** | SQL, route, provenance, vector retrieval meta, identity disambiguation all wired up |
 | D7 — Graphical Insight Layer | **Mostly done** | Chart spec built and rendered for 7 template types |
-| D8 — RDF/KG Comparative Prototype | **Not done** | No Turtle file, no SPARQL generation path, no Fuseki |
-| D9 — Technical Evaluation Pack | **Not done** | Tests not formally run and recorded |
+| D8 — RDF/KG Comparative Prototype | **Partial** | GraphDB SPARQL integration done; co: ontology endpoint live; comparison UI exists; Turtle uplift script not committed |
+| D9 — Technical Evaluation Pack | **Partial** | `ask_eval.py` harness built; eval_results/ baselines captured (phase 0–5+) |
 | D10 — LLM Evaluation Pack | **Not done** | Tests not formally run and recorded |
 | D11 — User Evaluation Pack | **Not done** | No participants, no task sheet |
 | D12 — Final Dissertation Evidence Pack | **Not done** | Dissertation not written |
 | D13 — Demo Freeze Package | **Not done** | Git tag not created |
+| **NEW** — Orchestrated Ask Pipeline | **Done** | 7-phase pipeline (intent→retrieval→semantic→subgraph→LLM→identity→synthesis); enabled by default |
+| **NEW** — Identity Resolution | **Done** | Three-layer model (Mention/Person/Factoid); phonetic blocking; Jaro-Winkler + geo/temporal scoring |
+| **NEW** — Hybrid Embedding Retrieval | **Done** | TF-IDF + Cohere/local BGE dense; pgvector optional; fast-lane short-circuit |
 
 ---
 
@@ -113,50 +116,28 @@ Run these queries once and record the numbers. That is the entire audit.
 
 ## D5 — Workhouse Linkage Prototype
 
-**Status: Partial — name matching done; place-first approach not yet implemented**
+**Status: Done — full entity resolution pipeline implemented**
 
-### What is already implemented (`workhouse_service.py`):
-- Loads both Excel sheets ✓
-- Parses forename + surname from `Pauper Name` / `Names and Surnames of Paupers` ✓
-- Builds name variant index: `"forename surname"`, `"surname forename"`, `raw_name` ✓
-- For each unified record, looks up name variants → exact string match on normalised name ✓
-- Checks `electoral_division` vs `townland` and `parish` → sets `location_match=True/False` ✓
-- Sorts results: location-confirmed matches first ✓
+### What is implemented (June 2026)
 
-### What the tracking plan requires but is NOT yet implemented:
+The workhouse linkage is now a dedicated entity-resolution subsystem, separate from the Ask pipeline:
 
-**1. Place-first filtering (currently it is name-first + location bonus)**
+**Core modules:**
+- `backend/services/workhouse_entity_resolution.py` — main pipeline orchestrator
+- `backend/services/entity_resolution/normalise.py` — case/punctuation normalisation, initials expansion (`Jno→John`, `Wm→William`, `Jas→James`), Mc/Mac/O variants, phonetic encoding via `jellyfish.metaphone`
+- `backend/services/entity_resolution/candidates.py` — blocking strategy: exact normalised name, surname+initial, phonetic surname, place+name combos; returns up to 25 ranked candidates per mention
+- `backend/services/entity_resolution/scoring.py` — multi-signal scoring: name similarity (rapidfuzz token_sort_ratio), place match, date window, phonetic match → maps to `CONFIRMED_MATCH` / `POSSIBLE_MATCH` / `WEAK_CANDIDATE` / `NO_MATCH`
 
-Current flow:
-```
-build name index from workhouse
-→ for each estate person: look up name variants → all name matches returned
-→ score by location_match as a boolean bonus
-```
+**Approach:**
+- Place-first: candidates are filtered by matching `electoral_division` / `townland_norm` before name scoring
+- Date window: ±1 year around the estate record's event year
+- Confidence bands: High (CONFIRMED_MATCH ≥ 0.75) / Medium (POSSIBLE_MATCH 0.50–0.74) / Low (WEAK_CANDIDATE < 0.50)
+- Persisted results: stored in `source_mentions`, `entity_resolution_candidates`, `workhouse_unified_links`, `entity_resolution_decisions` SQLite tables
+- `match_review_repository.py` provides CRUD for human review of borderline candidates
 
-Required flow:
-```
-for each estate person: 
-  filter workhouse rows to same electoral_division/townland first
-  → then apply name matching only within that filtered subset
-```
-
-The difference matters: place-first dramatically reduces the candidate pool before names are compared, cutting false positives. Currently a person named "Mary Murphy" would match ALL workhouse Mary Murphys across the whole register, with location as a secondary sort only.
-
-**2. Date-range filtering (not implemented at all)**
-
-The workhouse records have `admitted_or_born` and `died_or_left` date fields. The tracking plan requires a ±1 year window around the estate event year. This is currently completely absent from `workhouse_service.py`.
-
-**3. Confidence bands (not implemented)**
-
-The plan calls for High / Medium / Low / Rejected bands based on the combination of place match + date window match + name similarity score. Currently there are only two states: `location_match=True` and `location_match=False`. No numeric similarity score is computed — the name lookup is an exact dict key match, not a scored fuzzy match.
-
-**Work needed for D5:**
-- Add date-range filtering: parse `admitted_or_born` / `died_or_left` into year integers, filter to ±1 year of the estate record's `year`
-- Change match strategy: filter by place+date first, then name match within subset
-- Add a similarity score to name matches (use `difflib.SequenceMatcher` or `rapidfuzz` already in the project)
-- Map score + place + date combo to High/Medium/Low confidence bands
-- Return confidence band in the match payload so the UI can display it
+**What is not yet done:**
+- UI for reviewing persisted match candidates (the tables exist but no review page is wired up)
+- Batch run triggered from the UI (currently callable via script/API endpoint only)
 
 ---
 
@@ -211,30 +192,22 @@ The plan calls for High / Medium / Low / Rejected bands based on the combination
 
 ## D8 — RDF/KG Comparative Prototype
 
-**Status: Not done**
+**Status: Partial — GraphDB integration done; Turtle uplift script and formal comparison table outstanding**
 
-Nothing for this exists in the codebase. Required:
-1. A Python script that reads a sample of `unified_record` rows (5–10 townlands) and outputs a Turtle (`.ttl`) file
-2. A local triplestore to query (Apache Jena Fuseki, or alternatively `rdflib` in-process which needs no JAR)
-3. SPARQL query equivalents for 5 selected competency questions (Q7, Q8, Q9, Q14, Q15)
-4. A comparison table: SQL query vs SPARQL query vs result vs latency
+### What is implemented (June 2026)
 
-This is the most important outstanding coding deliverable for the dissertation's CS contribution. The `rdflib` approach (pure Python, no Fuseki JAR needed) is the lowest-friction path:
+- `backend/integrations/graphdb_sparql.py` — full SPARQL client for a local GraphDB instance running the `co:` (Coolattin ontology) repository at `http://localhost:7200/repositories/coolattin` (also deployed at `http://51.120.71.162:7200/repositories/coolattin`)
+- `GRAPHDB_ENABLED`, `GRAPHDB_SPARQL_ENDPOINT`, `GRAPHDB_REQUEST_TIMEOUT` env vars wired into `config.py`
+- The Ask pipeline queries GraphDB in parallel with SQLite when `GRAPHDB_ENABLED=true`; results are merged and discrepancies between SQLite and GraphDB are surfaced in the SSE payload (`fusion`, `discrepancies` fields)
+- `semantic_layer.py::compile_sparql()` generates equivalent SPARQL for any slot-fill that has a KG mapping — this is the side-by-side SQL-vs-SPARQL comparison mechanism
 
-```python
-# Minimal approach — no Fuseki, uses rdflib in-process
-import rdflib
-g = rdflib.Graph()
-g.parse("coolattin_sample.ttl")
-results = g.query("""
-    SELECT ?townland (COUNT(?person) AS ?count)
-    WHERE { ?person coolattin:hasTownland ?townland ;
-                   coolattin:hasEmigrationRecord true . }
-    GROUP BY ?townland
-""")
-```
+### What is still outstanding
 
-`rdflib` is likely already installable (`pip install rdflib`). Fuseki requires downloading a JAR but gives a real SPARQL endpoint for a more credible comparison.
+1. **Turtle uplift script** — a script that reads `unified_record` rows and writes a `.ttl` file into the `co:` ontology; the GraphDB instance needs to be populated by hand currently
+2. **Formal comparison table** — the 5-question SQL-vs-SPARQL comparison table for the dissertation appendix (queries exist; table not written up)
+3. **`rdflib` in-process fallback** — a pure-Python path for offline/exam demos without a running GraphDB instance
+
+The comparison framework is architecturally complete; what is missing is a documented run of the 5 competency questions with side-by-side results written up as a dissertation table.
 
 ---
 
@@ -268,26 +241,18 @@ Screenshots and a recorded demo video as backup need to be made once the demo pa
 
 ## What Actually Needs Coding Work
 
-Only three deliverables require new code to be written. Everything else is either data collection, analysis, or dissertation writing.
+After the June 2026 updates, the remaining coding items are smaller:
 
-### 1. D5 — Workhouse place-first + date-range + confidence bands
-**File:** `backend/services/workhouse_service.py`  
-**Change:** In `get_match_index()`, add:
-- Parse `admitted_or_born` / `died_or_left` to extract year
-- For each estate record, pre-filter workhouse rows by `electoral_division` matches `townland_norm`
-- Apply date window (±1 year of `unified_record.year`)
-- Score name match with `rapidfuzz.fuzz.token_sort_ratio` (already in the codebase)
-- Map (place_match × date_match × name_score) → `confidence_band` ∈ {High, Medium, Low}
-- Add `confidence_band` and `name_similarity_score` to the match payload
+### 1. D8 — Turtle uplift script + formal comparison table
+**New file:** `scripts/rdf_uplift.py` — reads `unified_record` rows, writes `data/seed/coolattin_sample.ttl` in the `co:` ontology  
+**New file:** `scripts/sparql_comparison_table.py` — runs the 5 competency questions as SQL and SPARQL, records latency, outputs a comparison table  
+The GraphDB client and comparison framework already exist (`graphdb_sparql.py`, `semantic_layer.compile_sparql()`).
 
-### 2. D8 — RDF/KG Comparative Prototype
-**New file:** `scripts/rdf_comparison.py` (or `backend/jobs/rdf_uplift.py`)  
-**New file:** `data/seed/coolattin_sample.ttl` (generated by the uplift script)  
-**New file:** `scripts/sparql_comparison_queries.py` (runs SPARQL and SQL side-by-side)
+### 2. D5 — Workhouse review UI (minor)
+The entity resolution pipeline and tables are fully implemented. What is missing is a web page for reviewing `entity_resolution_candidates` and confirming / rejecting links through the UI. This is low-priority (the data is there for the dissertation without a review UI).
 
-### 3. D6 (minor gap) — Explicit source table list in Ask UI
-**File:** `backend/services/ask_service.py`  
-**Change:** In `answer_question_stream()`, after SQL execution, extract the table names from the SQL string and include them in the result payload as `source_tables: ["unified_record", "census_record"]`.
+### 3. D6 (minor) — Explicit source table list in Ask UI
+The `source_tables` field (e.g. `["unified_record", "census_record"]`) is not yet surfaced visibly in the UI answer block.
 
 ---
 
@@ -297,9 +262,11 @@ Only three deliverables require new code to be written. Everything else is eithe
 |---|---|
 | D3 — Dataset audit | Run SQL queries against the existing DB, put numbers in a table |
 | D4 — Geospatial alignment audit | Run 4 SQL queries against `townland` table, read `reconciliation_gaps.csv` |
-| D6 (mostly) | SQL display, route, provenance, coverage notes all already work |
+| D5 (mostly) | Pipeline implemented; just needs batch run + write-up |
+| D6 (mostly) | SQL display, route, provenance, vector retrieval meta, identity disambiguation all work |
 | D7 (mostly) | Chart layer is live for 7 templates; just needs screenshots taken |
-| D9 — Technical evaluation | Browse the Ask page, record results in a spreadsheet |
+| D8 (comparison) | GraphDB integration done; need to run the 5 Qs and record the table |
+| D9 — Technical evaluation | Use `ask_eval.py` harness or browse Ask page; record results |
 | D10 — LLM evaluation | Run questions, inspect SSE log, record results |
 | D11 — User evaluation | Recruit participants, run tasks, record observations |
 | D12, D13 | Writing, git tag, screenshots |
@@ -308,15 +275,15 @@ Only three deliverables require new code to be written. Everything else is eithe
 
 ## Priority Order for Remaining Work
 
-Given demo on 13 July 2026:
+Given submission on 3 August 2026:
 
 | Priority | Item | Effort | Dissertation impact |
 |---|---|---|---|
-| 1 | D8 — RDF/KG prototype | 2–3 days coding | Highest — directly answers RQ6 and Declan's ask |
-| 2 | D5 — Workhouse place-first + confidence bands | 1 day coding | High — directly answers RQ3 |
-| 3 | D3, D4 — Data and alignment audits | 2 hours (SQL + write-up) | Medium — feeds methods chapter |
-| 4 | D9 — Technical evaluation (15 Qs) | 2 hours running + recording | High — needed for evaluation chapter |
-| 5 | D6 (minor) — Source table list in UI | 1 hour coding | Low — small improvement |
-| 6 | D10 — LLM evaluation | 2 hours | Medium |
-| 7 | D11 — User evaluation | 1 day with participants | Medium |
-| 8 | D7 screenshots | 30 mins | Low effort, needed for appendix |
+| 1 | D8 — Turtle uplift + comparison table | 1 day coding + write-up | Highest — directly answers RQ6 |
+| 2 | D3, D4 — Data and alignment audits | 2 hours (SQL + write-up) | Medium — feeds methods chapter |
+| 3 | D9 — Technical evaluation (15 Qs via ask_eval.py) | 2 hours | High — needed for evaluation chapter |
+| 4 | D10 — LLM evaluation | 2 hours | Medium |
+| 5 | D11 — User evaluation | 1 day with participants | Medium |
+| 6 | D7 screenshots | 30 mins | Low effort, needed for appendix |
+| 7 | D5 review UI | Half day | Low — data is already there |
+| 8 | D12, D13 — Evidence pack + git tag | 1 hour | Required to close out |

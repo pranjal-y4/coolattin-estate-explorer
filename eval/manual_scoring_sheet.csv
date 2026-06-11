@@ -1,0 +1,84 @@
+id,catalogue_code,category,question,gold_answer,expected_route,correctness,faithfulness,rater_1_notes,rater_2_notes,kappa_subset
+emi_01_total,A,emigration,How many people emigrated from the Coolattin estate?,6016,template,,,,,Y
+emi_02_townland_ballynultagh,A,emigration,How many people emigrated from Ballynultagh?,400,template,,,,,
+emi_03_townland_killinure,A,emigration,How many people emigrated from Killinure?,294,template,,,,,
+emi_04_per_year_trend,A-trend,emigration,Show emigration broken down by year,time-series peak 1847=2211,template,,,,,
+emi_05_canada_total,A-trend,emigration,How many people emigrated to Canada?,peak 1848=787,verified_analysis,,,,,Y
+emi_06_canada_ship,A,emigration,Which ship carried the most Coolattin families to Canada?,Glenlyon,verified_analysis,,,,,
+emi_07_ships_list,A,emigration,List the ships used for emigration from the estate,27 distinct ships,template,,,,,
+emi_08_in_1848,A,emigration,How many people emigrated in 1848?,1290,template,,,,,
+evic_01_total,A,eviction,How many evictions were recorded in total?,7763,template,,,,,
+evic_02_worst_year,A,eviction,Which year had the most evictions?,1847,template,,,,,Y
+evic_03_townland_ballinacor,A,eviction,How many evictions happened in Ballinacor?,122,template,,,,,Y
+evic_04_per_year,A-trend,eviction,Show evictions per year,time-series 1847–1856,template,,,,,
+evic_05_people_list,P,eviction,List the people who were evicted,list of 4108 unique records,template,,,,,
+evic_06_in_1849,A,eviction,How many evictions happened in 1849?,1016,template,,,,,
+cen_01_estate_1841,A,census,What was the total population of the estate in 1841?,119300,template,,,,,
+cen_02_estate_1851,A,census,What was the estate population in 1851?,91860,template,,,,,
+cen_03_ballinacor_1841,A,census,What was the population of Ballinacor in 1841?,55,template,,,,,
+cen_04_famine_decline,A-trend,census,How did the population decline from 1841 to 1851?,−27440 (−23.0%),template,,,,,
+cen_05_trend_1841_1861,A-trend,census,What was the population trend from 1841 to 1861?,time-series 1841–1861,verified_analysis,,,,,
+cen_06_uninhabited,A,census,How many uninhabited houses were recorded?,varies by year,template,,,,,
+cen_07_all_years,A-trend,census,Show the estate population across all census years,time-series 1827–1891,template,,,,,
+cen_08_by_parish,A,census,Show population breakdown by parish,per-parish list (22 parishes),template,,,,,
+geo_01_total_townlands,A,geography,How many townlands are there in the estate?,4225,template,,,,,
+geo_02_parish_count,A,geography,How many civil parishes are there?,22,template,,,,,
+geo_03_parish_list,A,geography,List all civil parishes in the estate,22 parish names,template,,,,,
+geo_04_ballinacor_parish,R,geography,Which parish is Ballinacor in?,Kilbride (SQLite) / Ballinacor (KG),template,,,,,
+geo_05_baronies,A,geography,What baronies are in the estate?,11 baronies incl. Shillelagh,template,,,,,
+geo_06_nearby_coolattin,R,geography,Show me townlands near Coolattin,same-parish/spatial proximity,template,,,,,Y
+geo_07_by_county,A,geography,How many townlands are in each county?,per-county breakdown,template,,,,,
+ppl_01_total_records,A,people,How many people are in the records?,13707,template,,,,,
+ppl_02_byrne_records,P,people,How many records mention the surname Byrne?,1290,template,,,,,
+ppl_03_murphy_list,P,people,List all people named Murphy in the estate records,list of 290 records,template,,,,,
+ppl_04_widows_count,A,people,How many widows are recorded in the estate records?,811,verified_analysis,,,,,
+ppl_05_widows_children,A,people,What proportion of widows had recorded children?,28.7% (233/811),verified_analysis,,,,,
+ppl_06_heads_of_household,P,people,List all heads of household in the estate,list,template,,,,,
+ppl_07_ballynultagh_people,P,people,List all people recorded in Ballynultagh,list,template,,,,,
+ppl_08_in_1847,A,people,How many people were recorded in 1847?,2211,template,,,,,Y
+ten_01_total,A,tenancy,How many tenants are recorded?,5247,template,,,,,
+ten_02_gender_avg,C,tenancy,What is the average landholding for male versus female tenants?,M=39.49ac F=34.98ac,verified_analysis,,,,,Y
+ten_03_coolattin_tenants,P,tenancy,List tenants from Coolattin,list,template,,,,,Y
+ten_04_largest_holdings,A,tenancy,Which tenants had the largest landholdings in their latest recorded year?,top-20 ranked list,verified_analysis,,,,,
+ten_05_smallest_plots,A,tenancy,Which townlands have the smallest tenant plots?,per-townland ranked,verified_analysis,,,,,
+ten_06_per_townland,A,tenancy,How many tenants are recorded per townland?,per-townland count,template,,,,,Y
+her_01_holy_well_population,H,heritage,Are townlands with holy wells more populous than those without?,descriptive group comparison,verified_analysis,,,,,
+her_02_ring_fort_population,H,heritage,Are townlands with ring forts more populous than those without?,descriptive group comparison,verified_analysis,,,,,
+her_03_holy_well_count,H,heritage,How many holy wells are recorded in the estate?,68,verified_analysis,,,,,
+her_04_ring_fort_count,H,heritage,How many ring forts are there in the estate?,298,verified_analysis,,,,,
+her_05_holy_well_townlands,H,heritage,Which townlands have holy wells?,65 townlands,verified_analysis,,,,,Y
+ov_01_famine_impact,R,overview,What was the impact of the Great Famine on the estate?,multi-source narrative,template,,,,,
+ov_02_estate_summary,R,overview,Give me an overview of the estate statistics,13707 records summary,template,,,,,
+ov_03_emi_and_evic,A,overview,How many people were both evicted and emigrated?,0,template,,,,,
+ov_04_emi_vs_population,C,overview,Compare emigration numbers with census population over time,time-series comparison,template,,,,,
+ov_05_records_per_year,A-trend,overview,How many records are there per year?,time-series,template,,,,,
+er_01_exact_ballinacor,I,entity,Show me the census data for Ballinacor,townland id=355 resolved,template,,,,,Y
+er_02_spelling_variant,I,entity,How many people emigrated from Ballinacour?,resolves to BALLINACOR,template,,,,,
+er_03_spelling_ballynultach,I,entity,Emigration from Ballynultach,resolves to BALLYNULTAGH,template,,,,,
+er_04_coolattin_kg_uri,I,entity,Who were the tenants of Coolattin?,COOLATTIN + kg_uri,template,,,,,
+er_05_surname_byrne_exact,I,entity,List all Byrne family members,1290,template,,,,,
+er_06_surname_fuzzy,I,entity,Records for the Kavanah family,resolves to KAVANAGH,template,,,,,
+rel_01_ballinacor_barony,R,relational,Which barony does Ballinacor belong to?,Arklow (SQLite),template,,,,,
+rel_02_ballynultagh_county,R,relational,What county and barony does Ballynultagh fall within?,Wicklow / Shillelagh,template,,,,,Y
+rel_03_ballinacor_parish_siblings,R,relational,What other townlands are in the same parish as Ballinacor?,Kilbride parish siblings,template,,,,,
+rel_04_estate_overview,R,relational,Tell me about the Coolattin estate and its history,narrative,template,,,,,
+rel_05_historical_monuments,H,heritage,Tell me about the historical monuments in Ballinacor,heritage features,template,,,,,
+cmp_01_emigration_vs_kg,X,comparative,Compare the emigration count from Ballynultagh in the estate records versus the knowledge graph,SQLite=400,template,,,,,Y
+cmp_02_population_vs_kg,X,comparative,How does the 1841 population of Ballinacor in the estate records compare to the VRTI knowledge graph?,SQLite=55,template,,,,,
+cmp_03_eviction_agree,X,comparative,Compare the eviction total for Ballinacor from the estate records versus the knowledge graph,SQLite=122,template,,,,,
+fbl_01_rent,G,fallback,What was the average rent paid by tenants on the Coolattin estate?,N/A — no template,llm,,,,,
+fbl_02_crops,G,fallback,What crops were typically grown in the Coolattin area during the 1840s?,N/A — not in DB,llm,,,,,Y
+fbl_03_fitzwilliam,G,fallback,What was the Fitzwilliam family's approach to managing the Coolattin estate?,N/A — not in DB,llm,,,,,
+gen_01_mortality,G,general,How many people died of Famine-related causes on the Coolattin estate?,N/A — not in DB,llm,,,,,
+gen_02_religion,G,general,What religion were the Coolattin tenants?,N/A — not in DB,llm,,,,,
+gen_03_other_estates,G,general,How did eviction rates at Coolattin compare to other Irish estates?,N/A — not in DB,llm,,,,,
+gen_04_weather,G,general,What was the weather like in County Wicklow during the 1840s?,N/A — not in DB,llm,,,,,
+gen_05_politics,G,general,Were any Coolattin tenants involved in political movements during the 1840s?,N/A — not in DB,llm,,,,,Y
+er_wh_01_linked_count,I,entity,How many workhouse records have been linked to estate records?,139,llm,,,,,Y
+er_wh_02_confirmed_matches,I,entity,How many workhouse-to-estate links are confirmed matches?,3,llm,,,,,
+er_wh_03_review_needed,I,entity,How many workhouse-to-estate record links require human review?,136,llm,,,,,
+er_wh_04_mentions_count,I,entity,How many individual name mentions were extracted from workhouse records for entity resolution?,8214,llm,,,,,
+fbl_04_children_emigrated,A,fallback,How many children under the age of 18 emigrated from the Coolattin estate?,2610,llm,,,,,
+fbl_05_avg_rent_owed,A,fallback,What was the average rent owed by Coolattin tenants?,38.07,llm,,,,,
+fbl_06_widows_emigrated,A,fallback,How many widows emigrated from the Coolattin estate?,15,llm,,,,,Y
+fbl_07_er_candidate_count,I,fallback,How many entity resolution candidates were generated when matching workhouse records to estate tenants?,22928,llm,,,,,

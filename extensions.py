@@ -134,6 +134,103 @@ CREATE TABLE IF NOT EXISTS field_provenance (
     created_at       TEXT DEFAULT (datetime('now')),
     UNIQUE(entity_id, field_name)
 );
+
+-- Persisted source mentions for workhouse-to-unified-record entity resolution.
+CREATE TABLE IF NOT EXISTS source_mentions (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_table        TEXT NOT NULL,
+    source_record_id    TEXT NOT NULL UNIQUE,
+    raw_name            TEXT,
+    normalised_name     TEXT,
+    forename            TEXT,
+    surname             TEXT,
+    phonetic_forename   TEXT,
+    phonetic_surname    TEXT,
+    raw_place           TEXT,
+    normalised_place    TEXT,
+    canonical_townland_id INTEGER REFERENCES townland(id),
+    event_year          INTEGER,
+    age                 INTEGER,
+    inferred_birth_year INTEGER,
+    occupation          TEXT,
+    household_fields    TEXT,
+    source_payload_json TEXT,
+    created_at          TEXT DEFAULT (datetime('now')),
+    updated_at          TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS entity_resolution_candidates (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    mention_id            INTEGER NOT NULL REFERENCES source_mentions(id) ON DELETE CASCADE,
+    candidate_source_table TEXT NOT NULL DEFAULT 'unified_record',
+    candidate_record_id   TEXT NOT NULL,
+    candidate_name        TEXT,
+    candidate_place       TEXT,
+    candidate_year        INTEGER,
+    score                 REAL NOT NULL,
+    label                 TEXT NOT NULL,
+    evidence_json         TEXT DEFAULT '[]',
+    conflicts_json        TEXT DEFAULT '[]',
+    missing_evidence_json TEXT DEFAULT '[]',
+    review_required       INTEGER DEFAULT 0,
+    created_at            TEXT DEFAULT (datetime('now')),
+    updated_at            TEXT DEFAULT (datetime('now')),
+    UNIQUE(mention_id, candidate_source_table, candidate_record_id)
+);
+
+CREATE TABLE IF NOT EXISTS workhouse_unified_links (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    mention_id              INTEGER NOT NULL REFERENCES source_mentions(id) ON DELETE CASCADE,
+    unified_record_id       TEXT NOT NULL,
+    score                   REAL NOT NULL,
+    label                   TEXT NOT NULL,
+    review_required         INTEGER DEFAULT 0,
+    supporting_evidence_json TEXT DEFAULT '[]',
+    conflicting_evidence_json TEXT DEFAULT '[]',
+    missing_evidence_json   TEXT DEFAULT '[]',
+    created_at              TEXT DEFAULT (datetime('now')),
+    updated_at              TEXT DEFAULT (datetime('now')),
+    UNIQUE(mention_id, unified_record_id)
+);
+
+CREATE TABLE IF NOT EXISTS entity_resolution_decisions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    candidate_id  INTEGER NOT NULL REFERENCES entity_resolution_candidates(id) ON DELETE CASCADE,
+    decision      TEXT NOT NULL,
+    reviewer_note TEXT,
+    decided_at    TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_mentions_source_record
+ON source_mentions(source_table, source_record_id);
+
+CREATE INDEX IF NOT EXISTS idx_resolution_candidates_mention
+ON entity_resolution_candidates(mention_id, label, review_required);
+
+CREATE INDEX IF NOT EXISTS idx_workhouse_links_record
+ON workhouse_unified_links(unified_record_id, label, review_required);
+
+-- In-process property graph (GraphRAG substrate — replaces Neo4j).
+-- Built by scripts/build_graph.py; loaded into NetworkX at startup.
+CREATE TABLE IF NOT EXISTS graph_nodes (
+    node_id     TEXT PRIMARY KEY,
+    label       TEXT NOT NULL,
+    name        TEXT,
+    props       TEXT,
+    community   TEXT,
+    embedding   BLOB
+);
+CREATE INDEX IF NOT EXISTS idx_gn_label ON graph_nodes(label);
+
+CREATE TABLE IF NOT EXISTS graph_edges (
+    src         TEXT NOT NULL REFERENCES graph_nodes(node_id),
+    dst         TEXT NOT NULL REFERENCES graph_nodes(node_id),
+    rel_type    TEXT NOT NULL,
+    props       TEXT,
+    PRIMARY KEY (src, dst, rel_type)
+);
+CREATE INDEX IF NOT EXISTS idx_ge_src ON graph_edges(src, rel_type);
+CREATE INDEX IF NOT EXISTS idx_ge_dst ON graph_edges(dst, rel_type);
 """
 
 

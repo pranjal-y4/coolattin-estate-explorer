@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Optional
 
 import requests
@@ -32,6 +33,12 @@ import requests
 from config import ActiveConfig
 
 log = logging.getLogger(__name__)
+
+_PROBE_CACHE_TTL_S = 10.0
+_probe_cache: dict[str, float | bool | None] = {
+    "checked_at": 0.0,
+    "status": None,
+}
 
 PREFIXES = """
 PREFIX co:     <https://coolattin.ie/ontology#>
@@ -153,15 +160,30 @@ def _size_endpoint() -> str:
     return base + "/size"
 
 
-def probe() -> bool:
+def _probe_timeout_seconds() -> int:
+    """Use a short timeout so an unhealthy GraphDB does not stall every Ask request."""
+    timeout = int(getattr(ActiveConfig, "GRAPHDB_REQUEST_TIMEOUT", 15) or 15)
+    return max(1, min(timeout, 5))
+
+
+def probe(*, force: bool = False) -> bool:
     """Return True if the GraphDB repository is reachable (uses /size REST endpoint)."""
+    global _probe_cache
     if not ActiveConfig.GRAPHDB_ENABLED:
         return False
+    now = time.monotonic()
+    cached = _probe_cache.get("status")
+    checked_at = float(_probe_cache.get("checked_at") or 0.0)
+    if not force and cached is not None and (now - checked_at) < _PROBE_CACHE_TTL_S:
+        return bool(cached)
     try:
-        resp = requests.get(_size_endpoint(), timeout=5)
+        resp = requests.get(_size_endpoint(), timeout=_probe_timeout_seconds())
         resp.raise_for_status()
+        _probe_cache = {"checked_at": now, "status": True}
         return True
-    except Exception:
+    except Exception as exc:
+        log.warning("graphdb_sparql.probe_failed | endpoint=%s error=%s", ActiveConfig.GRAPHDB_SPARQL_ENDPOINT, exc)
+        _probe_cache = {"checked_at": now, "status": False}
         return False
 
 
@@ -173,8 +195,10 @@ def triple_count() -> int:
     """
     if not ActiveConfig.GRAPHDB_ENABLED:
         return -1
+    if not probe():
+        return -1
     try:
-        resp = requests.get(_size_endpoint(), timeout=5)
+        resp = requests.get(_size_endpoint(), timeout=_probe_timeout_seconds())
         resp.raise_for_status()
         return int(resp.text.strip())
     except Exception as exc:

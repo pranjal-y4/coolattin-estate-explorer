@@ -40,7 +40,20 @@ Coolattin-app/
 │   │   ├── townlands.py    #   /api/townlands/*
 │   │   └── unified.py      #   /api/unified/*
 │   ├── services/           # Business logic (called by routes)
-│   │   ├── ask_service.py  #   NL→SQL pipeline + LLM rewrite + SSE streaming
+│   │   ├── ask_service.py  #   Orchestrated 7-phase Ask pipeline + SSE streaming
+│   │   ├── ask_eval.py     #   Evaluation harness (eval_results/ JSON baselines)
+│   │   ├── intent_router.py #  Intent classification: ANALYTICAL/RELATIONAL/COMPARATIVE/FALLBACK
+│   │   ├── semantic_layer.py #  Slot-fill compiler → deterministic SQL + SPARQL (no LLM)
+│   │   ├── subgraph_engine.py # KG traversal for relational/hierarchy/heritage questions
+│   │   ├── embedding_index.py # Hybrid TF-IDF + dense retrieval; fast-lane template/memory hits
+│   │   ├── identity_resolver.py # Three-layer identity model: Mention→Person→Factoid
+│   │   ├── voyage_embeddings.py # Cohere Embed v3 dense embeddings client
+│   │   ├── ask_pgvector.py #   Optional pgvector retrieval backend (requires Postgres DATABASE_URL)
+│   │   ├── local_embeddings.py # Local BAAI/bge-large-en-v1.5 SentenceTransformer embeddings
+│   │   ├── retrieval_chunks.py # Chunk builders for retrieval corpus (person/place/event)
+│   │   ├── entity_resolver.py  # Entity resolution utilities
+│   │   ├── workhouse_entity_resolution.py # Persisted workhouse→unified-record matching pipeline
+│   │   ├── entity_resolution/ #  Subpackage: normalise.py · candidates.py · scoring.py
 │   │   ├── census_service.py
 │   │   ├── export_service.py
 │   │   ├── map_service.py
@@ -49,9 +62,11 @@ Coolattin-app/
 │   │   ├── unified_service.py
 │   │   └── workhouse_service.py
 │   ├── repositories/       # All SQL queries (no raw SQL outside here)
+│   │   └── match_review_repository.py  # CRUD for entity resolution match review
 │   ├── models/             # Dataclass/typed-dict definitions
 │   ├── integrations/       # External API clients
-│   │   ├── vrti_sparql.py  #   VRTI SPARQL queries
+│   │   ├── vrti_sparql.py  #   VRTI SPARQL queries (expanded)
+│   │   ├── graphdb_sparql.py # Local GraphDB SPARQL client (co: ontology)
 │   │   └── townlands_reference.py
 │   └── jobs/               # One-shot ingest jobs (run manually or at startup)
 │       ├── full_ingest.py
@@ -113,21 +128,28 @@ The database (`coolattin.db`) is created and migrated automatically on first run
 
 ## LLM / Ask pipeline
 
-The Ask page (`/ask`) runs a multi-stage pipeline on every question:
+The Ask page (`/ask`) runs an orchestrated 7-phase pipeline (`ASK_USE_NEW_PIPELINE=true` by default):
 
-1. **Template matching** — 100+ SQL templates matched by keyword scoring; returns instantly without an LLM call.
-2. **Townland resolution** — exact match → fuzzy match → "did you mean?" suggestions.
-3. **LLM SQL generation** (if no template matched) — sends bounded context to OpenRouter or Ollama.
-4. **Read-only SQL guardrail** — blocks any write statement before execution.
-5. **LLM rewrite** — rephrases the raw DB answer into natural language.
-6. **VRTI enrichment** — parallel SPARQL call for parish/townland context.
-7. **PDF report** — written to `exports/ask/` and served via `/api/ask/pdf/<name>`.
+1. **Intent routing** (`intent_router.py`) — classifies questions as ANALYTICAL / RELATIONAL / COMPARATIVE / FALLBACK.
+2. **Hybrid retrieval / fast lane** (`embedding_index.py`) — TF-IDF + optional dense vector retrieval over templates, approved memory, and corpus chunks; high-confidence hits short-circuit remaining phases.
+3. **Semantic layer** (`semantic_layer.py`) — slot-fill compiler maps analytical questions to deterministic SQL + equivalent SPARQL without any LLM call.
+4. **Subgraph engine** (`subgraph_engine.py`) — KG traversal for relational/hierarchy/heritage questions via VRTI and local GraphDB.
+5. **LLM SQL generation** (fallback only) — invoked only when no earlier phase produced a valid query.
+6. **Identity resolution** (`identity_resolver.py`) — disambiguates repeated names using Jaro-Winkler + phonetic blocking + geographic/temporal scoring.
+7. **Multi-model synthesis** — aggregates SQL, KG results, and retrieved chunks; detects cross-source discrepancies; produces provenance-annotated answer.
 
-The LLM integration lives entirely in `backend/services/ask_service.py`. PDF generation is hand-written (no reportlab/fpdf dependency).
+SSE streaming: each phase yields `{type, stage, status, detail, duration_ms}` events. Do not buffer.
+PDF generation is hand-written (no reportlab/fpdf dependency), written to `exports/ask/`.
+
+**Workhouse entity resolution** is a separate subsystem from the Ask pipeline:
+- `workhouse_entity_resolution.py` orchestrates mention building → candidate generation → scoring → persistence
+- `entity_resolution/` subpackage handles normalise, candidates, scoring
+- Results stored in `source_mentions`, `entity_resolution_candidates`, `workhouse_unified_links`, `entity_resolution_decisions` tables
+- Does not use the LLM, pgvector, or the Ask pipeline
 
 ## Database schema
 
-Four tables, all created by `extensions.py::ensure_schema()`:
+All tables created/migrated by `extensions.py::ensure_schema()`:
 
 | Table | Purpose |
 |---|---|
@@ -135,6 +157,13 @@ Four tables, all created by `extensions.py::ensure_schema()`:
 | `census_record` | Population per townland × year (1841–1891 from KG, 1827–1868 from estate) |
 | `clearances_record` | Estate evictions per townland × year (1847–1856) |
 | `refresh_state` | Dataset freshness tracking |
+| `ask_query_memory` | Approved question→SQL pairs (thumbs-up feedback; reused by retrieval) |
+| `ask_query_feedback` | All feedback submissions (up + down) for review |
+| `match_review` | Human-review queue for entity resolution candidates |
+| `source_mentions` | One row per name occurrence in a source record (workhouse ER) |
+| `entity_resolution_candidates` | Scored candidate links: mention → unified_record (workhouse ER) |
+| `workhouse_unified_links` | Final accepted workhouse→estate record links |
+| `entity_resolution_decisions` | Human review decisions on candidates |
 
 ## Code conventions
 

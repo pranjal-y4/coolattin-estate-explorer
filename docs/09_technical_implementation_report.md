@@ -2,7 +2,7 @@
 
 **Project:** Masters Dissertation  
 **Application:** Coolattin Estate Records Explorer  
-**Version:** Current (as of May 2026)  
+**Version:** Current (as of June 2026)  
 **Author:** Pranjal  
 **Stack:** Python 3.12 · Flask · SQLite · GraphDB · SPARQL · LLM (OpenRouter / Ollama) · D3.js · Leaflet.js  
 
@@ -27,6 +27,7 @@
 15. [Feature: PDF Export](#15-feature-pdf-export)
 16. [Feature: Excel Export](#16-feature-excel-export)
 17. [Feature: Workhouse Matching](#17-feature-workhouse-matching)
+17b. [Feature: Workhouse Entity Resolution (June 2026)](#17b-feature-workhouse-entity-resolution)
 18. [Feature: Internationalisation (English / Irish)](#18-feature-internationalisation-english--irish)
 19. [API Reference](#19-api-reference)
 20. [Frontend Architecture](#20-frontend-architecture)
@@ -35,6 +36,7 @@
 23. [RDF / Knowledge Graph Uplift Script](#23-rdf--knowledge-graph-uplift-script)
 24. [Deployment & Operations](#24-deployment--operations)
 25. [Codebase Metrics](#25-codebase-metrics)
+26. [June 2026 Sprint — Orchestrated Pipeline and Identity Resolution](#26-june-2026-sprint)
 
 ---
 
@@ -61,9 +63,11 @@ The application makes these records accessible through multiple interfaces — d
 | Full-text search over 13,707 estate records | Unified Records Search (SQL + pandas) |
 | Spatial visualisation of records | Leaflet.js interactive map with GeoJSON |
 | Population trend analysis | Census explorer + analytics dashboard |
-| Natural-language Q&A | LLM pipeline (OpenRouter / Ollama) |
+| Natural-language Q&A | 7-phase orchestrated LLM pipeline (OpenRouter / Ollama / local BGE) |
 | Knowledge graph representation | GraphDB + D3.js force-directed graph |
-| SQL vs SPARQL comparison | Side-by-side comparison scenarios |
+| SQL vs SPARQL comparison | semantic_layer.py compiles both from same SlotFill; GraphDB integration live |
+| Workhouse record linkage | Dedicated ER pipeline with phonetic blocking, fuzzy scoring, confidence bands |
+| Person disambiguation | Three-layer identity model (Mention/Person/Factoid) in identity_resolver.py |
 | Reproducible academic artefact | SQLite, deterministic ingest, no-ORM |
 
 ---
@@ -1527,5 +1531,50 @@ The Coolattin Estate Records Explorer is a comprehensive full-stack web applicat
 
 ---
 
-*Report generated: May 2026*  
+---
+
+## 26. June 2026 Sprint — Orchestrated Pipeline and Identity Resolution
+
+This section records the significant additions made in the June 2026 development sprint (commits `661fcdf`, `3c3174d`, `4d18308`). See `docs/10_handoff_notes.md` for the full detailed handoff.
+
+### 26.1 Orchestrated 7-Phase Ask Pipeline
+
+The Ask pipeline was rewritten from a flat sequence into a routed, orchestrated architecture. `ASK_USE_NEW_PIPELINE=true` is the default as of 2 June 2026.
+
+| Phase | Module | What it does |
+|---|---|---|
+| 1 — Intent routing | `intent_router.py` | Classifies: ANALYTICAL / RELATIONAL / COMPARATIVE / FALLBACK |
+| 2 — Hybrid retrieval | `embedding_index.py` | TF-IDF + optional dense; RRF fusion; fast-lane short-circuit |
+| 3 — Semantic layer | `semantic_layer.py` | Slot-fill → deterministic SQL + SPARQL; no LLM on fast path |
+| 4 — Subgraph engine | `subgraph_engine.py` | KG traversal (VRTI + GraphDB) for relational questions |
+| 5 — LLM SQL gen | `ask_service.py` | Fallback only; annotated schema + few-shot examples |
+| 6 — Identity resolution | `identity_resolver.py` | Mention/Person/Factoid disambiguation; Jaro-Winkler + phonetic |
+| 7 — Synthesis | `ask_service.py` | Aggregate SQL + KG + chunks; discrepancy detection; provenance |
+
+### 26.2 Workhouse Entity Resolution
+
+A separate ER subsystem (not part of the Ask pipeline) for linking workhouse records to estate records:
+- `workhouse_entity_resolution.py` — pipeline orchestrator
+- `entity_resolution/` — normalise, candidates, scoring subpackage
+- New tables: `source_mentions`, `entity_resolution_candidates`, `workhouse_unified_links`, `entity_resolution_decisions`, `match_review`
+- Confidence bands: High (≥0.75) / Medium (0.50–0.74) / Low (<0.50)
+
+### 26.3 Embeddings and Retrieval
+
+- `voyage_embeddings.py` — Cohere Embed v3 client (`embed-english-v3.0`, 1024-dim); asymmetric input_type
+- `local_embeddings.py` — BAAI/bge-large-en-v1.5 local model (no API key; CPU)
+- `ask_pgvector.py` — optional pgvector backend when `DATABASE_URL` (Postgres) is set
+- `retrieval_chunks.py` — chunk builders for person/place/event retrieval corpus
+
+### 26.4 New Config Variables
+
+`ASK_USE_NEW_PIPELINE`, `EMBEDDING_PROVIDER`, `COHERE_API_KEY`, `DATABASE_URL`, `GRAPHDB_ENABLED`, `GRAPHDB_SPARQL_ENDPOINT`, `GRAPHDB_REQUEST_TIMEOUT`
+
+### 26.5 Evaluation Infrastructure
+
+`ask_eval.py` (2125 lines) provides a full evaluation harness. Baselines captured in `backend/services/eval_results/` (phases 0–5+, pre/post fix comparisons).
+
+---
+
+*Report generated: June 2026*  
 *Application version: as committed to main branch*

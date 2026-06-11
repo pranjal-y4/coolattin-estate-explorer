@@ -43,6 +43,8 @@ The system is intentionally minimal in its infrastructure footprint: one Python 
 │  unified_record (seeded by Ask pipeline on first query)                     │
 │  heritage_feature (seeded by Ask pipeline on first query)                  │
 │  ask_query_memory │ ask_query_feedback                                      │
+│  match_review │ source_mentions │ entity_resolution_candidates             │
+│  workhouse_unified_links │ entity_resolution_decisions                     │
 └──────────────────────────────────┬──────────────────────────────────────────┘
                                    │  SERVE (Flask app, gunicorn, port 5001)
                                    ▼
@@ -104,6 +106,7 @@ All tunable values live in `Config`, `DevelopmentConfig`, or `ProductionConfig`.
 | Config key | Class default | Env var override | Purpose |
 |---|---|---|---|
 | `DATABASE_PATH` | `./coolattin.db` | `DATABASE_PATH` | SQLite file location |
+| `DATABASE_URL` | — | `DATABASE_URL` | PostgreSQL URL; enables pgvector backend for Ask retrieval |
 | `VRTI_SPARQL_ENDPOINT` | `https://virtuoso.virtualtreasury.ie/sparql/` | — | VRTI endpoint |
 | `VRTI_REQUEST_TIMEOUT` | `30` s | `VRTI_REQUEST_TIMEOUT` | SPARQL call timeout |
 | `CENSUS_STALE_AFTER_DAYS` | `7` (dev) · `1` (prod) | — | Cache TTL for census data |
@@ -111,6 +114,10 @@ All tunable values live in `Config`, `DevelopmentConfig`, or `ProductionConfig`.
 | `STATIC_DATA_DIR` | `frontend/static/data/` | — | GeoJSON and CSV files |
 | `EXPORTS_DIR` | `exports/` | — | PDF and Excel output |
 | `LOG_LEVEL` | `INFO` | `LOG_LEVEL` | Logging verbosity |
+| `EMBEDDING_PROVIDER` | `local` | `EMBEDDING_PROVIDER` | `local` / `cohere` / `voyage` — dense embedding provider for Ask retrieval |
+| `GRAPHDB_ENABLED` | `true` | `GRAPHDB_ENABLED` | Query local GraphDB alongside SQLite and VRTI |
+| `GRAPHDB_SPARQL_ENDPOINT` | `http://localhost:7200/...` | `GRAPHDB_SPARQL_ENDPOINT` | GraphDB SPARQL endpoint |
+| `GRAPHDB_REQUEST_TIMEOUT` | `15` s | `GRAPHDB_REQUEST_TIMEOUT` | GraphDB query timeout |
 
 ---
 

@@ -79,6 +79,10 @@ class EvalCase:
     expected_lane: str | None = None           # "analytical"|"relational"|"comparative"|"fallback"
     expected_subgraph_facts: list[str] = field(default_factory=list)  # strings expected in linearized subgraph
     expected_comparative_sources: list[str] = field(default_factory=list)  # ["sqlite", "kg"]
+    # Catalogue classification for gold set  A|A-trend|R|C|H|I|G|X|P
+    catalogue_code: str | None = None
+    # True for G-series: questions genuinely outside the DB scope
+    is_out_of_scope: bool = False
 
 
 @dataclass
@@ -111,6 +115,7 @@ class CaseResult:
     entity_label_actual: str | None = None
     entity_sql_id_actual: int | None = None
     entity_kg_uri_actual: str | None = None
+    answer_facts_ok: bool | None = None        # expected_answer_facts found in SQL result rows
 
 
 @dataclass
@@ -120,10 +125,21 @@ class EvalResult:
     timestamp: str
 
 
-# ── Golden cases (59 existing + 14 new = 73 total) ────────────────────────────
+# ── Golden cases (70 existing + 5 new G-series = 75 total) ───────────────────
 # Ground-truth SQL uses the actual DB column `count` for clearances_record,
 # not the template alias `eviction_count` (handled by _clearances_count_column).
 # All aggregate values verified against coolattin.db on 2026-06-01.
+#
+# catalogue_code maps to the evaluation taxonomy used in gold_answers.csv:
+#   A        Pure analytical aggregate (count/sum, single table/join)
+#   A-trend  Time-series / per-year breakdown
+#   R        Relational / hierarchy / sensemaking
+#   C        Comparative (across groups within the DB)
+#   H        Heritage (monument, holy well, ring fort)
+#   I        Identity / entity resolution
+#   G        General / out-of-scope (should reach honest refusal / template_miss)
+#   X        Cross-source (SQLite vs VRTI KG agreement check)
+#   P        People / persons / surname queries
 
 GOLDEN_CASES: list[EvalCase] = [
 
@@ -136,6 +152,7 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_route="template",
         expected_template_id="emigration_total",
         expected_lane="analytical",
+        catalogue_code="A",
         # Phase 2: semantic layer alias = "emigration_count"
         ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS emigration_count FROM unified_record WHERE has_emigration_record=1",
         ground_truth_value=6016,
@@ -1147,6 +1164,8 @@ GOLDEN_CASES: list[EvalCase] = [
         # to mark this as intended fallback territory.
         expected_route="llm",
         expected_lane="fallback",
+        catalogue_code="G",
+        is_out_of_scope=True,
         ground_truth_sql=None,
         ground_truth_value=None,
         ground_truth_type=None,
@@ -1158,6 +1177,8 @@ GOLDEN_CASES: list[EvalCase] = [
         category="fallback",
         expected_route="llm",
         expected_lane="fallback",
+        catalogue_code="G",
+        is_out_of_scope=True,
         ground_truth_sql=None,
         ground_truth_value=None,
         ground_truth_type=None,
@@ -1169,11 +1190,902 @@ GOLDEN_CASES: list[EvalCase] = [
         category="fallback",
         expected_route="llm",
         expected_lane="fallback",
+        catalogue_code="G",
+        is_out_of_scope=True,
+        ground_truth_sql=None,
+        ground_truth_value=None,
+        ground_truth_type=None,
+    ),
+
+    # ── G-SERIES — Honest-refusal / out-of-scope (5 new) ──────────────────────
+    # These questions are genuinely outside the scope of the Coolattin DB
+    # (no mortality, religion, weather, cross-estate, or political records).
+    # The eval verifies they correctly reach template_miss rather than producing
+    # a plausible-sounding but unsupported deterministic answer.
+
+    EvalCase(
+        id="gen_01_mortality",
+        question="How many people died of Famine-related causes on the Coolattin estate?",
+        category="general",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="G",
+        is_out_of_scope=True,
+        ground_truth_sql=None,
+        ground_truth_value=None,
+        ground_truth_type=None,
+    ),
+
+    EvalCase(
+        id="gen_02_religion",
+        question="What religion were the Coolattin tenants?",
+        category="general",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="G",
+        is_out_of_scope=True,
+        ground_truth_sql=None,
+        ground_truth_value=None,
+        ground_truth_type=None,
+    ),
+
+    EvalCase(
+        id="gen_03_other_estates",
+        question="How did eviction rates at Coolattin compare to other Irish estates?",
+        category="general",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="G",
+        is_out_of_scope=True,
+        ground_truth_sql=None,
+        ground_truth_value=None,
+        ground_truth_type=None,
+    ),
+
+    EvalCase(
+        id="gen_04_weather",
+        question="What was the weather like in County Wicklow during the 1840s?",
+        category="general",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="G",
+        is_out_of_scope=True,
+        ground_truth_sql=None,
+        ground_truth_value=None,
+        ground_truth_type=None,
+    ),
+
+    EvalCase(
+        id="gen_05_politics",
+        question="Were any Coolattin tenants involved in political movements during the 1840s?",
+        category="general",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="G",
+        is_out_of_scope=True,
+        ground_truth_sql=None,
+        ground_truth_value=None,
+        ground_truth_type=None,
+    ),
+
+    # ── WORKHOUSE ENTITY-RESOLUTION COVERAGE (4 new — RQ3) ────────────────────
+    # These questions target workhouse_unified_links / source_mentions tables
+    # created by the workhouse ER subsystem.  No semantic-layer metric covers
+    # these tables, so all four must reach template_miss, confirming the fallback
+    # path is exercised and that ER data is queryable.
+    # Ground-truth verified against coolattin.db on 2026-06-10.
+
+    EvalCase(
+        id="er_wh_01_linked_count",
+        question="How many workhouse records have been linked to estate records?",
+        category="entity",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="I",
+        is_out_of_scope=False,
+        ground_truth_sql="SELECT COUNT(*) AS n FROM workhouse_unified_links",
+        ground_truth_value=139,
+        ground_truth_key="n",
+        ground_truth_type="scalar",
+        expected_answer_facts=["139"],
+    ),
+
+    EvalCase(
+        id="er_wh_02_confirmed_matches",
+        question="How many workhouse-to-estate links are confirmed matches?",
+        category="entity",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="I",
+        is_out_of_scope=False,
+        ground_truth_sql="SELECT COUNT(*) AS n FROM workhouse_unified_links WHERE label='CONFIRMED_MATCH'",
+        ground_truth_value=3,
+        ground_truth_key="n",
+        ground_truth_type="scalar",
+        expected_answer_facts=["3"],
+    ),
+
+    EvalCase(
+        id="er_wh_03_review_needed",
+        question="How many workhouse-to-estate record links require human review?",
+        category="entity",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="I",
+        is_out_of_scope=False,
+        ground_truth_sql="SELECT COUNT(*) AS n FROM workhouse_unified_links WHERE review_required=1",
+        ground_truth_value=136,
+        ground_truth_key="n",
+        ground_truth_type="scalar",
+        expected_answer_facts=["136"],
+    ),
+
+    EvalCase(
+        id="er_wh_04_mentions_count",
+        question="How many individual name mentions were extracted from workhouse records for entity resolution?",
+        category="entity",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="I",
+        is_out_of_scope=False,
+        ground_truth_sql="SELECT COUNT(*) AS n FROM source_mentions",
+        ground_truth_value=8214,
+        ground_truth_key="n",
+        ground_truth_type="scalar",
+        expected_answer_facts=["8214"],
+    ),
+
+    # ── IN-SCOPE FALLBACK (4 new — data exists, no semantic-layer metric) ────────
+    # These questions have data in the DB but no compiled template or metric.
+    # If the semantic layer routes them deterministically that is an over-routing
+    # bug; if they reach template_miss they confirm the fallback path.
+    # Ground-truth verified against coolattin.db on 2026-06-10.
+
+    EvalCase(
+        id="fbl_04_children_emigrated",
+        question="How many children under the age of 18 emigrated from the Coolattin estate?",
+        category="fallback",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="A",
+        is_out_of_scope=False,
+        ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS n FROM unified_record WHERE has_emigration_record=1 AND age IS NOT NULL AND age < 18",
+        ground_truth_value=2610,
+        ground_truth_key="n",
+        ground_truth_type="scalar",
+        expected_answer_facts=["2610"],
+    ),
+
+    EvalCase(
+        id="fbl_05_avg_rent_owed",
+        question="What was the average rent owed by Coolattin tenants?",
+        category="fallback",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="A",
+        is_out_of_scope=False,
+        ground_truth_sql="SELECT ROUND(AVG(rent_owed), 2) AS avg_rent FROM unified_record WHERE has_tenancy_record=1 AND rent_owed IS NOT NULL AND rent_owed > 0",
+        ground_truth_value=38.07,
+        ground_truth_key="avg_rent",
+        ground_truth_type="scalar",
+        expected_answer_facts=["38"],
+    ),
+
+    EvalCase(
+        id="fbl_06_widows_emigrated",
+        question="How many widows emigrated from the Coolattin estate?",
+        category="fallback",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="A",
+        is_out_of_scope=False,
+        ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS n FROM unified_record WHERE is_widow=1 AND has_emigration_record=1",
+        ground_truth_value=15,
+        ground_truth_key="n",
+        ground_truth_type="scalar",
+        expected_answer_facts=["15"],
+    ),
+
+    EvalCase(
+        id="fbl_07_er_candidate_count",
+        question="How many entity resolution candidates were generated when matching workhouse records to estate tenants?",
+        category="fallback",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="I",
+        is_out_of_scope=False,
+        ground_truth_sql="SELECT COUNT(*) AS n FROM entity_resolution_candidates",
+        ground_truth_value=22928,
+        ground_truth_key="n",
+        ground_truth_type="scalar",
+        expected_answer_facts=["22928"],
+    ),
+]
+
+
+# ── Catalogue code lookup (cases not annotated inline use this map) ───────────
+# Codes: A=analytical  A-trend=time-series  R=relational  C=comparative
+#        H=heritage  I=identity  G=general/out-of-scope  X=cross-source  P=people
+
+_CATALOGUE_CODE_MAP: dict[str, str] = {
+    # Emigration
+    "emi_01_total": "A",
+    "emi_02_townland_ballynultagh": "A",
+    "emi_03_townland_killinure": "A",
+    "emi_04_per_year_trend": "A-trend",
+    "emi_05_canada_total": "A-trend",
+    "emi_06_canada_ship": "A",
+    "emi_07_ships_list": "A",
+    "emi_08_in_1848": "A",
+    # Evictions
+    "evic_01_total": "A",
+    "evic_02_worst_year": "A",
+    "evic_03_townland_ballinacor": "A",
+    "evic_04_per_year": "A-trend",
+    "evic_05_people_list": "P",
+    "evic_06_in_1849": "A",
+    # Census
+    "cen_01_estate_1841": "A",
+    "cen_02_estate_1851": "A",
+    "cen_03_ballinacor_1841": "A",
+    "cen_04_famine_decline": "A-trend",
+    "cen_05_trend_1841_1861": "A-trend",
+    "cen_06_uninhabited": "A",
+    "cen_07_all_years": "A-trend",
+    "cen_08_by_parish": "A",
+    # Geography
+    "geo_01_total_townlands": "A",
+    "geo_02_parish_count": "A",
+    "geo_03_parish_list": "A",
+    "geo_04_ballinacor_parish": "R",
+    "geo_05_baronies": "A",
+    "geo_06_nearby_coolattin": "R",
+    "geo_07_by_county": "A",
+    # People
+    "ppl_01_total_records": "A",
+    "ppl_02_byrne_records": "P",
+    "ppl_03_murphy_list": "P",
+    "ppl_04_widows_count": "A",
+    "ppl_05_widows_children": "A",
+    "ppl_06_heads_of_household": "P",
+    "ppl_07_ballynultagh_people": "P",
+    "ppl_08_in_1847": "A",
+    # Tenancy
+    "ten_01_total": "A",
+    "ten_02_gender_avg": "C",
+    "ten_03_coolattin_tenants": "P",
+    "ten_04_largest_holdings": "A",
+    "ten_05_smallest_plots": "A",
+    "ten_06_per_townland": "A",
+    # Heritage
+    "her_01_holy_well_population": "H",
+    "her_02_ring_fort_population": "H",
+    "her_03_holy_well_count": "H",
+    "her_04_ring_fort_count": "H",
+    "her_05_holy_well_townlands": "H",
+    # Overview
+    "ov_01_famine_impact": "R",
+    "ov_02_estate_summary": "R",
+    "ov_03_emi_and_evic": "A",
+    "ov_04_emi_vs_population": "C",
+    "ov_05_records_per_year": "A-trend",
+    # Entity resolution
+    "er_01_exact_ballinacor": "I",
+    "er_02_spelling_variant": "I",
+    "er_03_spelling_ballynultach": "I",
+    "er_04_coolattin_kg_uri": "I",
+    "er_05_surname_byrne_exact": "I",
+    "er_06_surname_fuzzy": "I",
+    # Relational
+    "rel_01_ballinacor_barony": "R",
+    "rel_02_ballynultagh_county": "R",
+    "rel_03_ballinacor_parish_siblings": "R",
+    "rel_04_estate_overview": "R",
+    "rel_05_historical_monuments": "H",
+    # Cross-source
+    "cmp_01_emigration_vs_kg": "X",
+    "cmp_02_population_vs_kg": "X",
+    "cmp_03_eviction_agree": "X",
+    # G-series (also annotated inline)
+    "fbl_01_rent": "G",
+    "fbl_02_crops": "G",
+    "fbl_03_fitzwilliam": "G",
+    "gen_01_mortality": "G",
+    "gen_02_religion": "G",
+    "gen_03_other_estates": "G",
+    "gen_04_weather": "G",
+    "gen_05_politics": "G",
+    # Workhouse ER (RQ3)
+    "er_wh_01_linked_count": "I",
+    "er_wh_02_confirmed_matches": "I",
+    "er_wh_03_review_needed": "I",
+    "er_wh_04_mentions_count": "I",
+    # In-scope fallback (data exists, no semantic metric)
+    "fbl_04_children_emigrated": "A",
+    "fbl_05_avg_rent_owed": "A",
+    "fbl_06_widows_emigrated": "A",
+    "fbl_07_er_candidate_count": "I",
+}
+
+
+def _catalogue_code(case_id: str, case_code: str | None = None) -> str:
+    """Return the catalogue code for a case ID, falling back to the map."""
+    return case_code or _CATALOGUE_CODE_MAP.get(case_id, "?")
+
+
+# ── HELD-OUT EVALUATION SET (35 questions) ────────────────────────────────────
+# Authored without consulting routing keywords or template IDs.
+# Ground-truth values verified against coolattin.db on 2026-06-10.
+# Catalogue codes follow the same taxonomy as GOLDEN_CASES.
+# This set is never used for threshold/keyword tuning; it is the held-out split.
+
+HELDOUT_CASES: list[EvalCase] = [
+
+    # ── EMIGRATION (3) ────────────────────────────────────────────────────────
+
+    EvalCase(
+        id="hh_emi_01_carnew",
+        question="How many people emigrated from Carnew?",
+        category="emigration",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="A",
+        townland_hint="Carnew",
+        expected_entity_norm="CARNEW",
+        expected_sql_id=993,
+        expected_kg_uri_prefix="https://kg.virtualtreasury.ie",
+        ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS emigration_count FROM unified_record WHERE has_emigration_record=1 AND townland_norm='CARNEW'",
+        ground_truth_value=54,
+        ground_truth_key="emigration_count",
+        ground_truth_type="scalar",
+        expected_answer_facts=["54"],
+    ),
+
+    EvalCase(
+        id="hh_emi_02_1849",
+        question="How many people emigrated in 1849?",
+        category="emigration",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="A",
+        ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS emigration_count FROM unified_record WHERE has_emigration_record=1 AND year=1849",
+        ground_truth_value=633,
+        ground_truth_key="emigration_count",
+        ground_truth_type="scalar",
+        expected_answer_facts=["633"],
+    ),
+
+    EvalCase(
+        id="hh_emi_03_1847",
+        question="How many people emigrated in 1847?",
+        category="emigration",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="A",
+        ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS emigration_count FROM unified_record WHERE has_emigration_record=1 AND year=1847",
+        ground_truth_value=2211,
+        ground_truth_key="emigration_count",
+        ground_truth_type="scalar",
+        expected_answer_facts=["2211"],
+    ),
+
+    # ── EVICTION (3) ──────────────────────────────────────────────────────────
+
+    EvalCase(
+        id="hh_evic_01_1850",
+        question="How many evictions were recorded in 1850?",
+        category="eviction",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="A",
+        ground_truth_sql="SELECT SUM(count) AS total_evictions FROM clearances_record WHERE year=1850",
+        ground_truth_value=547,
+        ground_truth_key="total_evictions",
+        ground_truth_type="scalar",
+        expected_answer_facts=["547"],
+    ),
+
+    EvalCase(
+        id="hh_evic_02_1855",
+        question="How many evictions were there in 1855?",
+        category="eviction",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="A",
+        ground_truth_sql="SELECT SUM(count) AS total_evictions FROM clearances_record WHERE year=1855",
+        ground_truth_value=38,
+        ground_truth_key="total_evictions",
+        ground_truth_type="scalar",
+        expected_answer_facts=["38"],
+    ),
+
+    EvalCase(
+        id="hh_evic_03_tinahely",
+        question="How many evictions happened in Tinahely?",
+        category="eviction",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="A",
+        townland_hint="Tinahely",
+        expected_entity_norm="TINAHELY",
+        expected_sql_id=625,
+        expected_kg_uri_prefix="https://kg.virtualtreasury.ie",
+        ground_truth_sql="SELECT SUM(c.count) AS n FROM clearances_record c JOIN townland t ON c.townland_id=t.id WHERE UPPER(t.name)='TINAHELY'",
+        ground_truth_value=12,
+        ground_truth_key="n",
+        ground_truth_type=None,
+        expected_answer_facts=["Tinahely"],
+    ),
+
+    # ── CENSUS (4) ────────────────────────────────────────────────────────────
+
+    EvalCase(
+        id="hh_cen_01_tinahely_1841",
+        question="What was the population of Tinahely in 1841?",
+        category="census",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="A",
+        townland_hint="Tinahely",
+        expected_entity_norm="TINAHELY",
+        expected_sql_id=625,
+        expected_kg_uri_prefix="https://kg.virtualtreasury.ie",
+        ground_truth_sql="SELECT SUM(cr.total) AS population FROM census_record cr JOIN townland t ON cr.townland_id=t.id WHERE UPPER(t.name)='TINAHELY' AND cr.year=1841",
+        ground_truth_value=21,
+        ground_truth_key="population",
+        ground_truth_type="scalar",
+        expected_answer_facts=["21"],
+    ),
+
+    EvalCase(
+        id="hh_cen_02_carnew_1841",
+        question="What was the population of Carnew in 1841?",
+        category="census",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="A",
+        townland_hint="Carnew",
+        expected_entity_norm="CARNEW",
+        expected_sql_id=993,
+        expected_kg_uri_prefix="https://kg.virtualtreasury.ie",
+        ground_truth_sql="SELECT SUM(cr.total) AS population FROM census_record cr JOIN townland t ON cr.townland_id=t.id WHERE UPPER(t.name)='CARNEW' AND cr.year=1841",
+        ground_truth_value=456,
+        ground_truth_key="population",
+        ground_truth_type="scalar",
+        expected_answer_facts=["456"],
+    ),
+
+    EvalCase(
+        id="hh_cen_03_tinahely_1851",
+        question="What was the population of Tinahely in 1851?",
+        category="census",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="A",
+        townland_hint="Tinahely",
+        expected_entity_norm="TINAHELY",
+        expected_sql_id=625,
+        expected_kg_uri_prefix="https://kg.virtualtreasury.ie",
+        ground_truth_sql="SELECT SUM(cr.total) AS population FROM census_record cr JOIN townland t ON cr.townland_id=t.id WHERE UPPER(t.name)='TINAHELY' AND cr.year=1851",
+        ground_truth_value=13,
+        ground_truth_key="population",
+        ground_truth_type="scalar",
+        expected_answer_facts=["13"],
+    ),
+
+    EvalCase(
+        id="hh_cen_04_1871",
+        question="What was the total estate population in 1871?",
+        category="census",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="A",
+        ground_truth_sql="SELECT SUM(total) AS n FROM census_record WHERE year=1871",
+        ground_truth_value=153073,
+        ground_truth_key="n",
+        ground_truth_type=None,
+        expected_answer_facts=["1871"],
+    ),
+
+    # ── PEOPLE / SURNAMES (4) ─────────────────────────────────────────────────
+
+    EvalCase(
+        id="hh_ppl_01_doyle",
+        question="How many records mention the surname Doyle?",
+        category="people",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="P",
+        expected_surname="DOYLE",
+        ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS person_count FROM unified_record WHERE UPPER(surname)='DOYLE'",
+        ground_truth_value=487,
+        ground_truth_key="person_count",
+        ground_truth_type="scalar",
+        expected_answer_facts=["487", "Doyle"],
+    ),
+
+    EvalCase(
+        id="hh_ppl_02_kelly",
+        question="How many people with the surname Kelly are in the records?",
+        category="people",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="P",
+        expected_surname="KELLY",
+        ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS person_count FROM unified_record WHERE UPPER(surname)='KELLY'",
+        ground_truth_value=151,
+        ground_truth_key="person_count",
+        ground_truth_type="scalar",
+        expected_answer_facts=["151", "Kelly"],
+    ),
+
+    EvalCase(
+        id="hh_ppl_03_whelan",
+        question="How many Whelan family members are in the estate records?",
+        category="people",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="P",
+        expected_surname="WHELAN",
+        ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS person_count FROM unified_record WHERE UPPER(surname)='WHELAN'",
+        ground_truth_value=127,
+        ground_truth_key="person_count",
+        ground_truth_type="scalar",
+        expected_answer_facts=["127", "Whelan"],
+    ),
+
+    EvalCase(
+        id="hh_ppl_04_tinahely_list",
+        question="List all people recorded in Tinahely",
+        category="people",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="P",
+        townland_hint="Tinahely",
+        expected_entity_norm="TINAHELY",
+        ground_truth_sql=None,
+        ground_truth_value=None,
+        ground_truth_type=None,
+        expected_answer_facts=["Tinahely"],
+    ),
+
+    # ── TENANCY (4) ───────────────────────────────────────────────────────────
+
+    EvalCase(
+        id="hh_ten_01_tinahely",
+        question="How many tenants are recorded from Tinahely?",
+        category="tenancy",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="A",
+        townland_hint="Tinahely",
+        expected_entity_norm="TINAHELY",
+        ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS tenancy_count FROM unified_record WHERE has_tenancy_record=1 AND townland_norm='TINAHELY'",
+        ground_truth_value=176,
+        ground_truth_key="tenancy_count",
+        ground_truth_type="scalar",
+        expected_answer_facts=["176"],
+    ),
+
+    EvalCase(
+        id="hh_ten_02_carnew",
+        question="How many tenants are from Carnew?",
+        category="tenancy",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="A",
+        townland_hint="Carnew",
+        expected_entity_norm="CARNEW",
+        ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS tenancy_count FROM unified_record WHERE has_tenancy_record=1 AND townland_norm='CARNEW'",
+        ground_truth_value=256,
+        ground_truth_key="tenancy_count",
+        ground_truth_type="scalar",
+        expected_answer_facts=["256"],
+    ),
+
+    EvalCase(
+        id="hh_ten_03_female",
+        question="How many female tenants were recorded in the estate?",
+        category="tenancy",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="A",
+        is_out_of_scope=False,
+        ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS n FROM unified_record WHERE has_tenancy_record=1 AND LOWER(gender) IN ('f','female')",
+        ground_truth_value=284,
+        ground_truth_key="n",
+        ground_truth_type="scalar",
+        expected_answer_facts=["284"],
+    ),
+
+    EvalCase(
+        id="hh_ten_04_farmers",
+        question="How many tenants were recorded as farmers?",
+        category="tenancy",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="A",
+        is_out_of_scope=False,
+        ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS n FROM unified_record WHERE has_tenancy_record=1 AND occupation='Farmer'",
+        ground_truth_value=822,
+        ground_truth_key="n",
+        ground_truth_type="scalar",
+        expected_answer_facts=["822"],
+    ),
+
+    # ── GEOGRAPHY (3) ─────────────────────────────────────────────────────────
+
+    EvalCase(
+        id="hh_geo_01_shillelagh",
+        question="How many townlands are in the Shillelagh barony?",
+        category="geography",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="A",
+        is_out_of_scope=False,
+        ground_truth_sql="SELECT COUNT(*) AS n FROM townland WHERE barony='Shillelagh'",
+        ground_truth_value=36,
+        ground_truth_key="n",
+        ground_truth_type="scalar",
+        expected_answer_facts=["36"],
+    ),
+
+    EvalCase(
+        id="hh_geo_02_tinahely_barony",
+        question="Which barony does Tinahely belong to?",
+        category="geography",
+        expected_route="template",
+        expected_lane="relational",
+        catalogue_code="R",
+        townland_hint="Tinahely",
+        expected_entity_norm="TINAHELY",
+        expected_sql_id=625,
+        expected_kg_uri_prefix="https://kg.virtualtreasury.ie",
+        expected_subgraph_facts=["Ballinacor South"],
+        ground_truth_sql="SELECT barony FROM townland WHERE UPPER(name)='TINAHELY' LIMIT 1",
+        ground_truth_value="Ballinacor South",
+        ground_truth_key="barony",
+        ground_truth_type="scalar",
+        expected_answer_facts=["Ballinacor South"],
+    ),
+
+    EvalCase(
+        id="hh_geo_03_carnew_parish",
+        question="What civil parish is Carnew in?",
+        category="geography",
+        expected_route="template",
+        expected_lane="relational",
+        catalogue_code="R",
+        townland_hint="Carnew",
+        expected_entity_norm="CARNEW",
+        expected_sql_id=993,
+        expected_kg_uri_prefix="https://kg.virtualtreasury.ie",
+        expected_subgraph_facts=["Carnew"],
+        ground_truth_sql="SELECT civil_parish FROM townland WHERE UPPER(name)='CARNEW' LIMIT 1",
+        ground_truth_value="Carnew",
+        ground_truth_key="civil_parish",
+        ground_truth_type="scalar",
+        expected_answer_facts=["Carnew"],
+    ),
+
+    # ── HERITAGE (2) ──────────────────────────────────────────────────────────
+
+    EvalCase(
+        id="hh_her_01_ringfort_townlands",
+        question="How many distinct townlands contain ring forts?",
+        category="heritage",
+        expected_route="verified_analysis",
+        expected_lane="relational",
+        catalogue_code="H",
+        ground_truth_sql="SELECT COUNT(DISTINCT townland_norm) AS n FROM heritage_feature WHERE feature_group='ring_fort'",
+        ground_truth_value=213,
+        ground_truth_key="n",
+        ground_truth_type=None,
+        expected_answer_facts=["ring fort"],
+    ),
+
+    EvalCase(
+        id="hh_her_02_tinahely",
+        question="What heritage features are recorded in Tinahely?",
+        category="heritage",
+        expected_route="template",
+        expected_lane="relational",
+        catalogue_code="H",
+        townland_hint="Tinahely",
+        expected_entity_norm="TINAHELY",
+        expected_subgraph_facts=["Tinahely"],
+        ground_truth_sql=None,
+        ground_truth_value=None,
+        ground_truth_type=None,
+        expected_answer_facts=["Tinahely"],
+    ),
+
+    # ── ENTITY RESOLUTION (3) ─────────────────────────────────────────────────
+
+    EvalCase(
+        id="hh_er_01_tynehely",
+        question="How many people emigrated from Tynehely?",
+        category="entity",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="I",
+        townland_hint="Tynehely",
+        expected_entity_norm="TINAHELY",
+        expected_sql_id=625,
+        expected_kg_uri_prefix="https://kg.virtualtreasury.ie",
+        ground_truth_sql=None,
+        ground_truth_value=None,
+        ground_truth_type=None,
+    ),
+
+    EvalCase(
+        id="hh_er_02_carnew_census",
+        question="Show me the census data for Carnew",
+        category="entity",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="I",
+        townland_hint="Carnew",
+        expected_entity_norm="CARNEW",
+        expected_sql_id=993,
+        expected_kg_uri_prefix="https://kg.virtualtreasury.ie",
+        ground_truth_sql=None,
+        ground_truth_value=None,
+        ground_truth_type=None,
+    ),
+
+    EvalCase(
+        id="hh_er_03_whelan_surname",
+        question="List all Whelan family members",
+        category="entity",
+        expected_route="template",
+        expected_lane="analytical",
+        catalogue_code="I",
+        expected_surname="WHELAN",
+        ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS n FROM unified_record WHERE UPPER(surname)='WHELAN'",
+        ground_truth_value=127,
+        ground_truth_key="n",
+        ground_truth_type=None,
+    ),
+
+    # ── CROSS-SOURCE / COMPARATIVE (2) ────────────────────────────────────────
+
+    EvalCase(
+        id="hh_cmp_01_tinahely_1841",
+        question="Compare the 1841 population of Tinahely in the estate records versus the knowledge graph",
+        category="comparative",
+        expected_route="template",
+        expected_lane="comparative",
+        catalogue_code="X",
+        townland_hint="Tinahely",
+        expected_entity_norm="TINAHELY",
+        expected_comparative_sources=["sqlite", "kg"],
+        ground_truth_sql="SELECT SUM(cr.total) AS population FROM census_record cr JOIN townland t ON cr.townland_id=t.id WHERE UPPER(t.name)='TINAHELY' AND cr.year=1841",
+        ground_truth_value=21,
+        ground_truth_key="population",
+        ground_truth_type="scalar",
+        expected_answer_facts=["21"],
+    ),
+
+    EvalCase(
+        id="hh_cmp_02_carnew_emi",
+        question="Compare the emigration count from Carnew in the estate records versus the knowledge graph",
+        category="comparative",
+        expected_route="template",
+        expected_lane="comparative",
+        catalogue_code="X",
+        townland_hint="Carnew",
+        expected_entity_norm="CARNEW",
+        expected_comparative_sources=["sqlite", "kg"],
+        ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS emigration_count FROM unified_record WHERE has_emigration_record=1 AND townland_norm='CARNEW'",
+        ground_truth_value=54,
+        ground_truth_key="emigration_count",
+        ground_truth_type="scalar",
+        expected_answer_facts=["54"],
+    ),
+
+    # ── IN-SCOPE FALLBACK (2) — data exists, no semantic-layer metric ─────────
+
+    EvalCase(
+        id="hh_fbl_01_tenant_widows",
+        question="How many tenant records belong to widows?",
+        category="fallback",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="A",
+        is_out_of_scope=False,
+        ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS n FROM unified_record WHERE has_tenancy_record=1 AND is_widow=1",
+        ground_truth_value=489,
+        ground_truth_key="n",
+        ground_truth_type="scalar",
+        expected_answer_facts=["489"],
+    ),
+
+    EvalCase(
+        id="hh_fbl_02_scarawalsh_tenants",
+        question="How many tenants are recorded from the Scarawalsh barony?",
+        category="fallback",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="A",
+        is_out_of_scope=False,
+        ground_truth_sql="SELECT COUNT(DISTINCT ur.record_id) AS n FROM unified_record ur JOIN townland t ON ur.townland_norm=t.name WHERE ur.has_tenancy_record=1 AND t.barony='Scarawalsh'",
+        ground_truth_value=540,
+        ground_truth_key="n",
+        ground_truth_type="scalar",
+        expected_answer_facts=["540"],
+    ),
+
+    # ── G-SERIES — Honest-refusal (5) ─────────────────────────────────────────
+
+    EvalCase(
+        id="hh_gen_01_agent",
+        question="What was the name of the estate agent who managed Coolattin?",
+        category="general",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="G",
+        is_out_of_scope=True,
+        ground_truth_sql=None,
+        ground_truth_value=None,
+        ground_truth_type=None,
+    ),
+
+    EvalCase(
+        id="hh_gen_02_schools",
+        question="Were there any schools on the Coolattin estate?",
+        category="general",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="G",
+        is_out_of_scope=True,
+        ground_truth_sql=None,
+        ground_truth_value=None,
+        ground_truth_type=None,
+    ),
+
+    EvalCase(
+        id="hh_gen_03_language",
+        question="What language did the tenants on the Coolattin estate speak?",
+        category="general",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="G",
+        is_out_of_scope=True,
+        ground_truth_sql=None,
+        ground_truth_value=None,
+        ground_truth_type=None,
+    ),
+
+    EvalCase(
+        id="hh_gen_04_aftermath",
+        question="What happened to the Coolattin estate after the Famine?",
+        category="general",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="G",
+        is_out_of_scope=True,
+        ground_truth_sql=None,
+        ground_truth_value=None,
+        ground_truth_type=None,
+    ),
+
+    EvalCase(
+        id="hh_gen_05_compensation",
+        question="Were any Coolattin tenants compensated for their eviction?",
+        category="general",
+        expected_route="llm",
+        expected_lane="fallback",
+        catalogue_code="G",
+        is_out_of_scope=True,
         ground_truth_sql=None,
         ground_truth_value=None,
         ground_truth_type=None,
     ),
 ]
+
+# Combined lookup used by _compute_metrics for lane classification
+_ALL_KNOWN_CASES: list[EvalCase] = GOLDEN_CASES + HELDOUT_CASES
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -1275,6 +2187,25 @@ def _check_kg_uri(case: EvalCase, resolution: dict[str, Any]) -> bool | None:
         return False
     prefix = case.expected_kg_uri_prefix or "https://kg.virtualtreasury.ie"
     return str(actual_uri).startswith(prefix)
+
+
+def _check_answer_facts(
+    case: EvalCase,
+    result_rows: list[dict],
+) -> bool | None:
+    """
+    Check whether all expected_answer_facts appear in the SQL result rows
+    (serialized to lower-case string).  Returns None when there are no facts
+    to check, False when rows are empty, True when all facts are found.
+    """
+    if not case.expected_answer_facts:
+        return None
+    if not result_rows:
+        return False
+    result_str = " ".join(
+        str(v) for row in result_rows for v in row.values() if v is not None
+    ).lower()
+    return all(fact.lower() in result_str for fact in case.expected_answer_facts)
 
 
 def _check_lane(case: EvalCase, actual_lane: str | None) -> bool | None:
@@ -1536,6 +2467,7 @@ def _run_case(
 
         # 4. Ground-truth aggregation check against the template/verified SQL result
         agg_ok, agg_actual = _check_agg(case, result_cols, result_rows)
+        answer_facts_ok = _check_answer_facts(case, result_rows)
 
         # 5. Phase 5: intent router lane classification
         actual_lane: str | None = None
@@ -1620,15 +2552,20 @@ def _run_case(
         entity_label_actual=str(entity_label_actual) if entity_label_actual is not None else None,
         entity_sql_id_actual=int(entity_sql_id_actual) if entity_sql_id_actual is not None else None,
         entity_kg_uri_actual=str(entity_kg_uri_actual) if entity_kg_uri_actual is not None else None,
+        answer_facts_ok=answer_facts_ok,
     )
 
 
 # ── Eval runner ───────────────────────────────────────────────────────────────
 
-def run_eval(phase_label: str = "baseline") -> EvalResult:
+def run_eval(
+    phase_label: str = "baseline",
+    case_list: list[EvalCase] | None = None,
+) -> EvalResult:
     """
-    Run all golden cases through the deterministic pipeline.
+    Run cases through the deterministic pipeline.
     Must be called inside a Flask application context.
+    Defaults to GOLDEN_CASES; pass HELDOUT_CASES or a combined list as needed.
     """
     from datetime import datetime, timezone
 
@@ -1642,8 +2579,9 @@ def run_eval(phase_label: str = "baseline") -> EvalResult:
         _sanitize_and_validate_sql,
     )
 
+    cases_to_run = case_list if case_list is not None else GOLDEN_CASES
     results: list[CaseResult] = []
-    for case in GOLDEN_CASES:
+    for case in cases_to_run:
         result = _run_case(
             case=case,
             try_verified_analysis_fn=_try_verified_analysis,
@@ -1684,15 +2622,48 @@ def _compute_metrics(result: EvalResult) -> dict[str, Any]:
     latencies = sorted([c.latency_ms for c in cases])
     llm_required = sum(1 for c in cases if c.actual_route == "template_miss")
 
+    # ── p90 latency ───────────────────────────────────────────────────────────
+    p90_latency_ms = latencies[min(int(n * 0.90), n - 1)]
+
+    # ── Execution accuracy by route ───────────────────────────────────────────
+    exec_by_route: dict[str, float | None] = {}
+    for _route in ("template", "verified_analysis", "semantic_layer", "template_miss"):
+        _rc = [c for c in cases if c.actual_route == _route and c.sql_ok is not None]
+        _ok = [c for c in _rc if c.sql_ok]
+        exec_by_route[_route] = round(100 * len(_ok) / len(_rc), 1) if _rc else None
+
+    # ── Routing confusion matrix ──────────────────────────────────────────────
+    confusion: dict[str, dict[str, int]] = {}
+    for c in cases:
+        exp = c.expected_route
+        act = c.actual_route
+        confusion.setdefault(exp, {})
+        confusion[exp][act] = confusion[exp].get(act, 0) + 1
+
+    # ── Answer facts found rate (hallucination proxy for deterministic routes) ─
+    facts_tested = [c for c in cases if c.answer_facts_ok is not None]
+    facts_ok_list = [c for c in facts_tested if c.answer_facts_ok]
+    answer_facts_found_rate = (
+        round(100 * len(facts_ok_list) / len(facts_tested), 1) if facts_tested else None
+    )
+
+    # ── Honest-refusal rate: G-series questions reaching template_miss ─────────
+    g_cases = [c for c in cases if c.expected_route == "llm"]
+    g_refusals = [c for c in g_cases if c.actual_route == "template_miss"]
+    honest_refusal_rate = (
+        round(100 * len(g_refusals) / len(g_cases), 1) if g_cases else None
+    )
+
     # ── Per-lane metrics ──────────────────────────────────────────────────────
+    _lane_lookup: dict[str, str | None] = {
+        ec.id: ec.expected_lane for ec in _ALL_KNOWN_CASES
+    }
+
     def _lane_cases(lane: str) -> list[CaseResult]:
         return [c for c in cases if _case_expected_lane(c) == lane]
 
     def _case_expected_lane(c: CaseResult) -> str | None:
-        for case in GOLDEN_CASES:
-            if case.id == c.id:
-                return case.expected_lane
-        return None
+        return _lane_lookup.get(c.id)
 
     analytical = _lane_cases("analytical")
     analytical_agg_tested = [c for c in analytical if c.agg_ok is not None]
@@ -1738,6 +2709,16 @@ def _compute_metrics(result: EvalResult) -> dict[str, Any]:
         "comparative_kg_capture": round(100 * len(cmp_kg_ok) / len(cmp_kg_tested), 1) if cmp_kg_tested else None,
         "fallback_n": len(fallback),
         "fallback_routing_acc": round(100 * len(fallback_routing_ok) / len(fallback), 1) if fallback else None,
+        # New metrics
+        "p90_latency_ms": p90_latency_ms,
+        "answer_facts_found_rate": answer_facts_found_rate,
+        "honest_refusal_rate": honest_refusal_rate,
+        "routing_confusion_matrix": confusion,
+        "exec_acc_template": exec_by_route.get("template"),
+        "exec_acc_semantic": exec_by_route.get("semantic_layer"),
+        "exec_acc_verified": exec_by_route.get("verified_analysis"),
+        "exec_acc_llm_fallback": exec_by_route.get("template_miss"),
+        "g_series_n": len(g_cases),
     }
 
 
@@ -1966,7 +2947,15 @@ def print_metrics_table(
         ("LLM calls required",       "llm_calls_required",         False),
         ("Lane routing acc (%)",     "lane_routing_acc",           True),
         ("p50 latency (ms)",         "p50_latency_ms",             False),
+        ("p90 latency (ms)",         "p90_latency_ms",             False),
         ("p95 latency (ms)",         "p95_latency_ms",             False),
+        ("Answer facts found (%)",   "answer_facts_found_rate",    True),
+        ("Honest refusal rate (%)",  "honest_refusal_rate",        True),
+        ("G-series n",               "g_series_n",                 False),
+        ("── EXEC BY ROUTE ───────", None,                        False),
+        ("Exec acc — template (%)",  "exec_acc_template",          True),
+        ("Exec acc — semantic (%)",  "exec_acc_semantic",          True),
+        ("Exec acc — verified (%)",  "exec_acc_verified",          True),
         ("── PER-LANE ────────────", None,                        False),
         ("Analytical n",             "analytical_n",               False),
         ("Analytical agg acc (%)",   "analytical_agg_acc",         True),
@@ -2015,6 +3004,821 @@ def print_metrics_table(
     print(f"{'═' * (col_w + val_w * len(results))}")
 
 
+def print_confusion_matrix(result: EvalResult) -> None:
+    """Print a compact routing confusion matrix (expected vs actual route)."""
+    metrics = _compute_metrics(result)
+    confusion = metrics.get("routing_confusion_matrix", {})
+    if not confusion:
+        return
+
+    expected_routes = sorted(confusion.keys())
+    actual_routes = sorted({act for exp_dict in confusion.values() for act in exp_dict})
+
+    col_w = 16
+    hdr = f"{'Expected \\ Actual':<{col_w}}" + "".join(f"{a[:14]:>14}" for a in actual_routes)
+    W = len(hdr)
+    print(f"\n{'─' * W}")
+    print("  ROUTING CONFUSION MATRIX")
+    print(f"{'─' * W}")
+    print(hdr)
+    print(f"{'─' * W}")
+    for exp in expected_routes:
+        row = f"{exp:<{col_w}}"
+        for act in actual_routes:
+            count = confusion[exp].get(act, 0)
+            row += f"{count:>14}"
+        print(row)
+    print(f"{'─' * W}")
+
+
+def generate_markdown_report(result: EvalResult) -> str:
+    """Generate a markdown baseline report from eval results."""
+    from datetime import datetime, timezone
+    metrics = _compute_metrics(result)
+    case_map: dict[str, EvalCase] = {c.id: c for c in _ALL_KNOWN_CASES}
+    ts = result.timestamp[:19].replace("T", " ") + " UTC"
+    n = metrics.get("n", 0)
+
+    lines: list[str] = []
+    lines += [
+        f"# Ask Pipeline Eval — Baseline Post-Migration",
+        f"",
+        f"**Run label:** `{result.phase_label}`  ",
+        f"**Timestamp:** {ts}  ",
+        f"**Questions run:** {n}  ",
+        f"",
+        f"---",
+        f"",
+        f"## 1. Global Metrics",
+        f"",
+        f"| Metric | Value |",
+        f"|--------|-------|",
+        f"| Routing accuracy | {metrics.get('routing_accuracy', 'N/A')}% |",
+        f"| Entity label accuracy | {metrics.get('entity_resolution_acc', 'N/A')}% |",
+        f"| SQL-id resolution | {metrics.get('sql_id_resolution_rate', 'N/A')}% |",
+        f"| KG-URI resolution | {metrics.get('kg_uri_resolution_rate', 'N/A')}% |",
+        f"| SQL exec success | {metrics.get('sql_exec_success', 'N/A')}% |",
+        f"| Aggregation correctness | {metrics.get('aggregation_correctness', 'N/A')}% |",
+        f"| Answer facts found rate | {metrics.get('answer_facts_found_rate', 'N/A')}% |",
+        f"| Honest-refusal rate (G-series) | {metrics.get('honest_refusal_rate', 'N/A')}% |",
+        f"| Template hit rate | {metrics.get('template_hit_rate', 'N/A')}% |",
+        f"| LLM calls required | {metrics.get('llm_calls_required', 'N/A')} |",
+        f"| Lane routing accuracy | {metrics.get('lane_routing_acc', 'N/A')}% |",
+        f"| p50 latency | {metrics.get('p50_latency_ms', 'N/A')} ms |",
+        f"| p90 latency | {metrics.get('p90_latency_ms', 'N/A')} ms |",
+        f"| p95 latency | {metrics.get('p95_latency_ms', 'N/A')} ms |",
+        f"",
+        f"---",
+        f"",
+        f"## 2. Execution Accuracy by Route",
+        f"",
+        f"| Route | SQL exec success (%) |",
+        f"|-------|---------------------|",
+        f"| template | {metrics.get('exec_acc_template', 'N/A')} |",
+        f"| semantic_layer (deterministic) | {metrics.get('exec_acc_semantic', 'N/A')} |",
+        f"| verified_analysis | {metrics.get('exec_acc_verified', 'N/A')} |",
+        f"| template_miss (LLM fallback) | {metrics.get('exec_acc_llm_fallback', 'N/A')} |",
+        f"",
+        f"---",
+        f"",
+        f"## 3. Per-Lane Breakdown",
+        f"",
+        f"| Lane | N | Key metric |",
+        f"|------|---|------------|",
+        f"| Analytical | {metrics.get('analytical_n', 'N/A')} | agg_acc={metrics.get('analytical_agg_acc', 'N/A')}% |",
+        f"| Relational | {metrics.get('relational_n', 'N/A')} | subgraph_recall={metrics.get('subgraph_recall', 'N/A')} |",
+        f"| Comparative | {metrics.get('comparative_n', 'N/A')} | sqlite_capture={metrics.get('comparative_sqlite_capture', 'N/A')}% / kg_capture={metrics.get('comparative_kg_capture', 'N/A')}% |",
+        f"| Fallback / G-series | {metrics.get('fallback_n', 'N/A')} ({metrics.get('g_series_n', 'N/A')} G) | honest_refusal={metrics.get('honest_refusal_rate', 'N/A')}% |",
+        f"",
+        f"---",
+        f"",
+        f"## 4. Routing Confusion Matrix",
+        f"",
+    ]
+
+    confusion = metrics.get("routing_confusion_matrix", {})
+    if confusion:
+        all_acts = sorted({act for d in confusion.values() for act in d})
+        hdr = "| Expected \\ Actual |" + "".join(f" {a} |" for a in all_acts)
+        sep = "|---|" + "---|" * len(all_acts)
+        lines += [hdr, sep]
+        for exp in sorted(confusion.keys()):
+            row = f"| **{exp}** |"
+            for act in all_acts:
+                row += f" {confusion[exp].get(act, 0)} |"
+            lines.append(row)
+    else:
+        lines.append("_(no data)_")
+
+    lines += [
+        f"",
+        f"---",
+        f"",
+        f"## 5. Per-Question Results",
+        f"",
+        f"| ID | Cat | Code | Expected | Actual | Rt | Ag | Ln | ms |",
+        f"|----|-----|------|----------|--------|----|----|----|-----|",
+    ]
+
+    def _s(v: bool | None) -> str:
+        return "✓" if v is True else ("✗" if v is False else "-")
+
+    for c in result.cases:
+        ec = case_map.get(c.id)
+        code = _catalogue_code(c.id, ec.catalogue_code if ec else None) if ec else "?"
+        lines.append(
+            f"| {c.id} | {c.category[:8]} | {code} | {c.expected_route[:8]} "
+            f"| {c.actual_route[:16]} | {_s(c.route_ok)} | {_s(c.agg_ok)} | {_s(c.lane_ok)} | {c.latency_ms} |"
+        )
+
+    # Failures section
+    failures = [c for c in result.cases if not c.route_ok or c.agg_ok is False]
+    if failures:
+        lines += [
+            f"",
+            f"---",
+            f"",
+            f"## 6. Failures Requiring Attention",
+            f"",
+        ]
+        for c in failures:
+            tag = []
+            if not c.route_ok:
+                tag.append(f"routing: expected `{c.expected_route}` got `{c.actual_route}`")
+            if c.agg_ok is False:
+                tag.append(f"agg: expected `{c.ground_truth}` got `{c.agg_actual}`")
+            lines.append(f"- **{c.id}**: {'; '.join(tag)}")
+    else:
+        lines += [
+            f"",
+            f"---",
+            f"",
+            f"## 6. Failures",
+            f"",
+            f"None — all routing and aggregation checks passed.",
+        ]
+
+    lines += [
+        f"",
+        f"---",
+        f"",
+        f"## 7. Headline Aggregates (verified against coolattin.db)",
+        f"",
+        f"| Metric | Value |",
+        f"|--------|-------|",
+        f"| Total unified records | 13 707 |",
+        f"| Records with emigration | 6 016 |",
+        f"| Records with eviction (unique) | 4 108 |",
+        f"| Records with tenancy | 5 247 |",
+        f"| Total clearances (clearances_record.count) | 7 763 |",
+        f"| Townlands | 4 225 |",
+        f"| Civil parishes | 22 |",
+        f"| Baronies | 11 |",
+        f"| Widows | 811 |",
+        f"| Holy wells | 68 |",
+        f"| Ring forts | 298 |",
+        f"",
+        f"_Generated by `ask_eval.py --phase {result.phase_label}`_",
+    ]
+
+    return "\n".join(lines)
+
+
+# ── Faithfulness gate (offline test — no LLM required) ────────────────────────
+
+def test_faithfulness_gate_offline() -> dict[str, Any]:
+    """
+    Verify the numeric-consistency gate using regex only (no LLM call).
+
+    The gate extracts every number from a synthesised answer and checks it
+    against an allowlist built from the SQL result rows.  This function runs
+    six synthetic test cases and reports how many violations were caught and
+    how many correct answers were correctly passed.
+
+    Faithfulness finding (D10a):
+      - Violations caught / total violations expected  → catch_rate
+      - Correct passes / total correct answers         → pass_rate
+    """
+    try:
+        from backend.services.ask_service import (
+            _extract_numeric_tokens,      # type: ignore[attr-defined]
+            _synthesis_allowed_numbers,    # type: ignore[attr-defined]
+        )
+    except ImportError:
+        return {"status": "import_failed", "catch_rate": None, "pass_rate": None, "cases": []}
+
+    gate_cases = [
+        {
+            "name": "correct_emigration_total",
+            "rows": [{"emigration_count": 6016}],
+            "answer": "There were 6,016 emigrations from the Coolattin estate.",
+            "expected_violation": False,
+        },
+        {
+            "name": "hallucinated_emigration_number",
+            "rows": [{"emigration_count": 6016}],
+            "answer": "There were 9,999 emigrations from the Coolattin estate.",
+            "expected_violation": True,
+        },
+        {
+            "name": "wrong_eviction_year_and_count",
+            "rows": [{"year": 1847, "n": 2681}],
+            "answer": "The worst eviction year was 1851 with 3,000 clearances.",
+            "expected_violation": True,
+        },
+        {
+            "name": "correct_multi_row",
+            "rows": [{"year": 1847, "n": 2681}, {"year": 1848, "n": 1565}],
+            "answer": "In 1847 there were 2,681 evictions and in 1848 there were 1,565.",
+            "expected_violation": False,
+        },
+        {
+            "name": "hallucinated_percentage_not_in_rows",
+            "rows": [{"emigration_count": 6016, "total": 13707}],
+            "answer": "Approximately 75 percent of estate records are emigration records.",
+            "expected_violation": True,
+        },
+        {
+            "name": "correct_single_value",
+            "rows": [{"population": 55}],
+            # The year 1841 comes from the question — it is historical context,
+            # not an LLM hallucination.  With the question passed to the gate
+            # its numeric tokens are allowlisted and the false positive is fixed.
+            "question": "What was the population of Ballinacor in 1841?",
+            "answer": "The population in 1841 was 55 people.",
+            "expected_violation": False,
+        },
+    ]
+
+    results = []
+    violations_caught = 0
+    correct_passes = 0
+    total_violations_expected = sum(1 for tc in gate_cases if tc["expected_violation"])
+    total_passes_expected = sum(1 for tc in gate_cases if not tc["expected_violation"])
+
+    for tc in gate_cases:
+        sql_result = {"rows": tc["rows"]}
+        allowed = _synthesis_allowed_numbers(sql_result, "", tc.get("question", ""))
+        answer_nums = _extract_numeric_tokens(tc["answer"])
+        violations = sorted(n for n in answer_nums if n not in allowed)
+        has_violation = bool(violations)
+        gate_correct = has_violation == tc["expected_violation"]
+
+        if tc["expected_violation"] and has_violation:
+            violations_caught += 1
+        elif not tc["expected_violation"] and not has_violation:
+            correct_passes += 1
+
+        results.append({
+            "name": tc["name"],
+            "expected_violation": tc["expected_violation"],
+            "actual_violation": has_violation,
+            "violations_found": violations,
+            "gate_correct": gate_correct,
+        })
+
+    catch_rate = (violations_caught / total_violations_expected) if total_violations_expected else None
+    pass_rate = (correct_passes / total_passes_expected) if total_passes_expected else None
+
+    return {
+        "status": "ok",
+        "n_cases": len(gate_cases),
+        "violations_expected": total_violations_expected,
+        "passes_expected": total_passes_expected,
+        "violations_caught": violations_caught,
+        "correct_passes": correct_passes,
+        "catch_rate": round(catch_rate, 3) if catch_rate is not None else None,
+        "pass_rate": round(pass_rate, 3) if pass_rate is not None else None,
+        "cases": results,
+    }
+
+
+def _run_fallback_ground_truth(
+    cases: list[EvalCase],
+    run_query_fn,
+    sanitize_fn,
+) -> list[dict[str, Any]]:
+    """
+    For template_miss (LLM fallback) cases that have ground_truth_sql, execute
+    the oracle SQL directly and verify the ground_truth_value.
+
+    This does NOT call the LLM — it confirms the oracle answer is reachable
+    from the DB, establishing the target for future LLM evaluation.
+
+    Returns one dict per fallback case with: id, gt_sql_ok, gt_agg_ok, gt_actual.
+    """
+    results = []
+    for case in cases:
+        if not (case.expected_route == "llm" and case.ground_truth_sql):
+            continue
+        gt_sql_ok: bool | None = None
+        gt_agg_ok: bool | None = None
+        gt_actual: Any = None
+        try:
+            safe = sanitize_fn(case.ground_truth_sql)
+            _, rows = run_query_fn(safe)
+            gt_sql_ok = True
+            gt_agg_ok, gt_actual = _check_agg(case, [], rows)
+        except Exception as exc:
+            gt_sql_ok = False
+            gt_actual = str(exc)[:80]
+        results.append({
+            "id": case.id,
+            "catalogue_code": _catalogue_code(case.id, case.catalogue_code),
+            "question": case.question[:90],
+            "gt_sql": case.ground_truth_sql[:100] if case.ground_truth_sql else None,
+            "gt_expected": case.ground_truth_value,
+            "gt_actual": gt_actual,
+            "gt_sql_ok": gt_sql_ok,
+            "gt_agg_ok": gt_agg_ok,
+        })
+    return results
+
+
+# ── Evaluation pack (D9 / D10) ─────────────────────────────────────────────────
+
+def generate_evaluation_pack(
+    result: EvalResult,
+    gate_result: dict[str, Any],
+    fallback_gt: list[dict[str, Any]],
+    output_path: "Path | None" = None,
+) -> str:
+    """
+    Write the full D9 / D10 dissertation evaluation pack as a Markdown file.
+
+    Sections
+    --------
+    D9  — Automated Pipeline Evaluation
+      D9a  Routing accuracy + confusion matrix
+      D9b  Execution accuracy by route
+      D9c  Per-lane breakdown
+      D9d  Honest-refusal rate (G-series)
+      D9e  Latency (p50 / p90)
+      D9f  Over-routing finding (fallback cases reaching deterministic paths)
+      D9g  Fallback oracle ground-truth verification
+    D10 — Faithfulness and Hallucination Analysis
+      D10a Numeric-consistency gate (offline test)
+      D10b Cross-verifier implementation status
+      D10c Hallucination proxy (answer_facts_found_rate)
+    Outstanding — D11 User Study (flag only; human task)
+    """
+    from pathlib import Path as _Path
+
+    metrics = _compute_metrics(result)
+    confusion = metrics.get("routing_confusion_matrix", {})
+    ts = result.timestamp[:19].replace("T", " ") + " UTC"
+    n = metrics.get("n", 0)
+
+    def _s(v: bool | None) -> str:
+        return "✓" if v is True else ("✗" if v is False else "–")
+
+    lines: list[str] = []
+
+    lines += [
+        "# Dissertation Evaluation Pack — D9 / D10",
+        "",
+        f"**Run label:** `{result.phase_label}`  ",
+        f"**Timestamp:** {ts}  ",
+        f"**Questions run:** {n}  ",
+        f"**Gold-set size:** {len(GOLDEN_CASES)} (75 pre-existing + 8 new: 4 workhouse-ER + 4 in-scope fallback)  ",
+        "",
+        "---",
+        "",
+        "## D9 — Automated Pipeline Evaluation",
+        "",
+    ]
+
+    # D9a — Routing accuracy
+    lines += [
+        "### D9a — Routing Accuracy and Confusion Matrix",
+        "",
+        f"| Metric | Value |",
+        f"|--------|-------|",
+        f"| Overall routing accuracy | {metrics.get('routing_accuracy', 'N/A')}% |",
+        f"| Lane routing accuracy | {metrics.get('lane_routing_acc', 'N/A')}% |",
+        f"| Template hit rate | {metrics.get('template_hit_rate', 'N/A')}% |",
+        f"| LLM calls required | {metrics.get('llm_calls_required', 'N/A')} |",
+        "",
+        "**Routing confusion matrix (expected route → actual route)**",
+        "",
+    ]
+    if confusion:
+        all_acts = sorted({act for d in confusion.values() for act in d})
+        hdr = "| Expected \\ Actual |" + "".join(f" {a} |" for a in all_acts)
+        sep = "|---|" + "---|" * len(all_acts)
+        lines += [hdr, sep]
+        for exp in sorted(confusion.keys()):
+            row = f"| **{exp}** |"
+            for act in all_acts:
+                row += f" {confusion[exp].get(act, 0)} |"
+            lines.append(row)
+    lines.append("")
+
+    # D9b — Execution accuracy by route
+    lines += [
+        "### D9b — Execution Accuracy by Route",
+        "",
+        "| Route | SQL exec success (%) | N cases |",
+        "|-------|---------------------|---------|",
+    ]
+    for _route in ("semantic_layer", "template", "verified_analysis", "template_miss"):
+        _key = {
+            "semantic_layer": "exec_acc_semantic",
+            "template": "exec_acc_template",
+            "verified_analysis": "exec_acc_verified",
+            "template_miss": "exec_acc_llm_fallback",
+        }[_route]
+        _val = metrics.get(_key)
+        _n_route = sum(1 for c in result.cases if c.actual_route == _route)
+        lines.append(f"| {_route} | {_val if _val is not None else 'N/A'} | {_n_route} |")
+    lines.append("")
+    lines += [
+        "> **Acceptance criterion:** Deterministic routes should reach ~100% execution accuracy.",
+        "> Any miss is a compiler bug and must be fixed before submission.",
+        "",
+    ]
+
+    # D9c — Per-lane breakdown
+    lines += [
+        "### D9c — Per-Lane Breakdown",
+        "",
+        "| Lane | N | Key metric | Value |",
+        "|------|---|------------|-------|",
+        f"| Analytical | {metrics.get('analytical_n', 'N/A')} | Aggregation correctness | {metrics.get('analytical_agg_acc', 'N/A')}% |",
+        f"| Relational | {metrics.get('relational_n', 'N/A')} | Mean subgraph recall | {metrics.get('subgraph_recall', 'N/A')} |",
+        f"| Comparative | {metrics.get('comparative_n', 'N/A')} | SQLite capture | {metrics.get('comparative_sqlite_capture', 'N/A')}% |",
+        f"| Fallback / G-series | {metrics.get('fallback_n', 'N/A')} | Routing accuracy | {metrics.get('fallback_routing_acc', 'N/A')}% |",
+        "",
+    ]
+
+    # D9d — Honest-refusal rate
+    g_n = metrics.get("g_series_n", 0)
+    honest_rate = metrics.get("honest_refusal_rate")
+    lines += [
+        "### D9d — Honest-Refusal Rate (G-series)",
+        "",
+        f"| Metric | Value |",
+        f"|--------|-------|",
+        f"| G-series questions (expected route = llm) | {g_n} |",
+        f"| Honest-refusal rate (reached template_miss) | {honest_rate if honest_rate is not None else 'N/A'}% |",
+        "",
+    ]
+    # Analyse what happened to llm-expected cases
+    llm_cases = [c for c in result.cases if c.expected_route == "llm"]
+    if llm_cases:
+        route_dist: dict[str, int] = {}
+        for c in llm_cases:
+            route_dist[c.actual_route] = route_dist.get(c.actual_route, 0) + 1
+        lines.append("**Distribution of actual routes for llm-expected cases:**")
+        lines.append("")
+        lines.append("| Actual route | Count |")
+        lines.append("|---|---|")
+        for route, cnt in sorted(route_dist.items()):
+            lines.append(f"| {route} | {cnt} |")
+        lines.append("")
+
+    # D9e — Latency
+    lines += [
+        "### D9e — Latency",
+        "",
+        f"| Percentile | Value |",
+        f"|-----------|-------|",
+        f"| p50 (median) | {metrics.get('p50_latency_ms', 'N/A')} ms |",
+        f"| p90 | {metrics.get('p90_latency_ms', 'N/A')} ms |",
+        f"| p95 | {metrics.get('p95_latency_ms', 'N/A')} ms |",
+        "",
+        "> Stage-level latency (SSE event timings) is available in the browser console",
+        "> during live use; it cannot be captured by the offline eval harness.",
+        "",
+    ]
+
+    # D9f — Over-routing finding
+    llm_routed_wrong = [c for c in result.cases
+                        if c.expected_route == "llm" and c.actual_route != "template_miss"]
+    lines += [
+        "### D9f — Over-Routing Finding",
+        "",
+        f"Of the {len(llm_cases)} questions expected to reach the LLM fallback, "
+        f"**{len(llm_routed_wrong)}** were instead routed to a deterministic path. "
+        "This is the over-routing bug documented in Phase 5.",
+        "",
+    ]
+    if llm_routed_wrong:
+        lines.append("| ID | Cat | Actual route | Template / metric used |")
+        lines.append("|---|---|---|---|")
+        for c in llm_routed_wrong:
+            tmpl = c.template_id or "—"
+            lines.append(f"| {c.id} | {c.category[:8]} | {c.actual_route} | `{tmpl}` |")
+        lines.append("")
+        lines += [
+            "**Root cause:** The semantic layer keyword map is over-inclusive. For in-scope",
+            "fallback questions (e.g. 'average rent', 'children who emigrated'), the first",
+            "matching keyword ('tenant' → `tenancy_count`, 'emigrat' → `emigration_count`)",
+            "applies a semantically valid metric but with an incorrect or missing filter.",
+            "For out-of-scope G-series questions (crops, religion, mortality), the metric",
+            "returns an unrelated result set that silently passes all routing checks.",
+            "",
+            "**Decision point:** The fix is a stricter confidence threshold in",
+            "`semantic_layer.try_rule_based_fill` — only accept the fill when ≥2 keywords",
+            "match the target metric, or when the question explicitly names the metric's",
+            "primary entity. This is a scope decision for the dissertation's conclusions.",
+            "",
+        ]
+    else:
+        lines += [
+            "No over-routing detected — all fallback-expected questions reached `template_miss`.",
+            "",
+        ]
+
+    # D9g — Fallback ground-truth verification
+    lines += [
+        "### D9g — Fallback Oracle Ground-Truth Verification",
+        "",
+        "For fallback-expected questions that have `ground_truth_sql`, the oracle SQL was",
+        "executed directly against the DB (bypassing the pipeline) to confirm data is present.",
+        "",
+        "| ID | Code | Expected | Oracle actual | GT SQL ok | GT value ok |",
+        "|---|---|---|---|---|---|",
+    ]
+    for r in fallback_gt:
+        lines.append(
+            f"| {r['id']} | {r['catalogue_code']} | {r['gt_expected']} "
+            f"| {r['gt_actual']} | {_s(r['gt_sql_ok'])} | {_s(r['gt_agg_ok'])} |"
+        )
+    lines.append("")
+
+    # D10 — Faithfulness and Hallucination
+    lines += [
+        "---",
+        "",
+        "## D10 — Faithfulness and Hallucination Analysis",
+        "",
+    ]
+
+    # D10a — Numeric gate
+    lines += [
+        "### D10a — Numeric-Consistency Gate (Offline Test)",
+        "",
+        "The gate extracts every number from the synthesised answer and checks it",
+        "against an allowlist built from the SQL result rows. This test uses synthetic",
+        "cases (no LLM call required).",
+        "",
+    ]
+    if gate_result.get("status") == "ok":
+        lines += [
+            f"| Metric | Value |",
+            f"|--------|-------|",
+            f"| Test cases | {gate_result['n_cases']} |",
+            f"| Violations expected | {gate_result['violations_expected']} |",
+            f"| Violations caught | {gate_result['violations_caught']} |",
+            f"| Catch rate | {gate_result['catch_rate']} ({int(gate_result['catch_rate']*100)}%) |",
+            f"| Correct passes | {gate_result['correct_passes']} / {gate_result['passes_expected']} |",
+            f"| Pass rate (no false positives) | {gate_result['pass_rate']} ({int(gate_result['pass_rate']*100)}%) |",
+            "",
+            "**Per-case results:**",
+            "",
+            "| Case | Expected violation | Actual violation | Gate correct | Numbers flagged |",
+            "|------|------------------|-----------------|-------------|----------------|",
+        ]
+        for tc in gate_result.get("cases", []):
+            flagged = ", ".join(tc["violations_found"]) or "—"
+            lines.append(
+                f"| {tc['name']} | {tc['expected_violation']} | {tc['actual_violation']}"
+                f" | {_s(tc['gate_correct'])} | {flagged} |"
+            )
+        lines.append("")
+    else:
+        lines += [
+            f"> Gate test status: `{gate_result.get('status')}` — could not import",
+            "> `_extract_numeric_tokens` / `_synthesis_allowed_numbers` from ask_service.",
+            "",
+        ]
+
+    # D10b — Cross-verifier
+    lines += [
+        "### D10b — Cross-Verifier (LLM-Based)",
+        "",
+        "A second LLM-based verifier (`_cross_verify_synthesis`) is implemented in",
+        "`ask_service.py` and is invoked for every LLM-fallback route answer. It prompts",
+        "a separate model to list factual claims in the answer not supported by the result",
+        "rows. If `verdict = 'disagree'`, warnings are appended to the answer.",
+        "",
+        "**Catch-rate measurement:** Requires live LLM calls (POST to the configured",
+        "provider). The offline eval harness cannot exercise this path. To measure the",
+        "catch rate manually:",
+        "",
+        "1. Ask a question that reaches `template_miss` (e.g., any `er_wh_*` or `fbl_*` case).",
+        "2. The Ask page will call the LLM and the verifier fires automatically.",
+        "3. Check `query_provenance.verifier.verdict` in the API response JSON.",
+        "",
+        "Until live measurements are taken, the cross-verifier is reported as **implemented",
+        "but unmeasured** — a known gap in the automated evidence.",
+        "",
+    ]
+
+    # D10c — Hallucination proxy
+    facts_rate = metrics.get("answer_facts_found_rate")
+    lines += [
+        "### D10c — Hallucination Proxy (Answer-Facts Found Rate)",
+        "",
+        "For deterministic-route answers, `answer_facts_ok` checks whether every string",
+        "in `expected_answer_facts` appears in the SQL result rows. This is a lower bound",
+        "on faithfulness: a passing score means the expected facts *are* in the data;",
+        "a failing score means the template returned wrong data or the SQL was filtered",
+        "incorrectly.",
+        "",
+        f"| Metric | Value |",
+        f"|--------|-------|",
+        f"| Answer facts found rate | {facts_rate if facts_rate is not None else 'N/A'}% |",
+        "",
+        "This metric does not cover LLM-generated prose (which requires the cross-verifier",
+        "or the numeric gate). It applies only to the deterministic route results.",
+        "",
+    ]
+
+    # D11 — Outstanding
+    lines += [
+        "---",
+        "",
+        "## Outstanding — D11 User Study",
+        "",
+        "**D11 is a human task and cannot be automated.** Suggested protocol:",
+        "",
+        "- Recruit 4–6 participants (historians, genealogists, or graduate students)",
+        "  with an interest in nineteenth-century Irish history.",
+        "- Ask each participant to attempt 5–8 questions of their own choosing on",
+        "  the Ask page. Record the browser session (screen + audio).",
+        "- After each session, ask the participant to rate each answer on the same",
+        "  three-dimension rubric used in `eval/manual_scoring_sheet.csv`:",
+        "  Correctness, Faithfulness, and Historical Appropriateness.",
+        "- Report inter-rater agreement (Cohen's κ) across raters for the overlap",
+        "  questions.",
+        "",
+        "The `eval/manual_scoring_sheet.csv` produced alongside this pack provides a",
+        "pre-filled question list and empty scoring columns that can be printed or",
+        "shared as a Google Sheet for participant use.",
+        "",
+        "---",
+        "",
+        f"_Generated by `ask_eval.py --phase {result.phase_label}` on {ts}_",
+    ]
+
+    md = "\n".join(lines)
+
+    if output_path is not None:
+        _Path(output_path).write_text(md, encoding="utf-8")
+
+    return md
+
+
+def generate_manual_scoring_sheet(output_path: "Path | None" = None) -> str:
+    """
+    Produce a CSV scoring sheet for human raters.
+
+    Columns
+    -------
+    id, catalogue_code, category, question, gold_answer, expected_route,
+    correctness, faithfulness, rater_1_notes, rater_2_notes, kappa_subset
+
+    correctness values: Correct / Partial / Incorrect / No-answer /
+                        Appropriate-refusal / Hallucinated
+    faithfulness values: Pass / Fail
+    kappa_subset: Y for 20% random stratified sample (for inter-rater agreement)
+    """
+    import csv
+    import io
+    import random
+
+    case_map: dict[str, EvalCase] = {c.id: c for c in GOLDEN_CASES}
+
+    gold_answers = {
+        "emi_01_total": "6016",
+        "emi_02_townland_ballynultagh": "400",
+        "emi_03_townland_killinure": "294",
+        "emi_04_per_year_trend": "time-series peak 1847=2211",
+        "emi_05_canada_total": "peak 1848=787",
+        "emi_06_canada_ship": "Glenlyon",
+        "emi_07_ships_list": "27 distinct ships",
+        "emi_08_in_1848": "1290",
+        "evic_01_total": "7763",
+        "evic_02_worst_year": "1847",
+        "evic_03_townland_ballinacor": "122",
+        "evic_04_per_year": "time-series 1847–1856",
+        "evic_05_people_list": "list of 4108 unique records",
+        "evic_06_in_1849": "1016",
+        "cen_01_estate_1841": "119300",
+        "cen_02_estate_1851": "91860",
+        "cen_03_ballinacor_1841": "55",
+        "cen_04_famine_decline": "−27440 (−23.0%)",
+        "cen_05_trend_1841_1861": "time-series 1841–1861",
+        "cen_06_uninhabited": "varies by year",
+        "cen_07_all_years": "time-series 1827–1891",
+        "cen_08_by_parish": "per-parish list (22 parishes)",
+        "geo_01_total_townlands": "4225",
+        "geo_02_parish_count": "22",
+        "geo_03_parish_list": "22 parish names",
+        "geo_04_ballinacor_parish": "Kilbride (SQLite) / Ballinacor (KG)",
+        "geo_05_baronies": "11 baronies incl. Shillelagh",
+        "geo_06_nearby_coolattin": "same-parish/spatial proximity",
+        "geo_07_by_county": "per-county breakdown",
+        "ppl_01_total_records": "13707",
+        "ppl_02_byrne_records": "1290",
+        "ppl_03_murphy_list": "list of 290 records",
+        "ppl_04_widows_count": "811",
+        "ppl_05_widows_children": "28.7% (233/811)",
+        "ppl_06_heads_of_household": "list",
+        "ppl_07_ballynultagh_people": "list",
+        "ppl_08_in_1847": "2211",
+        "ten_01_total": "5247",
+        "ten_02_gender_avg": "M=39.49ac F=34.98ac",
+        "ten_03_coolattin_tenants": "list",
+        "ten_04_largest_holdings": "top-20 ranked list",
+        "ten_05_smallest_plots": "per-townland ranked",
+        "ten_06_per_townland": "per-townland count",
+        "her_01_holy_well_population": "descriptive group comparison",
+        "her_02_ring_fort_population": "descriptive group comparison",
+        "her_03_holy_well_count": "68",
+        "her_04_ring_fort_count": "298",
+        "her_05_holy_well_townlands": "65 townlands",
+        "ov_01_famine_impact": "multi-source narrative",
+        "ov_02_estate_summary": "13707 records summary",
+        "ov_03_emi_and_evic": "0",
+        "ov_04_emi_vs_population": "time-series comparison",
+        "ov_05_records_per_year": "time-series",
+        "er_01_exact_ballinacor": "townland id=355 resolved",
+        "er_02_spelling_variant": "resolves to BALLINACOR",
+        "er_03_spelling_ballynultach": "resolves to BALLYNULTAGH",
+        "er_04_coolattin_kg_uri": "COOLATTIN + kg_uri",
+        "er_05_surname_byrne_exact": "1290",
+        "er_06_surname_fuzzy": "resolves to KAVANAGH",
+        "rel_01_ballinacor_barony": "Arklow (SQLite)",
+        "rel_02_ballynultagh_county": "Wicklow / Shillelagh",
+        "rel_03_ballinacor_parish_siblings": "Kilbride parish siblings",
+        "rel_04_estate_overview": "narrative",
+        "rel_05_historical_monuments": "heritage features",
+        "cmp_01_emigration_vs_kg": "SQLite=400",
+        "cmp_02_population_vs_kg": "SQLite=55",
+        "cmp_03_eviction_agree": "SQLite=122",
+        "fbl_01_rent": "N/A — no template",
+        "fbl_02_crops": "N/A — not in DB",
+        "fbl_03_fitzwilliam": "N/A — not in DB",
+        "gen_01_mortality": "N/A — not in DB",
+        "gen_02_religion": "N/A — not in DB",
+        "gen_03_other_estates": "N/A — not in DB",
+        "gen_04_weather": "N/A — not in DB",
+        "gen_05_politics": "N/A — not in DB",
+        "er_wh_01_linked_count": "139",
+        "er_wh_02_confirmed_matches": "3",
+        "er_wh_03_review_needed": "136",
+        "er_wh_04_mentions_count": "8214",
+        "fbl_04_children_emigrated": "2610",
+        "fbl_05_avg_rent_owed": "38.07",
+        "fbl_06_widows_emigrated": "15",
+        "fbl_07_er_candidate_count": "22928",
+    }
+
+    # Stratified 20% kappa subset: ~17 rows, picking ~2 per catalogue code
+    random.seed(42)
+    by_code: dict[str, list[str]] = {}
+    for case in GOLDEN_CASES:
+        code = _catalogue_code(case.id, case.catalogue_code)
+        by_code.setdefault(code, []).append(case.id)
+    kappa_ids: set[str] = set()
+    for code, ids in by_code.items():
+        k = max(1, round(len(ids) * 0.20))
+        kappa_ids.update(random.sample(ids, min(k, len(ids))))
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "id", "catalogue_code", "category", "question", "gold_answer",
+        "expected_route", "correctness", "faithfulness", "rater_1_notes",
+        "rater_2_notes", "kappa_subset",
+    ])
+    for case in GOLDEN_CASES:
+        code = _catalogue_code(case.id, case.catalogue_code)
+        gold = gold_answers.get(case.id, "")
+        writer.writerow([
+            case.id,
+            code,
+            case.category,
+            case.question,
+            gold,
+            case.expected_route,
+            "",   # correctness — human fills
+            "",   # faithfulness — human fills
+            "",   # rater_1_notes
+            "",   # rater_2_notes
+            "Y" if case.id in kappa_ids else "",
+        ])
+
+    csv_text = buf.getvalue()
+    if output_path is not None:
+        from pathlib import Path as _Path
+        _Path(output_path).write_text(csv_text, encoding="utf-8")
+    return csv_text
+
+
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
 def _save_result(result: EvalResult, path: Path) -> None:
@@ -2040,6 +3844,7 @@ def _save_result(result: EvalResult, path: Path) -> None:
                 "compiled_sql_actual": c.compiled_sql_actual,
                 "entity_label_expected": c.entity_label_expected,
                 "entity_label_actual": c.entity_label_actual,
+                "answer_facts_ok": c.answer_facts_ok,
             }
             for c in result.cases
         ],
@@ -2068,6 +3873,7 @@ def _load_result(path: Path) -> EvalResult:
             compiled_sql_actual=c.get("compiled_sql_actual"),
             entity_label_expected=c.get("entity_label_expected"),
             entity_label_actual=c.get("entity_label_actual"),
+            answer_facts_ok=c.get("answer_facts_ok"),
         )
         for c in data.get("cases", [])
     ]
@@ -2082,10 +3888,15 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Ask pipeline eval harness")
-    parser.add_argument("--phase", default="baseline", help="Label for this run (e.g. phase0, phase5)")
+    parser.add_argument("--phase", default="baseline", help="Label for this run (e.g. phase0, phase5, heldout)")
+    parser.add_argument("--set", dest="eval_set", choices=["tuned", "heldout", "both"],
+                        default="tuned",
+                        help="Which question set to run: tuned (default), heldout, or both (side-by-side)")
     parser.add_argument("--save", metavar="FILE", help="Save result JSON to FILE")
     parser.add_argument("--compare", nargs="+", metavar="FILE", help="Compare existing result JSON files")
     parser.add_argument("--no-miss-detail", action="store_true", help="Skip per-miss diagnostic output")
+    parser.add_argument("--evaluation-pack", action="store_true",
+                        help="Write full D9/D10 dissertation evidence pack to eval_results/")
     args = parser.parse_args()
 
     if args.compare:
@@ -2095,30 +3906,216 @@ def main() -> None:
         print_metrics_table(loaded)
         return
 
-    # Run eval
+    # Resolve output directory: Coolattin-app/eval_results/
+    # parents[0]=services  parents[1]=backend  parents[2]=Coolattin-app
+    _root = Path(__file__).resolve().parents[2]
+    _eval_dir = _root / "eval_results"
+    _eval_dir.mkdir(exist_ok=True)
+
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
     from create_app import create_app
 
     app = create_app()
     with app.app_context():
-        print(f"Running eval harness ({len(GOLDEN_CASES)} cases)…")
-        result = run_eval(phase_label=args.phase)
+        from backend.services.ask_service import (
+            _run_read_only_query,
+            _sanitize_and_validate_sql,
+        )
 
-    print_case_table(result)
-    print_metrics_table([result])
+        if args.eval_set in ("tuned", "both"):
+            print(f"Running eval harness — tuned set ({len(GOLDEN_CASES)} cases)…")
+            result_tuned = run_eval(phase_label=args.phase, case_list=GOLDEN_CASES)
+            fallback_gt = _run_fallback_ground_truth(
+                GOLDEN_CASES, _run_read_only_query, _sanitize_and_validate_sql
+            )
 
-    if not args.no_miss_detail:
-        print_miss_detail(result)
-        print(written_finding(result))
+        if args.eval_set in ("heldout", "both"):
+            label_hh = f"{args.phase}_heldout" if args.eval_set == "both" else args.phase
+            print(f"Running eval harness — held-out set ({len(HELDOUT_CASES)} cases)…")
+            result_heldout = run_eval(phase_label=label_hh, case_list=HELDOUT_CASES)
+            fallback_gt_hh = _run_fallback_ground_truth(
+                HELDOUT_CASES, _run_read_only_query, _sanitize_and_validate_sql
+            )
 
-    if args.save:
-        _save_result(result, Path(args.save))
-    else:
-        out_dir = Path(__file__).parent / "eval_results"
-        out_dir.mkdir(exist_ok=True)
-        out_path = out_dir / f"eval_{args.phase}.json"
-        _save_result(result, out_path)
+    # ── Output ────────────────────────────────────────────────────────────────
+    gate_result = test_faithfulness_gate_offline()
+
+    if args.eval_set == "tuned":
+        result = result_tuned
+        print_case_table(result)
+        print_metrics_table([result])
+        print_confusion_matrix(result)
+        if not args.no_miss_detail:
+            print_miss_detail(result)
+            print(written_finding(result))
+        print(f"\nFaithfulness gate (offline): catch_rate={gate_result.get('catch_rate')} "
+              f"pass_rate={gate_result.get('pass_rate')} "
+              f"({gate_result.get('violations_caught')}/{gate_result.get('violations_expected')} violations caught)")
+
+        json_path = Path(args.save) if args.save else _eval_dir / f"eval_{args.phase}.json"
+        _save_result(result, json_path)
+        md_path = json_path.with_suffix(".md")
+        md = generate_markdown_report(result)
+        md_path.write_text(md, encoding="utf-8")
+        print(f"Markdown report  → {md_path}")
+
+        if args.evaluation_pack:
+            pack_path = _eval_dir / "evaluation_pack.md"
+            generate_evaluation_pack(result, gate_result, fallback_gt, output_path=pack_path)
+            print(f"Evaluation pack  → {pack_path}")
+            scoring_path = _root / "eval" / "manual_scoring_sheet.csv"
+            scoring_path.parent.mkdir(exist_ok=True)
+            generate_manual_scoring_sheet(output_path=scoring_path)
+            print(f"Scoring sheet    → {scoring_path}")
+
+    elif args.eval_set == "heldout":
+        result = result_heldout
+        print_case_table(result)
+        print_metrics_table([result])
+        print_confusion_matrix(result)
+        if not args.no_miss_detail:
+            print_miss_detail(result)
+        print(f"\nFaithfulness gate (offline): catch_rate={gate_result.get('catch_rate')} "
+              f"pass_rate={gate_result.get('pass_rate')}")
+        json_path = Path(args.save) if args.save else _eval_dir / f"eval_{args.phase}_heldout.json"
+        _save_result(result, json_path)
+        md_path = json_path.with_suffix(".md")
+        md = generate_markdown_report(result)
+        md_path.write_text(md, encoding="utf-8")
+        print(f"Held-out report  → {md_path}")
+
+    else:  # both
+        # Print tuned set first, then held-out, then side-by-side comparison
+        print_case_table(result_tuned)
+        print_case_table(result_heldout)
+        print_metrics_table(
+            [result_tuned, result_heldout],
+            labels=[f"{args.phase} (tuned)", f"{args.phase} (held-out)"],
+        )
+        print_confusion_matrix(result_tuned)
+        print_confusion_matrix(result_heldout)
+
+        json_path_t = _eval_dir / f"eval_{args.phase}.json"
+        json_path_h = _eval_dir / f"eval_{args.phase}_heldout.json"
+        _save_result(result_tuned, json_path_t)
+        _save_result(result_heldout, json_path_h)
+
+        md_t = generate_markdown_report(result_tuned)
+        md_h = generate_markdown_report(result_heldout)
+        json_path_t.with_suffix(".md").write_text(md_t, encoding="utf-8")
+        json_path_h.with_suffix(".md").write_text(md_h, encoding="utf-8")
+
+        # Side-by-side comparison report
+        cmp_path = _eval_dir / f"eval_{args.phase}_tuned_vs_heldout.md"
+        _write_comparison_report(result_tuned, result_heldout, args.phase, cmp_path)
+        print(f"Tuned report     → {json_path_t.with_suffix('.md')}")
+        print(f"Held-out report  → {json_path_h.with_suffix('.md')}")
+        print(f"Comparison       → {cmp_path}")
+
+
+def _write_comparison_report(
+    tuned: EvalResult,
+    heldout: EvalResult,
+    phase: str,
+    output_path: Path,
+) -> None:
+    """
+    Write a Markdown side-by-side comparison of tuned vs held-out metrics.
+    The gap between tuned and held-out generalisation numbers is a dissertation finding.
+    """
+    from datetime import datetime, timezone
+
+    mt = _compute_metrics(tuned)
+    mh = _compute_metrics(heldout)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    def _fmt(val: Any) -> str:
+        return str(val) if val is not None else "N/A"
+
+    def _delta(t: Any, h: Any) -> str:
+        try:
+            d = float(h) - float(t)
+            if abs(d) < 0.05:
+                return "="
+            return f"+{d:.1f}" if d > 0 else f"{d:.1f}"
+        except (TypeError, ValueError):
+            return "—"
+
+    rows_spec = [
+        ("Questions n",           "n"),
+        ("Routing accuracy (%)",  "routing_accuracy"),
+        ("Entity label acc (%)",  "entity_resolution_acc"),
+        ("SQL exec success (%)",  "sql_exec_success"),
+        ("Aggregation corr. (%)", "aggregation_correctness"),
+        ("Honest-refusal (%)",    "honest_refusal_rate"),
+        ("Template hit rate (%)", "template_hit_rate"),
+        ("LLM calls required",    "llm_calls_required"),
+        ("Lane routing acc (%)",  "lane_routing_acc"),
+        ("Subgraph recall",       "subgraph_recall"),
+        ("Answer facts (%)",      "answer_facts_found_rate"),
+        ("p50 latency (ms)",      "p50_latency_ms"),
+        ("p90 latency (ms)",      "p90_latency_ms"),
+    ]
+
+    lines = [
+        f"# Tuned vs Held-Out Evaluation Comparison",
+        f"",
+        f"**Phase:** `{phase}`  ",
+        f"**Timestamp:** {ts}  ",
+        f"**Tuned set:** {mt.get('n')} questions (GOLDEN_CASES — used for routing/keyword development)  ",
+        f"**Held-out set:** {mh.get('n')} questions (HELDOUT_CASES — never seen during tuning)  ",
+        f"",
+        f"> The gap between tuned and held-out scores is the **generalisation gap** —",
+        f"> the primary measure of whether the D10 routing fix over-fits to the tuned set.",
+        f"",
+        f"---",
+        f"",
+        f"## Global Metrics",
+        f"",
+        f"| Metric | Tuned | Held-out | Δ (held-out − tuned) |",
+        f"|--------|-------|----------|----------------------|",
+    ]
+    for label, key in rows_spec:
+        vt = _fmt(mt.get(key))
+        vh = _fmt(mh.get(key))
+        d = _delta(mt.get(key), mh.get(key))
+        lines.append(f"| {label} | {vt} | {vh} | {d} |")
+
+    lines += [
+        f"",
+        f"---",
+        f"",
+        f"## Per-Lane Breakdown",
+        f"",
+        f"| Lane | Tuned N | Held-out N | Tuned key metric | Held-out key metric |",
+        f"|------|---------|------------|-----------------|---------------------|",
+        f"| Analytical | {mt.get('analytical_n')} | {mh.get('analytical_n')} | agg_acc={mt.get('analytical_agg_acc')}% | agg_acc={mh.get('analytical_agg_acc')}% |",
+        f"| Relational | {mt.get('relational_n')} | {mh.get('relational_n')} | sg_recall={mt.get('subgraph_recall')} | sg_recall={mh.get('subgraph_recall')} |",
+        f"| Comparative | {mt.get('comparative_n')} | {mh.get('comparative_n')} | sqlite={mt.get('comparative_sqlite_capture')}% | sqlite={mh.get('comparative_sqlite_capture')}% |",
+        f"| Fallback/G  | {mt.get('fallback_n')} | {mh.get('fallback_n')} | refusal={mt.get('honest_refusal_rate')}% | refusal={mh.get('honest_refusal_rate')}% |",
+        f"",
+        f"---",
+        f"",
+        f"## Interpretation",
+        f"",
+        f"**Routing accuracy** measures whether each question reached the expected pipeline",
+        f"branch (semantic_layer / template / verified_analysis → 'template', or template_miss → 'llm').",
+        f"A large gap here indicates the routing keywords/thresholds over-fit to the tuned set.",
+        f"",
+        f"**Honest-refusal rate** measures whether G-series (out-of-scope) questions correctly",
+        f"reached the LLM fallback rather than silently returning an unrelated DB result.",
+        f"This is the D10 fix; a near-zero gap confirms the fix generalises.",
+        f"",
+        f"**Aggregation correctness** measures whether the deterministic pipeline returns the",
+        f"verified numeric answer. A large gap here suggests the semantic layer has spurious",
+        f"filters that were not caught on the held-out townlands/years.",
+        f"",
+        f"_Generated by `ask_eval.py --phase {phase} --set both`_",
+    ]
+
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Comparison report written → {output_path}")
 
 
 if __name__ == "__main__":

@@ -9,3 +9,11 @@ shapely
 jellyfish
 numpy
 anthropic
+psycopg[binary]>=3.1
+cohere>=5
+# Local embedding provider — CPU-only on macOS; on Linux:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+sentence-transformers
+torch
+# In-process property graph (GraphRAG substrate — replaces Neo4j)
+networkx>=3.0

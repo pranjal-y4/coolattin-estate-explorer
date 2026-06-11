@@ -453,12 +453,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       const chunks = await Promise.all(
         ordered.map(async (r) => {
-          const matches = await fetchWorkhouseMatches(r.record_id);
-          if (!matches.length) return "";
+          const matchBundle = await fetchWorkhouseMatches(r.record_id);
+          if (!(matchBundle.count || 0)) return "";
           return `
             <div style="margin-bottom:10px;">
               <div style="font-size:12px;font-weight:800;color:#334155;margin:6px 0;">${canonicalName(r)} (Record ${r.record_id})</div>
-              ${workhouseSectionHTML(matches)}
+              ${workhouseSectionHTML(matchBundle)}
             </div>
           `;
         })
@@ -484,61 +484,117 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function fetchWorkhouseMatches(recordId) {
     try {
       const res = await fetch(`/api/workhouse/match/${encodeURIComponent(recordId)}`);
-      if (!res.ok) return [];
+      if (!res.ok) return { count: 0, matches: [], linked_workhouse_records: [], please_check_records: [] };
       const js = await res.json();
-      return Array.isArray(js.matches) ? js.matches : [];
+      return {
+        count: Number(js.count || 0),
+        matches: Array.isArray(js.matches) ? js.matches : [],
+        linked_workhouse_records: Array.isArray(js.linked_workhouse_records) ? js.linked_workhouse_records : [],
+        possible_workhouse_matches: Array.isArray(js.possible_workhouse_matches) ? js.possible_workhouse_matches : [],
+        please_check_records: Array.isArray(js.please_check_records) ? js.please_check_records : [],
+        identity_is_ambiguous: !!js.identity_is_ambiguous,
+        identity_disambiguation_note: js.identity_disambiguation_note || "",
+      };
     } catch (_e) {
-      return [];
+      return { count: 0, matches: [], linked_workhouse_records: [], please_check_records: [] };
     }
   }
 
-  function workhouseSectionHTML(matches) {
-    if (!matches.length) return "";
+  function workhouseSectionHTML(bundle) {
+    const confirmed = Array.isArray(bundle?.linked_workhouse_records) ? bundle.linked_workhouse_records : [];
+    const possible = Array.isArray(bundle?.please_check_records)
+      ? bundle.please_check_records
+      : Array.isArray(bundle?.possible_workhouse_matches)
+        ? bundle.possible_workhouse_matches
+        : [];
+    const legacyMatches = Array.isArray(bundle?.matches) ? bundle.matches : [];
+    const total = confirmed.length + possible.length || legacyMatches.length;
+    if (!total) return "";
 
     const tierOrder = { High: 0, Medium: 1, Low: 2 };
     const tierLabel = { High: "High confidence", Medium: "Medium confidence", Low: "Low confidence" };
 
-    // Group by confidence tier
-    const groups = {};
-    for (const m of matches) {
-      const tier = m.confidence || "Low";
-      if (!groups[tier]) groups[tier] = [];
-      groups[tier].push(m);
+    if (!confirmed.length && !possible.length) {
+      const matches = legacyMatches;
+      // Group by confidence tier
+      const groups = {};
+      for (const m of matches) {
+        const tier = m.confidence || "Low";
+        if (!groups[tier]) groups[tier] = [];
+        groups[tier].push(m);
+      }
+
+      const tiers = Object.keys(groups).sort((a, b) => (tierOrder[a] ?? 3) - (tierOrder[b] ?? 3));
+
+      const rows = tiers.map((tier) => {
+        const header = `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#94a3b8;margin:8px 0 4px;">${tierLabel[tier] || tier}</div>`;
+        const cards = groups[tier].map((m) => {
+          const ed = m.electoral_division || "-";
+          const basis = m.match_basis || "name";
+          const scoreStr = m.name_score != null ? ` · Score: ${(m.name_score * 100).toFixed(0)}%` : "";
+          return `
+            <div style="padding:8px;border:1px solid #e2e8f0;border-radius:8px;background:#faf5ff;margin-bottom:6px;">
+              <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+                <span class="wh-confidence wh-${tier}">${tier}</span>
+                <span style="font-weight:700;color:#4c1d95;">${m.raw_name || "Unknown"}</span>
+              </div>
+              <div style="font-size:11px;color:#475569;">Sheet: ${m.source_sheet || "-"} · Match: ${basis}${scoreStr}</div>
+              <div style="font-size:11px;color:#475569;">Electoral Division: ${ed}</div>
+              <div style="font-size:11px;color:#475569;">Sex: ${m.sex || "-"} · Age: ${m.age || "-"} · Status: ${m.status || "-"}</div>
+              <div style="font-size:11px;color:#475569;">Employment: ${m.employment || "-"} · Religion: ${m.religion || "-"}</div>
+              <div style="font-size:11px;color:#475569;">Admitted/Born: ${m.admitted_or_born || "-"} · Left/Died: ${m.died_or_left || "-"}</div>
+              ${m.register_number ? `<div style="font-size:11px;color:#475569;">Register #: ${m.register_number}</div>` : ""}
+            </div>
+          `;
+        }).join("");
+        return header + cards;
+      }).join("");
+
+      return `
+        <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #cbd5e1;">
+          <div style="font-size:12px;color:#4c1d95;font-weight:800;">Workhouse Records (${matches.length} fuzzy match${matches.length !== 1 ? "es" : ""})</div>
+          <div style="font-size:11px;color:#78350f;background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;margin:4px 0 8px;line-height:1.5;">
+            <strong>Approximate matches only</strong> — these records were identified by name similarity (fuzzy matching) and cannot be guaranteed to refer to the same person. Confidence tiers indicate match quality. Always verify against the original source before drawing conclusions.
+          </div>
+          <div style="margin-top:6px;">${rows}</div>
+        </div>
+      `;
     }
 
-    const tiers = Object.keys(groups).sort((a, b) => (tierOrder[a] ?? 3) - (tierOrder[b] ?? 3));
-
-    const rows = tiers.map((tier) => {
-      const header = `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#94a3b8;margin:8px 0 4px;">${tierLabel[tier] || tier}</div>`;
-      const cards = groups[tier].map((m) => {
-        const ed = m.electoral_division || "-";
-        const basis = m.match_basis || "name";
-        const scoreStr = m.name_score != null ? ` · Score: ${(m.name_score * 100).toFixed(0)}%` : "";
-        return `
-          <div style="padding:8px;border:1px solid #e2e8f0;border-radius:8px;background:#faf5ff;margin-bottom:6px;">
-            <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
-              <span class="wh-confidence wh-${tier}">${tier}</span>
-              <span style="font-weight:700;color:#4c1d95;">${m.raw_name || "Unknown"}</span>
-            </div>
-            <div style="font-size:11px;color:#475569;">Sheet: ${m.source_sheet || "-"} · Match: ${basis}${scoreStr}</div>
-            <div style="font-size:11px;color:#475569;">Electoral Division: ${ed}</div>
-            <div style="font-size:11px;color:#475569;">Sex: ${m.sex || "-"} · Age: ${m.age || "-"} · Status: ${m.status || "-"}</div>
-            <div style="font-size:11px;color:#475569;">Employment: ${m.employment || "-"} · Religion: ${m.religion || "-"}</div>
-            <div style="font-size:11px;color:#475569;">Admitted/Born: ${m.admitted_or_born || "-"} · Left/Died: ${m.died_or_left || "-"}</div>
-            ${m.register_number ? `<div style="font-size:11px;color:#475569;">Register #: ${m.register_number}</div>` : ""}
+    const groups = {};
+    const renderCandidateCard = (m, accent, label) => {
+      const evidence = Array.isArray(m.why_it_matched) ? m.why_it_matched.join("; ") : (m.match_basis || "Name-based candidate");
+      const missing = Array.isArray(m.what_evidence_is_missing) && m.what_evidence_is_missing.length
+        ? m.what_evidence_is_missing.join("; ")
+        : "Further corroborating evidence needed";
+      const conflicts = Array.isArray(m.conflicting_evidence) && m.conflicting_evidence.length
+        ? m.conflicting_evidence.join("; ")
+        : "None recorded";
+      const scoreStr = m.confidence_score != null ? ` · Score: ${(Number(m.confidence_score) * 100).toFixed(0)}%` : "";
+      return `
+        <div style="padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:${accent};margin-bottom:8px;">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+            <span class="wh-confidence wh-${m.confidence || "Low"}">${m.confidence || label}</span>
+            <span style="font-weight:700;color:#334155;">${m.name || m.raw_name || "Unknown"}</span>
           </div>
-        `;
-      }).join("");
-      return header + cards;
-    }).join("");
+          <div style="font-size:11px;color:#475569;">Place: ${m.place || m.electoral_division || "-"} · Year: ${m.year || "-"} · Age: ${m.age || "-"}${scoreStr}</div>
+          <div style="font-size:11px;color:#475569;">Why it matched: ${evidence}</div>
+          <div style="font-size:11px;color:#475569;">What evidence is missing: ${missing}</div>
+          <div style="font-size:11px;color:#475569;">Conflicting evidence: ${conflicts}</div>
+          <div style="font-size:11px;color:#475569;">Source record: ${m.source_record_id || "-"}</div>
+        </div>
+      `;
+    };
 
     return `
       <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #cbd5e1;">
-        <div style="font-size:12px;color:#4c1d95;font-weight:800;">Workhouse Records (${matches.length} fuzzy match${matches.length !== 1 ? "es" : ""})</div>
+        <div style="font-size:12px;color:#4c1d95;font-weight:800;">Workhouse Resolution (${total} linked or reviewable record${total !== 1 ? "s" : ""})</div>
         <div style="font-size:11px;color:#78350f;background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;margin:4px 0 8px;line-height:1.5;">
-          <strong>Approximate matches only</strong> — these records were identified by name similarity (fuzzy matching) and cannot be guaranteed to refer to the same person. Confidence tiers indicate match quality. Always verify against the original source before drawing conclusions.
+          <strong>Review carefully</strong> — confirmed links have the strongest available evidence, while possible links are surfaced for manual checking rather than silently merged.
         </div>
-        <div style="margin-top:6px;">${rows}</div>
+        ${bundle.identity_is_ambiguous ? `<div style="font-size:11px;color:#9a3412;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:6px 8px;margin:0 0 8px;">${bundle.identity_disambiguation_note || "Multiple plausible workhouse matches were found for this identity."}</div>` : ""}
+        ${confirmed.length ? `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#15803d;margin:8px 0 4px;">Confirmed linked workhouse records</div>${confirmed.map((m) => renderCandidateCard(m, "#f0fdf4", "Confirmed")).join("")}` : ""}
+        ${possible.length ? `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#92400e;margin:10px 0 4px;">Please check these records</div>${possible.map((m) => renderCandidateCard(m, "#fff7ed", "Please check")).join("")}` : ""}
       </div>
     `;
   }
@@ -690,8 +746,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     Promise.all(
       ordered.map(async (r) => {
-        const matches = await fetchWorkhouseMatches(r.record_id);
-        return `${createRecordCard(r)}${renderHouseholdLinks(r)}${workhouseSectionHTML(matches)}`;
+        const matchBundle = await fetchWorkhouseMatches(r.record_id);
+        return `${createRecordCard(r)}${renderHouseholdLinks(r)}${workhouseSectionHTML(matchBundle)}`;
       })
     ).then((chunks) => {
       const tags = sourceTagsFromRecords(allForPerson);
@@ -719,8 +775,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const chunks = await Promise.all(
       ordered.map(async (r) => {
-        const matches = await fetchWorkhouseMatches(r.record_id);
-        return `${createRecordCard(r)}${renderHouseholdLinks(r)}${workhouseSectionHTML(matches)}`;
+        const matchBundle = await fetchWorkhouseMatches(r.record_id);
+        return `${createRecordCard(r)}${renderHouseholdLinks(r)}${workhouseSectionHTML(matchBundle)}`;
       })
     );
 

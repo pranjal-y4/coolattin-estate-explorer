@@ -786,6 +786,43 @@ _ATTRIBUTE_WORDS = frozenset([
     "same parish", "fall within",
 ])
 
+# ── Out-of-scope signals ──────────────────────────────────────────────────────
+# If ANY of these substrings appear in the lowercased question the question
+# addresses data that is genuinely outside the metric registry (no table/field
+# covers it).  Return None immediately — do not force a metric match.
+_OUT_OF_SCOPE_SIGNALS: frozenset[str] = frozenset([
+    # religion / social data not recorded
+    "religion", "religious", "faith", "catholic", "protestant",
+    # environmental / agricultural data not in DB
+    "weather", "climate", "temperature", "rainfall",
+    "crop", "farming", "agriculture", "tillage",
+    # political / organisational records not in DB
+    "political",
+    # mortality records not in DB (distinct from emigration/eviction)
+    "died of", "cause of death",
+    # cross-estate comparison — only Coolattin data available
+    "other irish", "other estate",
+    # workhouse ER-specific tables (source_mentions, entity_resolution_candidates,
+    # workhouse_unified_links) are not covered by any metric
+    "workhouse",
+    # ER pipeline artefact labels — no metric maps to these
+    "entity resolution candidate", "confirmed match", "review required",
+    "source mention",
+])
+
+# ── Unmapped-requirement phrases ──────────────────────────────────────────────
+# These phrases indicate the question needs a field or aggregate that no metric
+# can provide (e.g. AVG(rent_owed) when the only metric counts people, or an
+# age filter that no metric's filter_where supports).  Return None so the
+# question falls through to LLM-fallback.
+_UNMAPPED_REQUIREMENT_PHRASES: frozenset[str] = frozenset([
+    "average rent",
+    "rent owed",
+    "rent paid",
+    "under the age",
+    "children under",
+])
+
 
 def try_rule_based_fill(
     question: str,
@@ -803,6 +840,24 @@ def try_rule_based_fill(
     the question analysis dict from _analyse_question in ask_service.
     """
     q = (question or "").lower()
+
+    # ── Out-of-scope guard ────────────────────────────────────────────────
+    # Questions mentioning topics with no DB coverage must not be forced onto
+    # any metric — they should reach the LLM-fallback / honest-refusal path.
+    if any(sig in q for sig in _OUT_OF_SCOPE_SIGNALS):
+        return None
+
+    # ── Unmapped-requirement guard ─────────────────────────────────────────
+    # Questions that need a filter or aggregate no metric can provide.
+    if any(phrase in q for phrase in _UNMAPPED_REQUIREMENT_PHRASES):
+        return None
+
+    # ── Cross-metric intersection guard ───────────────────────────────────
+    # "How many widows emigrated?" requires both is_widow=1 AND
+    # has_emigration_record=1.  widow_count has no emigration filter;
+    # emigration_count has no widow filter.  Neither metric alone answers it.
+    if "widow" in q and "emigra" in q:
+        return None
 
     # ── Geography attribute lookup ─────────────────────────────────────────
     townland_norm = townland_resolution.get("name_norm")
@@ -830,16 +885,34 @@ def try_rule_based_fill(
             raw_intent=question,
         )
 
-    # ── Detect metric ──────────────────────────────────────────────────────
-    metric_id: str | None = None
+    # ── Detect metric (BEST-MATCH scoring) ────────────────────────────────
+    # Score every metric by counting how many of its entries in _METRIC_KEYWORDS
+    # appear in the question.  The metric with the most matches wins; ties break
+    # by list order (preserving the existing specificity priority).
+    # This prevents the first-match defect where an incidental keyword like
+    # "tenant" in an out-of-scope question forces a deterministic route.
+    _metric_scores: dict[str, int] = {}
     for keyword, candidate in _METRIC_KEYWORDS:
         if keyword in q:
-            # For eviction: disambiguate event-count vs person-count
-            if candidate == "eviction_event_count":
-                if any(w in q for w in ["people", "person", "who", "names", "list"]):
-                    candidate = "evicted_person_count"
-            metric_id = candidate
-            break
+            # Disambiguate eviction metric before scoring
+            if candidate == "eviction_event_count" and any(
+                w in q for w in ["people", "person", "who", "names", "list"]
+            ):
+                candidate = "evicted_person_count"
+            _metric_scores[candidate] = _metric_scores.get(candidate, 0) + 1
+
+    metric_id: str | None = None
+    if _metric_scores:
+        _best_score = max(_metric_scores.values())
+        # Pick the highest-priority candidate that achieved the best score
+        for keyword, candidate in _METRIC_KEYWORDS:
+            if candidate == "eviction_event_count" and any(
+                w in q for w in ["people", "person", "who", "names", "list"]
+            ):
+                candidate = "evicted_person_count"
+            if _metric_scores.get(candidate, 0) == _best_score:
+                metric_id = candidate
+                break
 
     # Special rule: "how many townlands" → townland_count
     if not metric_id and "townland" in q and any(w in q for w in ["how many", "count", "total", "number"]):
@@ -948,11 +1021,11 @@ def try_rule_based_fill(
         limit = 10
 
     # ── Confidence scoring ────────────────────────────────────────────────
-    # Start at 1.0; reduce if multiple metrics could match
+    # Start at 1.0; reduce when multiple distinct metrics scored (competition).
     confidence = 1.0
-    matching_keywords = sum(1 for kw, _ in _METRIC_KEYWORDS if kw in q)
-    if matching_keywords > 1:
-        confidence = max(0.82, confidence - 0.06 * (matching_keywords - 1))
+    _competing_metrics = len(_metric_scores)
+    if _competing_metrics > 1:
+        confidence = max(0.82, confidence - 0.06 * (_competing_metrics - 1))
     if not filters and not dimensions:
         confidence = min(confidence, 0.90)  # global unfiltered queries are less certain
 

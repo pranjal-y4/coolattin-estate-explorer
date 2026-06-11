@@ -1,0 +1,37 @@
+id,catalogue_code,category,question,gold_answer,gold_answer_type,route_type,is_out_of_scope,notes
+hh_emi_01_carnew,A,emigration,How many people emigrated from Carnew?,54,scalar,template,N,Verified: COUNT(DISTINCT record_id) WHERE has_emigration_record=1 AND townland_norm='CARNEW'
+hh_emi_02_1849,A,emigration,How many people emigrated in 1849?,633,scalar,template,N,Verified: COUNT(DISTINCT record_id) WHERE has_emigration_record=1 AND year=1849
+hh_emi_03_1847,A,emigration,How many people emigrated in 1847?,2211,scalar,template,N,Verified: COUNT(DISTINCT record_id) WHERE has_emigration_record=1 AND year=1847; peak famine year
+hh_evic_01_1850,A,eviction,How many evictions were recorded in 1850?,547,scalar,template,N,Verified: SUM(clearances_record.count) WHERE year=1850
+hh_evic_02_1855,A,eviction,How many evictions were there in 1855?,38,scalar,template,N,Verified: SUM(clearances_record.count) WHERE year=1855
+hh_evic_03_tinahely,A,eviction,How many evictions happened in Tinahely?,12,scalar,template,N,Verified: SUM(c.count) JOIN townland WHERE name='TINAHELY'
+hh_evic_04_worst,A,eviction,Which townland had the most evictions?,BALLYNULTAGH,scalar,template,N,Verified: 378 clearances; BALLYNULTAGH > KILLINURE(275) > COOLAFANCY(213)
+hh_cen_01_tinahely_1841,A,census,What was the population of Tinahely in 1841?,21,scalar,template,N,Verified: SUM(census_record.total) JOIN townland WHERE name='TINAHELY' AND year=1841
+hh_cen_02_carnew_1841,A,census,What was the population of Carnew in 1841?,456,scalar,template,N,Verified: SUM(census_record.total) JOIN townland WHERE name='CARNEW' AND year=1841
+hh_cen_03_tinahely_1851,A,census,What was the population of Tinahely in 1851?,13,scalar,template,N,Verified: SUM(census_record.total) JOIN townland WHERE name='TINAHELY' AND year=1851
+hh_cen_04_1871,A,census,What was the total estate population in 1871?,153073,scalar,template,N,Verified: SUM(census_record.total) WHERE year=1871
+hh_ppl_01_doyle,P,people,How many records mention the surname Doyle?,487,scalar,template,N,Verified: COUNT(DISTINCT record_id) WHERE UPPER(surname)='DOYLE'
+hh_ppl_02_kelly,P,people,How many people with the surname Kelly are in the records?,151,scalar,template,N,Verified: COUNT(DISTINCT record_id) WHERE UPPER(surname)='KELLY'
+hh_ppl_03_whelan,P,people,How many Whelan family members are in the estate records?,127,scalar,template,N,Verified: COUNT(DISTINCT record_id) WHERE UPPER(surname)='WHELAN'
+hh_ppl_04_tinahely_list,P,people,List all people recorded in Tinahely,list of 265 records,list,template,N,Verified: 265 distinct record_ids WHERE townland_norm='TINAHELY'
+hh_ten_01_tinahely,A,tenancy,How many tenants are recorded from Tinahely?,176,scalar,template,N,Verified: COUNT(DISTINCT record_id) WHERE has_tenancy_record=1 AND townland_norm='TINAHELY'
+hh_ten_02_carnew,A,tenancy,How many tenants are from Carnew?,256,scalar,template,N,Verified: COUNT(DISTINCT record_id) WHERE has_tenancy_record=1 AND townland_norm='CARNEW'
+hh_ten_03_female,A,tenancy,How many female tenants were recorded in the estate?,284,scalar,llm-fallback,N,Verified: COUNT(DISTINCT record_id) WHERE has_tenancy_record=1 AND LOWER(gender) IN ('f','female'); no semantic-layer metric for gender-filtered count
+hh_ten_04_farmers,A,tenancy,How many tenants were recorded as farmers?,822,scalar,llm-fallback,N,Verified: COUNT(DISTINCT record_id) WHERE has_tenancy_record=1 AND occupation='Farmer'; no occupation-filtered tenancy metric
+hh_geo_01_shillelagh,A,geography,How many townlands are in the Shillelagh barony?,36,scalar,llm-fallback,N,Verified: COUNT(*) FROM townland WHERE barony='Shillelagh'; no per-barony townland count template
+hh_geo_02_tinahely_barony,R,geography,Which barony does Tinahely belong to?,Ballinacor South,scalar,template,N,Verified: barony='Ballinacor South' WHERE UPPER(name)='TINAHELY'; relational hierarchy question
+hh_geo_03_carnew_parish,R,geography,What civil parish is Carnew in?,Carnew,scalar,template,N,Verified: civil_parish='Carnew' WHERE UPPER(name)='CARNEW'; relational hierarchy question
+hh_her_01_ringfort_townlands,H,heritage,How many distinct townlands contain ring forts?,213,scalar,verified_analysis,N,Verified: COUNT(DISTINCT townland_norm) WHERE feature_group='ring_fort'; analogous to her_05_holy_well_townlands
+hh_her_02_tinahely,H,heritage,What heritage features are recorded in Tinahely?,list,list,template,N,Verified: 1 feature WHERE townland_norm='TINAHELY'; relational/heritage lane
+hh_er_01_tynehely,I,entity,How many people emigrated from Tynehely?,resolves to TINAHELY (12),entity,template,N,Typo Tynehely→TINAHELY via fuzzy/vector matching; same emigration count as hh_emi_03 once resolved
+hh_er_02_carnew_census,I,entity,Show me the census data for Carnew,resolves to CARNEW (id=993),entity,template,N,Exact match; sql_id=993 kg_uri=https://kg.virtualtreasury.ie/place/present-day/townland/Carnew/v1dc1n7
+hh_er_03_whelan_surname,I,entity,List all Whelan family members,127 records resolved,entity,template,N,Exact surname extraction: WHELAN=127
+hh_cmp_01_tinahely_1841,X,comparative,Compare the 1841 population of Tinahely in the estate records versus the knowledge graph,SQLite=21,scalar,template,N,Cross-source check; VRTI KG should agree; SQLite value is 21
+hh_cmp_02_carnew_emi,X,comparative,Compare the emigration count from Carnew in the estate records versus the knowledge graph,SQLite=54,scalar,template,N,Cross-source check; SQLite=54 emigrants; KG may agree
+hh_fbl_01_tenant_widows,A,fallback,How many tenant records belong to widows?,489,scalar,llm-fallback,N,Verified: COUNT(DISTINCT record_id) WHERE has_tenancy_record=1 AND is_widow=1; no semantic-layer metric for tenancy+widow intersection
+hh_fbl_02_scarawalsh_tenants,A,fallback,How many tenants are recorded from the Scarawalsh barony?,540,scalar,llm-fallback,N,Verified: COUNT(DISTINCT ur.record_id) JOIN townland WHERE barony='Scarawalsh' AND has_tenancy_record=1; no barony-level tenancy template
+hh_gen_01_agent,G,general,What was the name of the estate agent who managed Coolattin?,N/A — not in DB,none,llm-fallback,Y,No estate management staff records in database
+hh_gen_02_schools,G,general,Were there any schools on the Coolattin estate?,N/A — not in DB,none,llm-fallback,Y,No educational institution records in database
+hh_gen_03_language,G,general,What language did the tenants on the Coolattin estate speak?,N/A — not in DB,none,llm-fallback,Y,No linguistic or cultural records in database
+hh_gen_04_aftermath,G,general,What happened to the Coolattin estate after the Famine?,N/A — not in DB,none,llm-fallback,Y,Post-famine estate history not recorded in database
+hh_gen_05_compensation,G,general,Were any Coolattin tenants compensated for their eviction?,N/A — not in DB,none,llm-fallback,Y,No compensation records in database

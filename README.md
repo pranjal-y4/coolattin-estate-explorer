@@ -143,13 +143,19 @@ OLLAMA_MODEL=llama3.1:8b
 
 ### How the Ask pipeline works
 
-1. High-risk statistical questions use verified analysis SQL first, so known research questions are answered from fixed data-backed queries.
-2. Townland names are resolved exact → fuzzy → suggestion with explicit provenance.
-3. If no verified analysis matches, the configured LLM generates SQL from live schema, row counts, sampled categories, and approved past query patterns.
-4. All SQL is validated as read-only, then rechecked semantically and repaired if SQLite rejects it; if no validated query can be produced, the system returns a clear rephrase message instead of guessing.
-5. If a good query is confirmed with thumbs up, it is stored in approved query memory and can be reused later for similar questions.
-6. The final answer is built from actual SQL results, related insights are computed from local data, and the LLM rewrite is rejected if it introduces unsupported numbers.
-7. Grouped or statistical results can be rendered as a simple chart, and PDF export remains available.
+The new orchestrated pipeline (`ASK_USE_NEW_PIPELINE=true`, on by default since June 2026) has seven phases:
+
+1. **Intent routing** (`intent_router.py`) — classifies each question as `ANALYTICAL`, `RELATIONAL`, `COMPARATIVE`, or `FALLBACK` before routing.
+2. **Hybrid embedding retrieval / fast lane** (`embedding_index.py`) — TF-IDF + optional dense vector retrieval over templates, approved query memory, and corpus chunks; a high-confidence match short-circuits the remaining phases entirely.
+3. **Semantic layer** (`semantic_layer.py`) — maps analytical questions to a slot-fill struct and compiles deterministic SQL (and an equivalent SPARQL) without any LLM call.
+4. **Subgraph engine** (`subgraph_engine.py`) — for relational / hierarchy / heritage questions, traverses the VRTI and local GraphDB knowledge graphs directly (no SQL needed).
+5. **LLM SQL generation** — invoked only when no earlier phase produced a valid query; uses the annotated schema, live row counts, sampled categories, and approved past queries as context.
+6. **Identity resolution** (`identity_resolver.py`) — disambiguates repeated names using Jaro-Winkler similarity, phonetic blocking (Metaphone), and geographic/temporal scoring; surfaces "3 distinct individuals called John Murphy" instead of silently picking one.
+7. **Multi-model synthesis** — aggregates SQL results, KG results (VRTI + GraphDB), and retrieved chunks into a structured answer with provenance, discrepancy detection, and optional PDF export.
+
+All SQL (template or LLM-generated) is validated as read-only before execution. Approved answers are stored in query memory and reused on semantically similar future questions. Grouped or statistical results can be rendered as a chart.
+
+**Workhouse entity resolution** is a separate subsystem (`workhouse_entity_resolution.py` + `entity_resolution/` package) that links workhouse admission records to unified estate records using deterministic normalisation, fuzzy blocking, and scored confidence bands (High / Medium / Low). It does not use the Ask pipeline or pgvector.
 
 ---
 
@@ -161,13 +167,20 @@ See [`.env.example`](.env.example) for the full documented list. Key variables:
 |---|---|---|
 | `SECRET_KEY` | `dev-secret-...` | Flask session secret — change in production |
 | `FLASK_ENV` | `development` | `development` or `production` |
-| `DATABASE_PATH` | `coolattin.db` in repo root | Optional explicit SQLite file path; set this on Azure to a persistent path like `/home/site/data/coolattin.db` |
+| `DATABASE_PATH` | `coolattin.db` in repo root | SQLite file path; set on Azure to `/home/site/data/coolattin.db` |
 | `ASK_LLM_PROVIDER` | `auto` | `auto` / `openrouter` / `ollama` / `none` |
 | `OPENROUTER_API_KEY` | — | Required for cloud LLM |
 | `OPENROUTER_MODEL` | `openai/gpt-oss-20b:free` | OpenRouter model ID |
-| `ASK_ALLOW_HEURISTIC_FALLBACK` | `0` | Leave at `0` to fail safely with a clear message instead of guessing with heuristic SQL |
+| `ASK_ALLOW_HEURISTIC_FALLBACK` | `0` | `0` = fail safely; `1` = allow heuristic SQL guessing |
 | `OLLAMA_MODEL` | — | Ollama model name |
 | `VRTI_REQUEST_TIMEOUT` | `30` | SPARQL endpoint timeout (seconds) |
+| `ASK_USE_NEW_PIPELINE` | `true` | `true` = orchestrated 7-phase pipeline; `false` = legacy path |
+| `EMBEDDING_PROVIDER` | `local` | `local` (BAAI/bge-large-en-v1.5) / `cohere` / `voyage` |
+| `COHERE_API_KEY` | — | Required when `EMBEDDING_PROVIDER=cohere` |
+| `DATABASE_URL` | — | PostgreSQL connection string; enables pgvector backend for Ask retrieval |
+| `GRAPHDB_ENABLED` | `true` | `true` = query local GraphDB alongside SQLite and VRTI |
+| `GRAPHDB_SPARQL_ENDPOINT` | `http://localhost:7200/...` | GraphDB SPARQL endpoint |
+| `GRAPHDB_REQUEST_TIMEOUT` | `15` | GraphDB query timeout (seconds) |
 
 ---
 
@@ -312,6 +325,9 @@ az webapp config appsettings set \
     ASK_ALLOW_HEURISTIC_FALLBACK=0 \
     OPENROUTER_SITE_URL="https://$APP_NAME.azurewebsites.net" \
     OPENROUTER_APP_TITLE="Coolattin Archive Ask" \
+    GRAPHDB_ENABLED=true \
+    GRAPHDB_SPARQL_ENDPOINT="http://51.120.71.162:7200/repositories/coolattin" \
+    GRAPHDB_REQUEST_TIMEOUT=15 \
     DATABASE_PATH="/home/site/data/coolattin.db"
 ```
 

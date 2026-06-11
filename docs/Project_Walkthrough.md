@@ -123,57 +123,105 @@ An overlay of archaeological monuments and holy wells from the National Monument
 
 ## The Ask Page: Walking Through the LLM Pipeline
 
-This is where the most engineering effort went, and where the most interesting decisions were made.
+This is where the most engineering effort went. The pipeline was substantially redesigned in June 2026 and is now a seven-phase orchestrated system.
 
-When a user submits a question, it goes through a **multi-stage pipeline**. Critically, the results stream back to the browser in real time — the user sees each stage appear as it completes rather than waiting for everything to finish.
+When a user submits a question, it passes through these phases in order. Results stream back to the browser in real time — the user sees each stage as it completes.
 
-Here is each stage:
+### Phase 1: Intent Routing
 
-### Stage 1: Template Matching
+`intent_router.py` classifies the question into one of four routes before any retrieval begins:
 
-Before calling any AI, we check the question against 100+ pre-written SQL templates. Each template is associated with a set of keywords. If the question scores highly enough against a template, we skip the AI entirely and run the pre-approved SQL query.
+- **ANALYTICAL** — aggregate counts, trends, statistics → goes to the semantic layer
+- **RELATIONAL** — hierarchy, adjacency, parish membership → goes to the subgraph engine
+- **COMPARATIVE** — cross-source comparisons ("compare X vs Y") → fan-out to both SQL and SPARQL
+- **FALLBACK** — everything else → LLM-generated SQL
 
-**Why:** This was the most important safety decision. LLMs are impressive, but they occasionally make mistakes — a hallucinated SQL query could return wrong numbers and be presented as historical fact. For common, high-value questions ("How many people emigrated from X?", "What was the population of Y in 1851?"), we use **verified queries** that we know are correct. This is faster and more reliable than LLM-generated SQL.
+This routing step means the system never calls the LLM for a question that can be answered deterministically.
 
-### Stage 2: Townland Resolution
+### Phase 2: Hybrid Embedding Retrieval (Fast Lane)
 
-If the question mentions a place name, we resolve it. Exact match first. If that fails, fuzzy matching against the canonical townland list. If still no match, we return "did you mean X, Y, or Z?" suggestions instead of proceeding with a wrong location.
+`embedding_index.py` runs a hybrid search over templates, approved query memory, and corpus chunks:
 
-### Stage 3: LLM SQL Generation (only if no template matched)
+1. **TF-IDF dense retrieval** — cosine similarity over unigram+bigram vectors; top-50 candidates
+2. **Keyword sparse signal** — required keywords act as hard pre-filters for template hits
+3. **RRF fusion** — combines dense and sparse ranked lists using Reciprocal Rank Fusion
+4. **Fast lane**: if a template or memory item scores above the confidence threshold (0.68), the pipeline short-circuits here and the remaining phases are skipped entirely
 
-If no template matched, we send the question to an LLM (either OpenRouter in the cloud, or a local Ollama model). Critically, we also send it the **database schema, row counts, and sample values** — enough context for the LLM to write accurate SQL without having to guess column names or data formats.
+This means common questions ("How many people emigrated from Kilcommon?") return within 100ms without touching the LLM.
 
-**The LLM provider choice:** We support two: **OpenRouter** (cloud, requires an API key, uses free-tier models by default) and **Ollama** (runs entirely on your laptop, no API key, slower). The app auto-detects which is available. This was important for the dissertation — the project had to work offline during a presentation, and couldn't depend on an external service being available.
+When `EMBEDDING_PROVIDER=cohere`, the corpus chunks are also encoded with Cohere Embed v3 (`embed-english-v3.0`, 1024-dim) for dense retrieval — asymmetric encoding: queries use `search_query`, documents use `search_document`. A local fallback (`local_embeddings.py`) uses BAAI/bge-large-en-v1.5 via SentenceTransformers with no API key required. An optional pgvector backend (`ask_pgvector.py`) persists chunk embeddings in PostgreSQL when `DATABASE_URL` is set.
 
-### Stage 4: Read-Only Guardrail
+### Phase 3: Semantic Layer
 
-Before executing any SQL — whether from a template or LLM-generated — we check it against a pattern that blocks any write operation (INSERT, UPDATE, DELETE, ALTER). The database is historical data; nothing should be able to modify it through the Ask interface.
+For ANALYTICAL questions, `semantic_layer.py` attempts to map the question to a validated **slot-fill struct** using rule-based keyword matching (no LLM). If successful, it compiles a deterministic SQL query and an equivalent SPARQL query — both guaranteed valid because they are assembled from a typed vocabulary of metrics, dimensions, and filters, not generated free-form.
 
-### Stage 5: Execute and Format
+If rule-based filling fails, the LLM is prompted to return only a JSON slot-fill (not raw SQL); the compiler then turns that into SQL. This separation means the LLM never writes SQL directly in the semantic layer path.
 
-The query runs against SQLite. Results come back as a table.
+### Phase 4: Subgraph Engine
 
-### Stage 6: LLM Rewrite
+For RELATIONAL and COMPARATIVE questions, `subgraph_engine.py` traverses the knowledge graphs directly:
 
-The raw database result ("27") gets sent back to the LLM to be rephrased as a natural language answer ("27 people from Ballinacor emigrated between 1847 and 1852, primarily to North America."). If the LLM is unavailable, the raw table is shown directly — the page degrades gracefully.
+1. Entity linking — resolves mentions to KG nodes (VRTI + local GraphDB)
+2. k-hop neighbourhood expansion — traverses place hierarchy (townland → parish → barony → county) in a single SPARQL triple pattern
+3. Subgraph pruning — relevance-prunes and caps the triple list
+4. Linearisation — converts triples to a compact table or prose block for the LLM context window
+5. Community summaries — for "what is the history of X" questions, pulls precomputed blurbs from `data/seed/community_summaries.json`
 
-### Stage 7: VRTI Enrichment
+**Important rule:** the linearised subgraph is passed to the LLM to *read* relationships and qualitative context. It must never be used to answer count or aggregate questions — those always come from the SQL path.
 
-In parallel, we call the VRTI Knowledge Graph to fetch parish and administrative context for any townlands mentioned in the result. This adds historical background that isn't in our local database.
+### Phase 5: LLM SQL Generation (Fallback Only)
 
-### Stage 8: Chart Suggestion and PDF Export
+Invoked only when phases 2–4 produce nothing. The LLM receives the annotated schema, live row counts, sampled category values, and any approved memory hits as few-shot examples. All LLM-generated SQL is checked against the read-only guardrail before execution.
 
-If the results are numerical and multi-row, the pipeline automatically suggests a chart type (bar, line, scatter). A PDF report is generated with the question, SQL, results, and LLM answer.
+### Phase 6: Identity Resolution
+
+`identity_resolver.py` runs after query execution for questions that involve person names. The three-layer model:
+
+- **Mention** — one immutable row per name occurrence in a source record
+- **Person** — an inferred individual linked to one or more Mentions via a SAME_AS relationship with a confidence score (≥ 0.75 = confirmed; 0.50–0.74 = candidate)
+- **Factoid** — a reified claim (mention, property, value, source) that preserves contradictory records without hard-merging
+
+Scoring algorithm: phonetic blocking (Metaphone on surname) → within each block, score pairs on Jaro-Winkler name similarity + geographic proximity (same townland +0.20, same parish +0.10) + temporal plausibility (≤10 year gap +0.10; >30 year gap −0.10) + family co-occurrence (+0.15).
+
+This lets the answer say **"3 distinct individuals called John Murphy"** instead of silently collapsing them into one.
+
+### Phase 7: Multi-Model Synthesis
+
+The final stage assembles SQL results, KG results (VRTI + GraphDB), and retrieved chunks into a structured answer:
+
+- Detects cross-source discrepancies between SQLite and GraphDB (e.g. emigrant count 312 vs 308)
+- Surfaces identity disambiguation notes from Phase 6
+- Calls the LLM for a natural-language rewrite of the combined evidence
+- Rejects the LLM answer if it introduces numbers not present in the source data
+- Produces a provenance-annotated JSON payload: `answer`, `table`, `chart`, `sql`, `fusion`, `discrepancies`, `pdf_url`
 
 ### What the User Sees
 
-All of this streams back to the browser as it happens. The user sees the template match appear, then the SQL query, then the results table, then the LLM answer — each appearing within a second or two of the previous. This streaming approach (called **Server-Sent Events**) was a deliberate choice over showing a spinner for 8 seconds — it makes the system feel responsive and also makes the pipeline transparent.
+All phases stream back as Server-Sent Events. The user sees intent routing, retrieval, SQL execution, KG query, synthesis — each appearing progressively. A spinner for 8 seconds was never an option: transparency is part of the research contribution.
 
 ---
 
 ## The Feedback Loop
 
-Every answer on the Ask page has a thumbs up / thumbs down button. When a user marks an answer as correct, that question-SQL pair is saved in a "query memory" table. Future similar questions are matched against this memory before even reaching the template system. Over time, the system learns from confirmed good answers.
+Every answer on the Ask page has a thumbs up / thumbs down button. When a user marks an answer as correct, that question-SQL pair is saved in the `ask_query_memory` table. Future similar questions are matched against this memory in Phase 2 (hybrid retrieval) using both TF-IDF cosine similarity and token-sort ratio — whichever scores higher. Over time, the system builds up a validated query library without any manual curation.
+
+---
+
+## Workhouse Entity Resolution
+
+Separate from the Ask pipeline is a dedicated entity-resolution subsystem that links workhouse admission records to unified estate records.
+
+**Why separate?** The Ask pipeline retrieves semantically relevant context for natural-language questions. Workhouse matching is a different problem: producing explicit, reviewable candidate identity links with transparent evidence. Using the same pipeline would conflate two very different goals.
+
+**How it works** (`workhouse_entity_resolution.py` + `entity_resolution/` subpackage):
+
+1. **Build mentions** — for each workhouse row, extract a normalised mention: name, forename initial, surname, phonetic code (Metaphone), place, event year
+2. **Generate candidates** — for each mention, generate up to 25 candidate unified records using blocking strategies: exact normalised name, surname+initial match, phonetic surname match, place+name match
+3. **Score candidates** — multi-signal scoring: name similarity (rapidfuzz token_sort_ratio), place match (same townland/parish), date window (±1 year), phonetic match → labels: `CONFIRMED_MATCH` / `POSSIBLE_MATCH` / `WEAK_CANDIDATE` / `NO_MATCH`
+4. **Persist results** — all candidates and scores stored in four SQLite tables: `source_mentions`, `entity_resolution_candidates`, `workhouse_unified_links`, `entity_resolution_decisions`
+5. **Confidence bands** — High (CONFIRMED ≥ 0.75) / Medium (POSSIBLE 0.50–0.74) / Low (WEAK < 0.50)
+
+**Why this matters for the dissertation:** The Coolattin records include many common Irish surnames (Murphy, Ryan, Brien). Without entity resolution, a query for "John Murphy" conflates dozens of distinct individuals. The workhouse matching subsystem demonstrates a principled approach to record linkage that is both transparent (all scores are stored and reviewable) and reproducible (deterministic normalisation, no black-box ML model).
 
 ---
 

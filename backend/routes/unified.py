@@ -33,11 +33,33 @@ def api_unified_records():
         year=year, estate=estate, limit=limit,
     )
 
-    # Workhouse match data is expensive to compute across 13k+ records and is
-    # loaded on-demand per record via /api/workhouse/match/<id> instead.
+    try:
+        from backend.services.workhouse_entity_resolution import (
+            get_resolution_map,
+            has_persisted_links,
+        )
+
+        if has_persisted_links():
+            resolution_map = get_resolution_map([str(r.get("record_id") or "") for r in recs])
+        else:
+            resolution_map = {}
+    except Exception:
+        resolution_map = {}
+
     for r in recs:
-        r["has_workhouse_record"] = False
-        r["workhouse_record_count"] = 0
+        resolution = resolution_map.get(str(r.get("record_id") or ""), {})
+        linked = list(resolution.get("linked_workhouse_records") or [])
+        possible = list(resolution.get("possible_workhouse_matches") or [])
+        please_check = list(resolution.get("please_check_records") or possible)
+        r["linked_workhouse_records"] = linked
+        r["possible_workhouse_matches"] = possible
+        r["please_check_records"] = please_check
+        r["identity_is_ambiguous"] = bool(resolution.get("identity_is_ambiguous"))
+        r["identity_disambiguation_note"] = resolution.get("identity_disambiguation_note")
+        r["supporting_evidence"] = list(resolution.get("supporting_evidence") or [])
+        r["conflicting_evidence"] = list(resolution.get("conflicting_evidence") or [])
+        r["has_workhouse_record"] = bool(linked or possible)
+        r["workhouse_record_count"] = len(linked) + len(possible)
 
     return jsonify(recs)
 
