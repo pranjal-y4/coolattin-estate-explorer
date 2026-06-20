@@ -2,18 +2,22 @@
 
 An interactive web application for exploring historical records from the **Coolattin Estate** in County Wicklow, Ireland (mid-19th century). Built as a Masters Dissertation project.
 
-The application integrates tenancy, eviction, emigration, and census data from the [Virtual Record Treasury of Ireland (VRTI)](https://virtualtreasury.ie/) Knowledge Graph into a unified interface with an interactive map, analytics dashboards, and a natural-language Q&A system.
+The application integrates tenancy, eviction, emigration, and census data from the [Virtual Record Treasury of Ireland (VRTI)](https://virtualtreasury.ie/) Knowledge Graph into a unified interface with an interactive map, analytics dashboards, and a natural-language Q&A system backed by an LLM.
+
+**Live deployment:** Azure App Service (Italy North) · **Academic freeze:** `v1.0-demo-freeze` (2026-06-10)
 
 ---
 
 ## Features
 
-- **Interactive Map** — Leaflet.js map of Coolattin townland boundaries with population and clearances overlays
+- **Interactive Map** — Leaflet.js map of Coolattin townland boundaries with population and clearances overlays; workhouse match cards on record markers
 - **Census Browser** — Population data 1841–1891 (from VRTI KG) plus estate survey years 1827–1868
 - **Analytics Dashboards** — KPI summaries and charts for emigration, evictions, workhouse, and tenancy datasets
-- **Ask (LLM Q&A)** — Natural-language questions answered via verified SQL analyses, schema-aware LLM SQL generation, approved query memory, feedback loops, charts, and PDF export
+- **Ask (LLM Q&A)** — Natural-language questions answered via four fast lanes (rule-fill, verified templates, query memory, embedding retrieval), a 7-phase orchestrated pipeline, GraphRAG enrichment, multi-model synthesis, and PDF export
+- **KG Explore** — D3.js force graph of the 152-townland property graph; SQL-vs-SPARQL comparison scenarios
 - **Heritage Map** — NMS monuments and holy wells overlay
 - **Data Export** — Excel exports of census and townland data
+- **Workhouse Entity Resolution** — Phonetic blocking + 7-signal scored matching of workhouse admission records to unified estate records (140 confirmed links)
 
 ---
 
@@ -29,9 +33,18 @@ Coolattin-app/
 ├── backend/
 │   ├── routes/             # Flask blueprints (one per URL prefix)
 │   ├── services/           # Business logic
+│   │   ├── ask_service.py  #   Orchestrated 7-phase pipeline + SSE streaming
+│   │   ├── graphrag.py     #   In-process property graph (49K nodes, 64K edges)
+│   │   ├── kg_service.py   #   Knowledge graph service layer
+│   │   ├── intent_router.py #  Intent classification (ANALYTICAL/RELATIONAL/…)
+│   │   ├── semantic_layer.py # Deterministic SQL + SPARQL compiler
+│   │   ├── subgraph_engine.py # KG traversal (VRTI + GraphDB)
+│   │   ├── embedding_index.py # Hybrid TF-IDF + dense retrieval (RRF)
+│   │   ├── identity_resolver.py # Three-layer identity model
+│   │   └── workhouse_entity_resolution.py # Workhouse ER pipeline
 │   ├── repositories/       # All SQL queries
 │   ├── models/             # Typed dataclasses
-│   ├── integrations/       # VRTI SPARQL client
+│   ├── integrations/       # VRTI SPARQL + GraphDB SPARQL clients
 │   └── jobs/               # Data ingestion jobs
 │
 ├── analytics/              # Pluggable analytics modules (KPI + chart data)
@@ -45,12 +58,12 @@ Coolattin-app/
 │       └── images/
 │
 ├── data/seed/              # Canonical reference data (townland aliases, etc.)
-├── scripts/                # One-off data processing scripts
+├── scripts/                # One-off data processing scripts (incl. build_graph.py)
 ├── extra_datasets/         # NMS heritage open-data CSVs
 └── _archive/               # Deprecated code (reference only)
 ```
 
-**Stack:** Python 3.12 · Flask · SQLite · VRTI SPARQL · OpenRouter/Ollama LLM · Vanilla JS · Leaflet.js
+**Stack:** Python 3.12 · Flask · SQLite · NetworkX (in-process graph) · VRTI SPARQL · GraphDB SPARQL · OpenRouter/Claude/Ollama LLM · BAAI/bge-large-en-v1.5 · Vanilla JS · Leaflet.js · D3.js
 
 ---
 
@@ -85,13 +98,13 @@ python3 app.py
 
 Open [http://127.0.0.1:5001](http://127.0.0.1:5001).
 
-The SQLite database (`coolattin.db`) is created and schema-migrated automatically on first run. It is empty until populated by an ingest job (see below).
+The SQLite database (`coolattin.db`) is created and schema-migrated automatically on first run. It is pre-populated in the repository snapshot.
 
 ---
 
 ## Data ingestion
 
-The application fetches live data from the VRTI Knowledge Graph. After first run, populate the database:
+The application fetches live data from the VRTI Knowledge Graph. To re-populate from scratch:
 
 ```bash
 python3 -c "
@@ -108,6 +121,18 @@ Or trigger a refresh via the API while the server is running:
 ```
 GET /api/census/refresh
 ```
+
+### GraphRAG graph build
+
+The Ask pipeline uses an in-process property graph for GraphRAG enrichment. Build it once after populating the database:
+
+```bash
+python3 scripts/build_graph.py
+# Produces: 49,081 nodes · 64,342 edges · 28,078 BGE-embedded
+# Runtime: ~3–5 min (downloads BGE model ~1.3 GB on first run)
+```
+
+The graph is stored in `graph_nodes` and `graph_edges` SQLite tables and loaded into a NetworkX graph in-process at startup.
 
 ---
 
@@ -126,15 +151,20 @@ OPENROUTER_API_KEY=sk-or-...
 OPENROUTER_MODEL=openai/gpt-oss-20b:free
 ```
 
+### Claude (highest-quality synthesis)
+
+```env
+ANTHROPIC_API_KEY=sk-ant-...
+ASK_SYNTHESIS_MODEL=claude
+LLM_ALLOW_PAID=true
+```
+
 ### Ollama (local, offline fallback)
 
 ```bash
-# Install Ollama, then pull a model
 ollama serve
 ollama pull llama3.1:8b
 ```
-
-Add to `.env.local`:
 
 ```env
 ASK_LLM_PROVIDER=ollama
@@ -143,19 +173,39 @@ OLLAMA_MODEL=llama3.1:8b
 
 ### How the Ask pipeline works
 
-The new orchestrated pipeline (`ASK_USE_NEW_PIPELINE=true`, on by default since June 2026) has seven phases:
+The orchestrated pipeline (`ASK_USE_NEW_PIPELINE=true`, default) runs seven phases plus an in-process GraphRAG enrichment layer:
 
-1. **Intent routing** (`intent_router.py`) — classifies each question as `ANALYTICAL`, `RELATIONAL`, `COMPARATIVE`, or `FALLBACK` before routing.
-2. **Hybrid embedding retrieval / fast lane** (`embedding_index.py`) — TF-IDF + optional dense vector retrieval over templates, approved query memory, and corpus chunks; a high-confidence match short-circuits the remaining phases entirely.
-3. **Semantic layer** (`semantic_layer.py`) — maps analytical questions to a slot-fill struct and compiles deterministic SQL (and an equivalent SPARQL) without any LLM call.
-4. **Subgraph engine** (`subgraph_engine.py`) — for relational / hierarchy / heritage questions, traverses the VRTI and local GraphDB knowledge graphs directly (no SQL needed).
-5. **LLM SQL generation** — invoked only when no earlier phase produced a valid query; uses the annotated schema, live row counts, sampled categories, and approved past queries as context.
-6. **Identity resolution** (`identity_resolver.py`) — disambiguates repeated names using Jaro-Winkler similarity, phonetic blocking (Metaphone), and geographic/temporal scoring; surfaces "3 distinct individuals called John Murphy" instead of silently picking one.
-7. **Multi-model synthesis** — aggregates SQL results, KG results (VRTI + GraphDB), and retrieved chunks into a structured answer with provenance, discrepancy detection, and optional PDF export.
+**Pre-flight (no LLM, < 5 ms):**
+
+1. **Townland resolution** — fuzzy-matches the question to a canonical townland name using rapidfuzz (threshold 80) and the alias catalogue.
+2. **Question analysis** — extracts year, surname, radius; classifies `primary_intent`, `output_mode`, `scope` via regex; no LLM.
+
+**Four fast lanes (first match short-circuits all routing):**
+
+| Lane | Mechanism | Threshold |
+|---|---|---|
+| Rule-fill | 22-metric keyword match → deterministic SQL | confidence ≥ 0.80 |
+| Verified template | 83 pre-verified SQL templates scored by required/optional keywords | template in verified set |
+| Memory reuse | Approved question→SQL pairs from thumbs-up feedback | token_sort_ratio + cosine ≥ 0.55 |
+| Embedding fast lane | TF-IDF + RRF over templates + memory | cosine ≥ 0.68 AND all required keywords present |
+
+**Seven pipeline phases:**
+
+1. **Identity resolution** (`identity_resolver.py`) — resolves townland + person mentions to surrogate IDs; Jaro-Winkler + Metaphone phonetic blocking + geo/temporal scoring.
+2. **Semantic layer** (`semantic_layer.py`) — 22-metric slot-fill compiler; deterministic SQL + equivalent SPARQL (no LLM on fast path).
+3. **Subgraph engine** (`subgraph_engine.py`) — VRTI multi-hop SPARQL + GraphDB k=2 neighbourhood for RELATIONAL/HERITAGE questions.
+4. **Embedding retrieval** (`embedding_index.py`) — TF-IDF unigram+bigram cosine + RRF across templates, memory, and corpus chunks.
+5. **Intent routing** (`intent_router.py`) — classifies as ANALYTICAL / RELATIONAL / COMPARATIVE / FALLBACK (priority order).
+6. **Fusion** — cross-source discrepancy detection (SQLite vs GraphDB numeric results).
+7. **Multi-model synthesis** — LLM chain **Claude → Grok → OpenRouter → Ollama**; aggregates SQL + KG results into provenance-annotated answer with optional PDF export.
+
+**GraphRAG enrichment (parallel, non-blocking):**
+
+After SQL execution, the in-process property graph (`graphrag.py`) retrieves a k-hop subgraph around the resolved entity using BGE-large vector seeding. The linearised subgraph provides qualitative place/people context to the synthesis LLM. Graph enrichment never modifies SQL aggregates — it is additive only (validated: numeric delta = 0 across all 9 R-series evaluation cases).
 
 All SQL (template or LLM-generated) is validated as read-only before execution. Approved answers are stored in query memory and reused on semantically similar future questions. Grouped or statistical results can be rendered as a chart.
 
-**Workhouse entity resolution** is a separate subsystem (`workhouse_entity_resolution.py` + `entity_resolution/` package) that links workhouse admission records to unified estate records using deterministic normalisation, fuzzy blocking, and scored confidence bands (High / Medium / Low). It does not use the Ask pipeline or pgvector.
+**Workhouse entity resolution** is a separate subsystem (`workhouse_entity_resolution.py` + `entity_resolution/` package) that links workhouse admission records to unified estate records using deterministic normalisation, phonetic blocking, and 7-signal scored confidence bands (CONFIRMED ≥ 0.75 / POSSIBLE ≥ 0.50 / WEAK < 0.50). It does not use the Ask pipeline, pgvector, or the LLM.
 
 ---
 
@@ -167,10 +217,14 @@ See [`.env.example`](.env.example) for the full documented list. Key variables:
 |---|---|---|
 | `SECRET_KEY` | `dev-secret-...` | Flask session secret — change in production |
 | `FLASK_ENV` | `development` | `development` or `production` |
-| `DATABASE_PATH` | `coolattin.db` in repo root | SQLite file path; set on Azure to `/home/site/data/coolattin.db` |
+| `DATABASE_PATH` | `coolattin.db` in repo root | SQLite file path; set to `/home/site/data/coolattin.db` on Azure |
 | `ASK_LLM_PROVIDER` | `auto` | `auto` / `openrouter` / `ollama` / `none` |
 | `OPENROUTER_API_KEY` | — | Required for cloud LLM |
 | `OPENROUTER_MODEL` | `openai/gpt-oss-20b:free` | OpenRouter model ID |
+| `ANTHROPIC_API_KEY` | — | Required for Claude synthesis (`ASK_SYNTHESIS_MODEL=claude`) |
+| `XAI_API_KEY` | — | Grok (xAI) API key — second in multi-model synthesis chain |
+| `ASK_SYNTHESIS_MODEL` | `openrouter` | Synthesis model: `claude` / `openrouter` / `ollama` |
+| `LLM_ALLOW_PAID` | `false` | Allow paid API calls (`true` required for Claude/Grok) |
 | `ASK_ALLOW_HEURISTIC_FALLBACK` | `0` | `0` = fail safely; `1` = allow heuristic SQL guessing |
 | `OLLAMA_MODEL` | — | Ollama model name |
 | `VRTI_REQUEST_TIMEOUT` | `30` | SPARQL endpoint timeout (seconds) |
@@ -178,9 +232,13 @@ See [`.env.example`](.env.example) for the full documented list. Key variables:
 | `EMBEDDING_PROVIDER` | `local` | `local` (BAAI/bge-large-en-v1.5) / `cohere` / `voyage` |
 | `COHERE_API_KEY` | — | Required when `EMBEDDING_PROVIDER=cohere` |
 | `DATABASE_URL` | — | PostgreSQL connection string; enables pgvector backend for Ask retrieval |
-| `GRAPHDB_ENABLED` | `true` | `true` = query local GraphDB alongside SQLite and VRTI |
+| `GRAPHDB_ENABLED` | `true` | Query local GraphDB alongside SQLite and VRTI |
 | `GRAPHDB_SPARQL_ENDPOINT` | `http://localhost:7200/...` | GraphDB SPARQL endpoint |
 | `GRAPHDB_REQUEST_TIMEOUT` | `15` | GraphDB query timeout (seconds) |
+| `GRAPHRAG_ENABLED` | `true` | In-process property-graph enrichment |
+| `GRAPHRAG_VECTOR_TOP_K` | `8` | Seed nodes per question (BGE vector search) |
+| `GRAPHRAG_K_HOPS` | `2` | BFS traversal depth from seed nodes |
+| `GRAPHRAG_MAX_NODES` | `120` | Max subgraph size per query |
 
 ---
 
@@ -193,6 +251,7 @@ See [`.env.example`](.env.example) for the full documented list. Key variables:
 | `GET` | `/analytics` | Analytics dashboards |
 | `GET` | `/ask` | LLM Q&A page |
 | `GET` | `/heritage` | Heritage monuments page |
+| `GET` | `/kg-explore` | KG explore: force graph + SQL-vs-SPARQL comparison |
 | `POST` | `/api/ask/query` | SSE-streamed Q&A pipeline |
 | `GET` | `/api/ask/llm-status` | LLM provider health check |
 | `POST` | `/api/ask/feedback` | Save thumbs up/down feedback and approved query memory |
@@ -203,7 +262,30 @@ See [`.env.example`](.env.example) for the full documented list. Key variables:
 | `GET` | `/api/townlands/list` | Townland list |
 | `GET` | `/api/map/config` | Map configuration + centroids |
 | `GET` | `/api/unified/analytics` | Analytics module results |
+| `GET` | `/api/unified/records` | Search unified person records |
 | `GET` | `/api/exports/census` | Download latest census Excel |
+| `GET` | `/api/kg/graph` | D3 force-graph data (152 townland nodes) |
+| `GET` | `/api/kg/scenarios` | SQL-vs-SPARQL comparison scenarios |
+| `POST` | `/api/kg/compare` | Execute SQL + SPARQL and return side-by-side results |
+
+---
+
+## Evaluation results (v1.0-demo-freeze)
+
+Formal evaluation run on 2026-06-10 against 75 competency questions:
+
+| Metric | Value |
+|---|---|
+| Routing accuracy | 89.3% |
+| Aggregation correctness | 100.0% |
+| SQL execution success | 100.0% |
+| Template hit rate | 100.0% |
+| LLM calls required | 0 (all answers deterministic) |
+| p50 latency | 372 ms |
+| p90 latency | 2,095 ms |
+| GraphRAG numeric delta | 0/9 (enrichment never modifies aggregates) |
+
+Full results: [`docs/11_demo_freeze.md`](docs/11_demo_freeze.md) · [`eval_results/`](eval_results/)
 
 ---
 
@@ -230,27 +312,24 @@ This project includes [Claude Code](https://claude.ai/code) configuration in `.c
 | Source | Description |
 |---|---|
 | [VRTI Knowledge Graph](https://virtualtreasury.ie/) | Townland metadata, census records 1841–1891 |
-| Coolattin Estate GeoJSON | Townland boundaries, estate survey data 1827–1868 |
-| [National Monuments Service](https://www.archaeology.ie/) | Heritage monuments open data |
-| `data/seed/` | Canonical townland reference and name aliases |
+| Coolattin Estate GeoJSON | 152 townland boundaries with estate survey data 1827–1868 |
+| `unified_processed.csv` | 13,707 person-level records (tenants, emigrants, evictees) |
+| [National Monuments Service](https://www.archaeology.ie/) | Heritage monuments open data (ring forts, holy wells) |
+| Workhouse admission records | Fuzzy-linked via ER pipeline (140 confirmed links) |
+| `data/seed/` | Canonical townland reference, name aliases, community summaries |
 
 ---
 
 ## Deploy to Azure App Service
 
-This app can run on **Azure App Service (Linux)**. The current architecture uses **SQLite**, so the safest production setup is:
-
-- one App Service instance only
-- a persistent SQLite path such as `/home/site/data/coolattin.db`
-- `Always On` enabled if you use a paid plan
-
-If you later need scale-out or multi-instance hosting, move the app database to PostgreSQL instead of SQLite.
+This app runs on **Azure App Service (Linux)**. The current architecture uses **SQLite** with WAL mode, so the safest production setup is one App Service instance with a persistent SQLite path.
 
 ### Files already prepared for Azure
 
-- `requirements.txt` now includes `gunicorn`
-- `startup.txt` contains the Gunicorn startup command used by App Service
-- `DATABASE_PATH` can be provided through environment variables
+- `requirements.txt` includes `gunicorn`
+- `startup.txt` contains the Gunicorn startup command
+- `DATABASE_PATH` can be set through environment variables
+- `.github/workflows/` contains the CI/CD pipeline
 
 ### From scratch with Azure CLI
 
@@ -267,32 +346,22 @@ az account set --subscription "<your-subscription-name-or-id>"
 RESOURCE_GROUP="coolattin-rg"
 PLAN_NAME="coolattin-plan"
 APP_NAME="coolattin-archive-app"
-LOCATION="westeurope"
+LOCATION="italynorth"
 RUNTIME="PYTHON:3.12"
 ```
 
-3. Create the resource group:
+3. Create the resource group, App Service plan, and web app:
 
 ```bash
 az group create --name "$RESOURCE_GROUP" --location "$LOCATION"
-```
 
-4. Create a Linux App Service plan.
-
-`B1` is a practical minimum because it supports `Always On`. Free tiers are fine for experiments, but less reliable for LLM-backed requests.
-
-```bash
 az appservice plan create \
   --name "$PLAN_NAME" \
   --resource-group "$RESOURCE_GROUP" \
   --location "$LOCATION" \
   --sku B1 \
   --is-linux
-```
 
-5. Create the web app:
-
-```bash
 az webapp create \
   --resource-group "$RESOURCE_GROUP" \
   --plan "$PLAN_NAME" \
@@ -300,7 +369,7 @@ az webapp create \
   --runtime "$RUNTIME"
 ```
 
-6. Configure the startup command:
+4. Configure the startup command:
 
 ```bash
 az webapp config set \
@@ -309,7 +378,7 @@ az webapp config set \
   --startup-file startup.txt
 ```
 
-7. Configure required app settings:
+5. Configure required app settings:
 
 ```bash
 az webapp config appsettings set \
@@ -322,16 +391,21 @@ az webapp config appsettings set \
     ASK_LLM_PROVIDER=openrouter \
     OPENROUTER_API_KEY="<your-openrouter-key>" \
     OPENROUTER_MODEL="openai/gpt-oss-20b:free" \
+    ANTHROPIC_API_KEY="<your-anthropic-key>" \
+    ASK_SYNTHESIS_MODEL=claude \
+    LLM_ALLOW_PAID=true \
     ASK_ALLOW_HEURISTIC_FALLBACK=0 \
-    OPENROUTER_SITE_URL="https://$APP_NAME.azurewebsites.net" \
-    OPENROUTER_APP_TITLE="Coolattin Archive Ask" \
     GRAPHDB_ENABLED=true \
     GRAPHDB_SPARQL_ENDPOINT="http://51.120.71.162:7200/repositories/coolattin" \
     GRAPHDB_REQUEST_TIMEOUT=15 \
+    GRAPHRAG_ENABLED=true \
+    GRAPHRAG_VECTOR_TOP_K=8 \
+    GRAPHRAG_K_HOPS=2 \
+    GRAPHRAG_MAX_NODES=120 \
     DATABASE_PATH="/home/site/data/coolattin.db"
 ```
 
-8. Turn on Always On for paid plans:
+6. Turn on Always On:
 
 ```bash
 az webapp config set \
@@ -340,46 +414,26 @@ az webapp config set \
   --always-on true
 ```
 
-9. Build a deploy zip from your project root.
-
-Do not include `venv`, `.venv`, `.git`, or large local-only folders.
+7. Build and deploy:
 
 ```bash
-zip -r coolattin-app.zip . -x "venv/*" ".venv/*" ".git/*" ".github/*" "__pycache__/*" "*.pyc" ".env.local" "coolattin-app.zip"
-```
+zip -r coolattin-app.zip . -x "venv/*" ".venv/*" ".git/*" ".github/*" \
+  "__pycache__/*" "*.pyc" ".env.local" "coolattin-app.zip"
 
-10. Deploy the zip package:
-
-```bash
 az webapp deploy \
   --resource-group "$RESOURCE_GROUP" \
   --name "$APP_NAME" \
   --src-path coolattin-app.zip
 ```
 
-11. Open the site:
+8. After first deployment, run the ingest job via SSH console and then build the graph:
 
 ```bash
-echo "https://$APP_NAME.azurewebsites.net"
-```
-
-### First-time production data setup
-
-After the first deployment, you need to populate the SQLite database on Azure. You can do that by opening the SSH console in App Service and running the ingest job:
-
-```bash
-python3 -c "
-from create_app import create_app
-app = create_app()
-with app.app_context():
-    from backend.jobs.full_ingest import run_full_ingest
-    run_full_ingest()
-"
+python3 -m backend.jobs.full_ingest
+python3 scripts/build_graph.py
 ```
 
 ### Logs and troubleshooting
-
-Stream logs with:
 
 ```bash
 az webapp log tail \
@@ -388,29 +442,18 @@ az webapp log tail \
 ```
 
 If the app starts but dependencies are missing, confirm that:
-
 - `SCM_DO_BUILD_DURING_DEPLOYMENT=1` is set
 - `requirements.txt` includes every runtime dependency
 - `startup.txt` is configured as the startup file
 - `DATABASE_PATH` points to `/home/site/...` rather than the repo root
-
-### Optional: GitHub Actions continuous deployment
-
-Once the app exists, you can wire GitHub Actions to it:
-
-```bash
-az webapp deployment github-actions add \
-  --repo "<github-user>/<github-repo>" \
-  --resource-group "$RESOURCE_GROUP" \
-  --branch main \
-  --name "$APP_NAME" \
-  --login-with-github
-```
-
-That creates a workflow in `.github/workflows/` and adds the publish profile secret to the repo.
+- The BGE model cache directory has enough disk space (model: ~1.3 GB)
 
 ---
 
 ## Dissertation context
 
-This application was developed as part of a Masters dissertation examining digital humanities approaches to Irish Famine-era estate records. The Coolattin Estate (owned by the Fitzwilliam family) is notable for its large-scale assisted emigration programme during the Famine years 1847–1856.
+This application was developed as part of a Masters dissertation examining digital humanities approaches to Irish Famine-era estate records at **Trinity College Dublin** (MSc Computer Science — Interactive Digital Media).
+
+**Candidate:** Pranjal Yadav · **Supervisors:** Dr Ciarán Wallace (VRTI) · Prof Declan O'Sullivan (CS) · **Submission:** 3 August 2026
+
+The Coolattin Estate (owned by the Fitzwilliam family) is notable for its large-scale assisted emigration programme during the Famine years 1847–1856. This system is the first computationally integrated interface for the Coolattin records, bringing tenancy, emigration, eviction, census, and heritage landscape data into a unified natural-language-queryable interface.

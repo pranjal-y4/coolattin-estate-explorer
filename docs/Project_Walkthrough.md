@@ -270,13 +270,15 @@ Every modern web project is expected to use React, Vue, or similar. We chose not
 
 **Trade-off:** SQLite doesn't support concurrent writes well. If this were a production application with many simultaneous users, it would be a problem. For a dissertation demo with a handful of concurrent users, it's completely fine.
 
-### 2. Verified SQL templates vs. full LLM generation
+### 2. Intent-first routing vs. full LLM generation
 
-**Decision:** Templates first, LLM second.
+**Decision:** Deterministic paths first, LLM last.
 
 **Why:** Historical data demands accuracy. A 5% LLM error rate is acceptable in a chatbot. It is not acceptable when someone is researching their great-great-grandmother's eviction record.
 
-**Trade-off:** Writing 100+ templates is tedious upfront work. But each template is a tested, verified query that will always return the right answer. The LLM is only invoked when no template matches — roughly 30% of questions.
+The pipeline checks four fast lanes before ever touching the LLM: rule-based slot-fill against a 22-metric registry (0 LLM calls for most analytical questions), verified template match (83 pre-written SQL templates), approved memory reuse (previously correct answers), and embedding retrieval (TF-IDF + RRF cosine threshold). Only when all four miss does intent classification run, routing the question to the semantic layer (ANALYTICAL), subgraph engine (RELATIONAL), or LLM SQL generation (FALLBACK).
+
+**Trade-off:** The deterministic layers require upfront effort to specify metrics and templates. But each compiled query is auditable. The LLM is only invoked for the FALLBACK lane — questions that don't match any known pattern.
 
 ### 3. Hand-written PDF generation vs. a library
 
@@ -314,15 +316,15 @@ Every modern web project is expected to use React, Vue, or similar. We chose not
 
 A researcher visits the site and asks: *"What happened to the population of Kilcommon between 1841 and 1861?"*
 
-1. **Browser** sends the question to the Flask backend.
-2. **Template matching** finds a match: `population_change_range` — a pre-written SQL query for population comparison across years.
-3. **Townland resolution** finds "KILCOMMON" in the canonical list. Exact match.
-4. **SQL query** runs against the local SQLite database. Returns population figures for 1841, 1851, and 1861.
-5. **Result streams back** — the SQL and raw numbers appear in the browser immediately.
-6. **LLM rewrite** — "The population of Kilcommon fell from 412 in 1841 to 198 in 1851 — a decline of 52% during the Famine decade — and had recovered only slightly to 231 by 1861."
-7. **VRTI enrichment** — adds that Kilcommon is in the civil parish of Kilcommon, barony of Shillelagh.
-8. **Chart suggestion** — a line chart is generated showing the decline.
-9. **PDF export** — the full report is packaged and available for download.
+1. **Browser** sends the question to the Flask backend via `POST /api/ask/query`.
+2. **Pre-flight** — townland resolution finds "KILCOMMON" (exact match); question analysis extracts `primary_intent: population`, `output_mode: trend`, `scope: townland`.
+3. **Fast Lane 1** — rule-based slot-fill: metric `population_change` keywords match; confidence 0.95 ≥ 0.80. SQL compiled from the 22-metric registry. **No LLM called.**
+4. **SQL query** runs against the local SQLite database via census_record JOIN townland. Returns population figures for 1841, 1851, and 1861.
+5. **SSE events stream** — each pipeline stage emits a progress event; the browser renders a live progress bar.
+6. **VRTI enrichment** — adds that Kilcommon is in the civil parish of Kilcommon, barony of Shillelagh.
+7. **LLM synthesis** — "The population of Kilcommon fell from 412 in 1841 to 198 in 1851 — a decline of 52% during the Famine decade — and had recovered only slightly to 231 by 1861."
+8. **Chart spec** — a line chart is assembled for Chart.js with year labels and population values.
+9. **PDF export** — the full report is packaged (question + SQL + table + VRTI context) and available for download.
 
 The researcher saw the first results within 1 second, and the full answer within 8 seconds. Every number is traceable. The SQL query is displayed. The data sources are credited.
 

@@ -656,81 +656,90 @@ Each feature layer is independently togglable via Leaflet's layer control. Click
 `POST /api/ask/query` (Server-Sent Events stream)
 
 ### What It Does
-The Ask page accepts a free-text historical research question in English, processes it through a multi-stage pipeline, and returns a precise, data-backed answer. The pipeline combines rule-based SQL template matching (fast path, no LLM required) with LLM-generated SQL (slow path), VRTI and GraphDB enrichment, natural-language rewriting, and PDF report generation.
+The Ask page accepts a free-text historical research question in English, processes it through a seven-phase orchestrated pipeline, and returns a precise, data-backed answer. The pipeline uses intent-first routing to select the most appropriate retrieval strategy: deterministic slot-fill compilation (ANALYTICAL), SPARQL graph traversal (RELATIONAL), or LLM-generated SQL (FALLBACK). The LLM is only invoked when deterministic paths have been exhausted.
+
+**Entry point:** `_orchestrated_pipeline_stream()` in `ask_service.py` (enabled by `ASK_USE_NEW_PIPELINE=true`, default since June 2026)
 
 ### Pipeline Architecture
 
-The pipeline runs inside `ask_service.answer_question_stream()` and yields SSE events at each stage so the user sees live progress:
-
 ```
-Stage 1: initializing
-Stage 2: loading_context      — seed unified_record + heritage tables
-Stage 3: running_template_match — keyword-scored SQL template search
-Stage 4: townland_resolution   — exact → fuzzy → "did you mean?"
-Stage 5: [contacting_llm]      — if no template matched
-Stage 6: [framing_query]       — LLM generating SQL
-Stage 7: querying_database     — execute SQL against SQLite
-Stage 8: querying_vrti_graph   — VRTI SPARQL enrichment (parallel)
-Stage 9: [querying_graphdb]    — GraphDB SPARQL query (if enabled)
-Stage 10: preparing_output     — LLM rewrite + GraphDB comparison
-Stage 11: complete             — final result JSON
-```
-
-Each stage emits a JSON-encoded SSE event:
-```
-data: {"type": "stage_update", "stage": "querying_database", "detail": "Executing SQL..."}
-
-data: {"type": "complete", "answer": "...", "sql": "SELECT...", "columns": [...], ...}
+Stage: resolving_identity    — Phase 1: townland fuzzy match + person disambiguation
+Stage: slot_filling          — Phase 2/FL1: semantic layer rule-based or LLM slot-fill
+Stage: schema_sql            — Phase 2: deterministic SQL compiler
+Stage: classifying_intent    — Phase 5: ANALYTICAL / RELATIONAL / COMPARATIVE / FALLBACK
+Stage: querying_subgraph     — Phase 3: VRTI SPARQL + GraphDB k-hop traversal (RELATIONAL)
+Stage: embedding_retrieval   — Phase 4: TF-IDF + RRF fast-lane search
+Stage: contacting_llm        — FALLBACK: LLM free-form SQL generation
+Stage: framing_query         — Safety guardrail (FORBIDDEN_SQL regex)
+Stage: querying_database     — SQLite execution with haversine distance_km()
+Stage: querying_vrti_graph   — VRTI SPARQL enrichment (1-hour TTL cache)
+Stage: querying_graphdb      — GraphDB SPARQL enrichment (co: ontology)
+Stage: querying_fusion       — Phase 6: discrepancy detection between sources
+Stage: synthesizing_answer   — Phase 7: LLM rewrite into historically-contextualised prose
+Stage: preparing_output      — PDF generation + chart spec assembly
 ```
 
-### Stage 3: Template Matching
+SSE event format (each stage):
+```json
+{"type": "progress", "stage": "querying_database", "status": "completed", "detail": "47 rows returned", "duration_ms": 12}
+```
 
-The fast path avoids LLM calls entirely for common research questions. `_match_and_build_template()` ranks 100+ pre-verified SQL templates using `difflib.SequenceMatcher` keyword scoring.
+Final event (`type: "result"`) includes: `answer`, `llm_rephrased_answer`, `columns`, `rows`, `sql`, `chart`, `vrti_context`, `fusion`, `discrepancies`, `pdf_url`, `query_provenance`, `llm_meta`.
 
-**Example templates:**
-- "How many people emigrated?" → `SELECT COUNT(*) … WHERE has_emigration_record=1`
-- "What townlands had the most evictions?" → `SELECT townland, COUNT(*) … GROUP BY townland ORDER BY`
-- "List people with surname [X]" → `SELECT … WHERE UPPER(surname)=UPPER(?)`
-- "What was the population of [townland] in [year]?" → join on census_record
+### Four Fast Lanes (before intent routing)
 
-If template confidence exceeds threshold, the answer is returned instantly — typical latency under 100ms.
+The pipeline checks four short-circuit conditions before running full intent classification. First hit wins:
 
-**Verified Analysis Templates** are a separate set of 15 high-confidence research queries for academic analysis:
-- `tenant_land_gender_average` — Average land holding by gender
-- `widows_with_children_proportion` — Widows as proportion of emigrants
-- `emigration_population_townland_trend` — Cross-join emigration with census population
-- `clearances_eviction_comparison` — Clearances vs eviction record correlation
-- Each includes a `chart_hint` (`bar`, `line`, `doughnut`) for frontend visualisation.
+1. **Rule-based slot-fill** (`semantic_layer.try_rule_based_fill`): 22 metrics, keyword matching, confidence scoring. If confidence ≥ 0.80 → compile SQL directly. **0 LLM calls, < 5 ms.**
+2. **Verified template** (`_try_verified_analysis`): 83 templates scored by required_keywords + optional_keywords. Match in VERIFIED_ANALYSIS_TEMPLATE_IDS → SQL, confidence 1.0.
+3. **Direct memory reuse**: approved `ask_query_memory` entries; `token_sort_ratio + cosine ≥ 0.55`.
+4. **Embedding fast lane** (`embedding_index.py`): TF-IDF unigram+bigram + RRF; cosine ≥ 0.68 AND all required_keywords present.
 
-### Stage 4: Townland Resolution
+### Intent Classification (Phase 5)
 
-A three-step resolution process for townland references in the question:
-1. **Exact match:** `UPPER(name) = UPPER(input)` in townland table
-2. **Fuzzy match:** `difflib.SequenceMatcher` ratio ≥ 0.72
-3. **Alias lookup:** `townland_aliases.json` maps variant spellings to canonical names
+`classify_intent()` in `intent_router.py` uses keyword-priority rules:
+- **COMPARATIVE** → ANALYTICAL (SQL) + RELATIONAL (SPARQL) in parallel
+- **RELATIONAL** → subgraph engine (VRTI SPARQL + GraphDB); place/heritage questions
+- **ANALYTICAL** → semantic layer slot-fill → deterministic SQL compiler
+- **FALLBACK** → LLM free-form SQL generation
 
-If confidence is below 0.85, a "did you mean?" suggestion is added to the result. If no townland is found but the question seems townland-specific, alternative suggestions are returned.
+Core Rule 1: heritage/sensemaking keywords alone do not route to RELATIONAL if the question asks for a count/aggregate — stays on ANALYTICAL.
 
-### Stage 5–6: LLM SQL Generation
+### Semantic Layer — ANALYTICAL Lane (Phase 2)
 
-When no template matches, `_generate_sql_with_llm()` is called. The prompt is built by `_build_sql_prompt()` and includes:
+`semantic_layer.py` implements a 22-metric registry. Each metric defines:
+- SQL aggregate expression (`COUNT(DISTINCT record_id)`, `SUM()`, `AVG()`)
+- Dimension selects/group-bys for `GROUP BY` columns
+- Filter templates with `{val}` placeholders
+- SPARQL equivalent (`sparql_agg`) for GraphDB comparison
 
-- Live SQLite schema with row counts and sampled categorical values (`_live_sqlite_schema_prompt_block()`)
-- Previously approved query examples from `ask_query_memory` (semantic similarity ranking)
-- Mandatory rules (enforced via prompt engineering):
-  - `COUNT(DISTINCT record_id)` for person counts
-  - `NEVER use GROUP_CONCAT` — return one row per person
-  - Person lists: `LIMIT 50`
-  - Townland filtering: `townland_norm='NAME'` or `UPPER(t.name)='NAME'`
-  - No hallucinated column names
+Two slot-fill paths:
+- **Rule-based** (confidence ≥ 0.80): keyword matching → `SlotFill` struct → `compile_sql()` deterministic compiler
+- **LLM slot-fill** (confidence ≥ 0.70): LLM returns JSON `{metric, dimensions, filters, group_mode, confidence}` → `compile_sql()`
 
-The LLM generation uses a 3-attempt retry loop with semantic repair on failure.
+`compile_sparql(slot_fill)` generates GraphDB SPARQL from the same SlotFill for RQ6 SQL-vs-SPARQL comparison.
+
+### Subgraph Engine — RELATIONAL Lane (Phase 3)
+
+`subgraph_engine.retrieve_subgraph(question, entity_uri, k=2)`:
+- VRTI: townland→parish→barony→county hierarchy; siblings; external links
+- GraphDB: `get_entity_neighborhood(name, k=2, max_nodes=40)` via co: ontology
+- Returns qualitative context only; exact counts always come from SQL
+
+### FALLBACK Lane — LLM SQL Generation
+
+When no fast lane fires and intent is FALLBACK, `_generate_sql()` is called:
+
+- Annotated schema: tables, columns, row counts, sampled categoricals, join rules
+- Approved examples: up to 3 similar question→SQL pairs from `ask_query_memory`
+- Safety: `FORBIDDEN_SQL` regex blocks INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/…
+- On execution error: 1 LLM repair attempt
 
 **LLM Provider Selection (`_llm_generate()`):**
 ```
 ASK_LLM_PROVIDER=auto:
   1. Check OPENROUTER_API_KEY → try OpenRouter (primary)
-  2. If OpenRouter fails → try next free model from _OPENROUTER_FREE_MODELS list (14 models)
+  2. If OpenRouter fails → try next free model from _OPENROUTER_FREE_MODELS list
   3. If all OpenRouter models fail → fall back to Ollama
   4. If Ollama unreachable → return error
 ```

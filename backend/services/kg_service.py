@@ -1,15 +1,20 @@
 """
 backend/services/kg_service.py
 
-Knowledge Graph data service — D8 RDF/KG Comparative Prototype.
+Knowledge Graph data service.
 
-Provides two orthogonal views of the same data:
-  1. Graph topology  — nodes + edges sampled from SQLite for visual exploration
-  2. SPARQL vs SQL   — side-by-side query comparison using rdflib on the
-                       Coolattin Turtle file vs the local SQLite database
+The knowledge graph now represents the pure geographic hierarchy of the
+Coolattin estate area:
 
-The TTL file path is resolved via config (BASE_DIR / data / coolattin_sample.ttl).
-rdflib is used in-process so no GraphDB instance is required for this page.
+  County → Barony → CivilParish → Townland
+
+Each townland node carries its Gaelic name, geographic coordinates, and
+metadata (electoral division, placename theme) sourced from the `townland`
+table.  This geographic KG enriches the Ask page's townland context and
+powers the KG Explore visualisation.
+
+The comparison-scenario helpers are retained for the technical details
+section of the Ask page.
 """
 from __future__ import annotations
 
@@ -258,257 +263,177 @@ def run_sql(sql: str, max_rows: int = 500) -> tuple[list[str], list[dict], str |
 # Graph topology builder                                              #
 # ------------------------------------------------------------------ #
 
-def build_graph(limit: int = _MAX_PERSONS) -> dict:
+def build_graph(limit: int = _MAX_PERSONS) -> dict:  # noqa: ARG001
     """
-    Build a graph dict {nodes, edges, meta} suitable for D3.js force simulation.
+    Build a geographic hierarchy graph {nodes, edges, meta} for D3.js.
 
-    Serves the processed property graph from graph_nodes/graph_edges when available
-    (populated by scripts/build_graph.py); falls back to the dynamic SQLite build.
+    Structure: County → Barony → CivilParish → Townland (County Wicklow only)
+    Each townland carries its Gaelic name, coordinates, and metadata.
     """
     global _GRAPH_CACHE
     with _GRAPH_CACHE_LOCK:
         if _GRAPH_CACHE is not None:
             return _GRAPH_CACHE
-
-        result = _build_from_processed_graph() or _build_graph_inner(limit)
+        result = _build_geographic_graph()
         _GRAPH_CACHE = result
         return result
 
 
-def _build_from_processed_graph() -> dict | None:
-    """Serve the processed knowledge graph from graph_nodes/graph_edges (if populated)."""
-    import json as _json
-    from extensions import get_db_conn
-    conn = get_db_conn()
-    try:
-        node_count = conn.execute("SELECT COUNT(*) FROM graph_nodes").fetchone()[0]
-        if not node_count:
-            return None
-
-        _NODE_COLORS = {
-            "Townland": "#15803d",
-            "CivilParish": "#7c3aed",
-            "Barony": "#b45309",
-            "County": "#0369a1",
-            "Person": "#334155",
-            "EventHub": "#dc2626",
-        }
-        nodes: list[dict] = []
-        edges: list[dict] = []
-        node_ids: set[str] = set()
-
-        for r in conn.execute(
-            "SELECT node_id, label, name, props, community FROM graph_nodes LIMIT 1500"
-        ).fetchall():
-            nid = r["node_id"]
-            if nid in node_ids:
-                continue
-            node_ids.add(nid)
-            props = _json.loads(r["props"] or "{}")
-            color = _NODE_COLORS.get(r["label"], "#64748b")
-            size = 18 if r["label"] in ("CivilParish", "Barony", "County") else (
-                12 if r["label"] == "Townland" else 8
-            )
-            nodes.append({
-                "id": nid, "type": r["label"], "label": r["name"] or nid,
-                "color": color, "size": size, "community": r["community"],
-                **props,
-            })
-
-        for r in conn.execute(
-            "SELECT src, dst, rel_type, props FROM graph_edges LIMIT 3000"
-        ).fetchall():
-            if r["src"] not in node_ids or r["dst"] not in node_ids:
-                continue
-            props = _json.loads(r["props"] or "{}")
-            edges.append({
-                "source": r["src"], "target": r["dst"],
-                "label": r["rel_type"], "type": r["rel_type"],
-                **props,
-            })
-
-        meta = {
-            "node_count": len(nodes),
-            "edge_count": len(edges),
-            "source": "processed_graph",
-            "townland_count": sum(1 for n in nodes if n["type"] == "Townland"),
-            "parish_count": sum(1 for n in nodes if n["type"] == "CivilParish"),
-        }
-        return {"nodes": nodes, "edges": edges, "meta": meta}
-    except Exception:
-        return None
-    finally:
-        conn.close()
+def reset_graph_cache() -> None:
+    """Force the geographic graph to be rebuilt on next request."""
+    global _GRAPH_CACHE
+    with _GRAPH_CACHE_LOCK:
+        _GRAPH_CACHE = None
 
 
-def _build_graph_inner(limit: int) -> dict:  # noqa: ARG001 — limit kept for API compat
+def _build_geographic_graph() -> dict:
+    """Build the pure geographic hierarchy from the townland reference table."""
     from extensions import get_db_conn
 
     nodes: list[dict] = []
     edges: list[dict] = []
     node_ids: set[str] = set()
 
-    def add_node(nid: str, **kwargs):
+    def add_node(nid: str, **kwargs) -> None:
         if nid not in node_ids:
             node_ids.add(nid)
             nodes.append({"id": nid, **kwargs})
 
-    # Fixed hub nodes
-    for eid, label, color in [
-        ("emigration", "Emigration", "#16a34a"),
-        ("eviction",   "Eviction",   "#dc2626"),
-        ("tenancy",    "Tenancy",    "#2563eb"),
-    ]:
-        add_node(f"eh_{eid}", type="EventHub", label=label, color=color, size=22)
-
-    add_node("dh_census",     type="DataHub", label="Census Records",  color="#0891b2", size=18)
-    add_node("dh_clearances", type="DataHub", label="Clearances",      color="#9333ea", size=18)
-
     conn = get_db_conn()
     try:
-        # ── Aggregated stats per townland ───────────────────────────────
-        stats_rows = conn.execute("""
-            SELECT townland,
-                   COUNT(*)                      AS total_records,
-                   SUM(has_emigration_record)    AS emigrant_count,
-                   SUM(has_eviction_record)      AS eviction_count,
-                   SUM(has_tenancy_record)       AS tenancy_count
-            FROM unified_record
-            WHERE townland IS NOT NULL AND townland != ''
-            GROUP BY townland
-            ORDER BY total_records DESC
+        rows = conn.execute("""
+            SELECT
+                t.id,
+                t.name,
+                t.name_gaelic,
+                t.civil_parish,
+                t.barony,
+                t.county,
+                t.electoral_division,
+                t.placename_theme,
+                t.centroid_lat,
+                t.centroid_lon,
+                t.kg_uri,
+                (SELECT COUNT(DISTINCT ur.record_id)
+                   FROM unified_record ur
+                   WHERE ur.townland_norm = UPPER(t.name)) AS record_count
+            FROM townland t
+            WHERE t.name IS NOT NULL AND UPPER(t.county) = 'WICKLOW'
+            ORDER BY t.barony, t.civil_parish, t.name
         """).fetchall()
 
-        # ── Parish lookup from unified_record.parish (canonical values) ──
-        _bad = {"?", "coolattin", "co wexford", "county wexford"}
-        parish_map: dict[str, str] = {}
-        for r in conn.execute("""
-            SELECT townland, parish, COUNT(*) AS cnt
-            FROM unified_record
-            WHERE townland IS NOT NULL AND townland != ''
-              AND parish IS NOT NULL AND parish != ''
-            GROUP BY townland, parish
-            ORDER BY cnt DESC
-        """).fetchall():
-            tl, par = r["townland"].strip(), r["parish"].strip()
-            if (par.lower() in _bad or "/" in par
-                    or par.lower().startswith("co ")
-                    or par.lower().startswith("county ")
-                    or len(par) < 3):
-                continue
-            if tl not in parish_map:
-                parish_map[tl] = par
+        county_seen:  set[str] = set()
+        barony_seen:  set[str] = set()
+        parish_seen:  set[str] = set()
 
-        # ── Enrichment from townland reference table ────────────────────
-        tl_meta: dict[str, dict] = {}
-        for r in conn.execute(
-            "SELECT name, civil_parish, barony, county FROM townland WHERE name IS NOT NULL"
-        ).fetchall():
-            tl_meta[r["name"].strip().upper()] = {
-                "civil_parish": r["civil_parish"],
-                "barony": r["barony"],
-                "county": r["county"],
-            }
+        for r in rows:
+            tl_name  = (r["name"] or "").strip()
+            county   = (r["county"] or "").strip()
+            barony   = (r["barony"] or "").strip()
+            parish   = (r["civil_parish"] or "").strip()
+            gaelic   = (r["name_gaelic"] or "").strip()
+            lat      = r["centroid_lat"]
+            lon      = r["centroid_lon"]
+            rec_cnt  = r["record_count"] or 0
 
-        # ── Townland IDs for census/clearances membership tests ─────────
-        census_ids = {r[0] for r in conn.execute(
-            "SELECT DISTINCT townland_id FROM census_record"
-        ).fetchall()}
-        clearance_ids = {r[0] for r in conn.execute(
-            "SELECT DISTINCT townland_id FROM clearances_record"
-        ).fetchall()}
-        tl_name_to_db_id: dict[str, int] = {
-            r["name"].strip().upper(): r["id"]
-            for r in conn.execute("SELECT id, name FROM townland WHERE name IS NOT NULL").fetchall()
-        }
+            # ── County node ──────────────────────────────────────────────
+            if county and county not in county_seen:
+                county_seen.add(county)
+                add_node(
+                    f"county_{county}",
+                    type="County",
+                    label=county,
+                    color="#0369a1",
+                    size=28,
+                )
 
-        # ── Build townland and parish nodes ─────────────────────────────
-        parish_seen: set[str] = set()
+            # ── Barony node + County→Barony edge ────────────────────────
+            if barony and barony not in barony_seen:
+                barony_seen.add(barony)
+                add_node(
+                    f"barony_{barony}",
+                    type="Barony",
+                    label=barony,
+                    county=county,
+                    color="#b45309",
+                    size=20,
+                )
+                if county:
+                    edges.append({
+                        "source": f"county_{county}",
+                        "target": f"barony_{barony}",
+                        "label": "contains",
+                        "type": "county_barony",
+                    })
 
-        for r in stats_rows:
-            tl_name = r["townland"].strip()
+            # ── Parish node + Barony→Parish edge ────────────────────────
+            if parish and parish not in parish_seen:
+                parish_seen.add(parish)
+                add_node(
+                    f"parish_{parish}",
+                    type="CivilParish",
+                    label=parish,
+                    barony=barony,
+                    county=county,
+                    color="#7c3aed",
+                    size=14,
+                )
+                parent = f"barony_{barony}" if barony else (f"county_{county}" if county else None)
+                if parent:
+                    edges.append({
+                        "source": parent,
+                        "target": f"parish_{parish}",
+                        "label": "contains",
+                        "type": "barony_parish",
+                    })
+
+            # ── Townland node ────────────────────────────────────────────
             t_id = f"t_{tl_name}"
-            total  = r["total_records"]  or 0
-            emigr  = r["emigrant_count"] or 0
-            evict  = r["eviction_count"] or 0
-            tenan  = r["tenancy_count"]  or 0
-
-            # Dominant event determines node colour
-            if emigr >= evict and emigr >= tenan:
-                color, dominant = "#15803d", "emigration"
-            elif evict >= emigr and evict >= tenan:
-                color, dominant = "#b91c1c", "eviction"
-            else:
-                color, dominant = "#1d4ed8", "tenancy"
-
-            size = min(8 + total // 30, 22)
-
-            # Parish — try unified_record first, then townland table
-            parish = parish_map.get(tl_name)
-            if not parish:
-                parish = tl_meta.get(tl_name.upper(), {}).get("civil_parish")
-
-            meta = tl_meta.get(tl_name.upper(), {})
+            size = min(8 + rec_cnt // 40, 14)
             add_node(
                 t_id,
                 type="Townland",
                 label=tl_name,
-                civil_parish=parish,
-                barony=meta.get("barony"),
-                county=meta.get("county"),
-                total_records=total,
-                emigrant_count=emigr,
-                eviction_count=evict,
-                tenancy_count=tenan,
-                dominant_event=dominant,
-                color=color,
+                name_gaelic=gaelic or None,
+                civil_parish=parish or None,
+                barony=barony or None,
+                county=county or None,
+                electoral_division=(r["electoral_division"] or "").strip() or None,
+                placename_theme=(r["placename_theme"] or "").strip() or None,
+                centroid_lat=lat,
+                centroid_lon=lon,
+                kg_uri=r["kg_uri"],
+                record_count=rec_cnt,
+                color="#15803d",
                 size=size,
             )
 
-            # Parish node + edge
-            if parish:
-                p_id = f"parish_{parish}"
-                if parish not in parish_seen:
-                    parish_seen.add(parish)
-                    add_node(p_id, type="Parish", label=parish, color="#7c3aed", size=16)
-                edges.append({"source": p_id, "target": t_id, "label": "contains",
-                               "type": "parish_townland"})
-
-            # Event hub edges (only for non-zero counts)
-            if emigr > 0:
-                edges.append({"source": t_id, "target": "eh_emigration",
-                               "label": "emigrants", "type": "townland_event", "count": emigr})
-            if evict > 0:
-                edges.append({"source": t_id, "target": "eh_eviction",
-                               "label": "evictions", "type": "townland_event", "count": evict})
-            if tenan > 0:
-                edges.append({"source": t_id, "target": "eh_tenancy",
-                               "label": "tenants", "type": "townland_event", "count": tenan})
-
-            # Census / clearances hub edges
-            db_id = tl_name_to_db_id.get(tl_name.upper())
-            if db_id and db_id in census_ids:
-                edges.append({"source": t_id, "target": "dh_census",
-                               "label": "has_census", "type": "townland_census"})
-            if db_id and db_id in clearance_ids:
-                edges.append({"source": t_id, "target": "dh_clearances",
-                               "label": "has_clearances", "type": "townland_clearances"})
+            # Parish→Townland edge
+            parent_tl = f"parish_{parish}" if parish else (
+                f"barony_{barony}" if barony else (f"county_{county}" if county else None)
+            )
+            if parent_tl:
+                edges.append({
+                    "source": parent_tl,
+                    "target": t_id,
+                    "label": "contains",
+                    "type": "parish_townland",
+                })
 
     finally:
         conn.close()
 
     meta = {
-        "node_count": len(nodes),
-        "edge_count": len(edges),
-        "total_records": sum(
-            n.get("total_records", 0) for n in nodes if n["type"] == "Townland"
-        ),
+        "node_count":    len(nodes),
+        "edge_count":    len(edges),
+        "county_count":  sum(1 for n in nodes if n["type"] == "County"),
+        "barony_count":  sum(1 for n in nodes if n["type"] == "Barony"),
+        "parish_count":  sum(1 for n in nodes if n["type"] == "CivilParish"),
         "townland_count": sum(1 for n in nodes if n["type"] == "Townland"),
-        "parish_count":   sum(1 for n in nodes if n["type"] == "Parish"),
-        "census_townland_count": sum(1 for e in edges if e["type"] == "townland_census"),
-        "clearances_townland_count": sum(1 for e in edges if e["type"] == "townland_clearances"),
+        "with_gaelic":   sum(1 for n in nodes if n["type"] == "Townland" and n.get("name_gaelic")),
+        "source":        "geographic_hierarchy",
     }
-    log.info("kg_service.graph_built | nodes=%d edges=%d", len(nodes), len(edges))
+    log.info("kg_service.geo_graph_built | nodes=%d edges=%d", len(nodes), len(edges))
     return {"nodes": nodes, "edges": edges, "meta": meta}
 
 
@@ -545,6 +470,307 @@ def get_townland_persons(townland_name: str, limit: int = 50) -> dict:
         return {"townland": townland_name, "total": total, "persons": persons}
     finally:
         conn.close()
+
+
+# ------------------------------------------------------------------ #
+# Rich townland detail — LLM SPARQL rewrite + narrative               #
+# ------------------------------------------------------------------ #
+
+def get_townland_rich_detail(townland_name: str) -> dict:
+    """
+    Return enriched geographical detail for a townland including:
+    - Local DB stats (census, clearances, heritage features, people counts)
+    - VRTI KG data (if reachable)
+    - LLM-generated optimised SPARQL query
+    - SPARQL result from VRTI
+    - LLM-generated narrative about the place
+    """
+    import os, json, requests as _req, concurrent.futures, time as _time
+
+    from extensions import get_db_conn
+    conn = get_db_conn()
+    db_data: dict = {}
+    try:
+        # ── Local DB: townland reference ─────────────────────────────────
+        row = conn.execute(
+            """SELECT name, name_gaelic, civil_parish, barony, county,
+                      electoral_division, placename_theme, description,
+                      centroid_lat, centroid_lon, kg_uri
+               FROM townland WHERE UPPER(name)=UPPER(?) LIMIT 1""",
+            (townland_name,),
+        ).fetchone()
+        if row:
+            db_data["townland"] = dict(row)
+
+        # ── Local DB: census trend ────────────────────────────────────────
+        census_rows = conn.execute(
+            """SELECT cr.year, cr.total, cr.male, cr.female,
+                      cr.inhabited, cr.uninhabited
+               FROM census_record cr
+               JOIN townland t ON cr.townland_id = t.id
+               WHERE UPPER(t.name) = UPPER(?)
+               ORDER BY cr.year""",
+            (townland_name,),
+        ).fetchall()
+        db_data["census"] = [dict(r) for r in census_rows]
+
+        # ── Local DB: clearances (evictions) ─────────────────────────────
+        clear_col = next(
+            (c for c in ["count", "eviction_count", "num_evictions"]
+             if any(c == col[1] for col in conn.execute("PRAGMA table_info(clearances_record)").fetchall())),
+            "count",
+        )
+        clear_rows = conn.execute(
+            f"""SELECT cr.year, cr.{clear_col} AS evictions
+                FROM clearances_record cr
+                JOIN townland t ON cr.townland_id = t.id
+                WHERE UPPER(t.name) = UPPER(?)
+                ORDER BY cr.year""",
+            (townland_name,),
+        ).fetchall()
+        db_data["clearances"] = [dict(r) for r in clear_rows]
+
+        # ── Local DB: heritage features ───────────────────────────────────
+        heritage_rows = conn.execute(
+            """SELECT feature_group, monument_class, source_dataset
+               FROM heritage_feature
+               WHERE UPPER(townland_norm) = UPPER(?)
+               ORDER BY feature_group""",
+            (townland_name,),
+        ).fetchall()
+        db_data["heritage"] = [dict(r) for r in heritage_rows]
+
+        # ── Local DB: people summary ──────────────────────────────────────
+        ppl = conn.execute(
+            """SELECT
+                 COUNT(DISTINCT record_id) AS total_people,
+                 SUM(CASE WHEN has_emigration_record=1 THEN 1 ELSE 0 END) AS emigrants,
+                 SUM(CASE WHEN has_eviction_record=1 THEN 1 ELSE 0 END)   AS evicted,
+                 SUM(CASE WHEN has_tenancy_record=1 THEN 1 ELSE 0 END)    AS tenants,
+                 MIN(year) AS earliest_year,
+                 MAX(year) AS latest_year
+               FROM unified_record
+               WHERE UPPER(townland_norm) = UPPER(?)""",
+            (townland_name,),
+        ).fetchone()
+        if ppl:
+            db_data["people_summary"] = dict(ppl)
+
+        # Top 5 surnames
+        surname_rows = conn.execute(
+            """SELECT COALESCE(surname,'Unknown') AS surname, COUNT(DISTINCT record_id) AS n
+               FROM unified_record
+               WHERE UPPER(townland_norm) = UPPER(?)
+                 AND surname IS NOT NULL
+               GROUP BY surname ORDER BY n DESC LIMIT 5""",
+            (townland_name,),
+        ).fetchall()
+        db_data["top_surnames"] = [dict(r) for r in surname_rows]
+
+    finally:
+        conn.close()
+
+    # ── VRTI KG lookup (optional, best-effort) ────────────────────────────
+    vrti_data: dict | None = None
+    try:
+        from backend.integrations import vrti_sparql as _vs
+        dto = _vs.get_townland_details_by_name(townland_name, county="Wicklow")
+        if dto:
+            vrti_data = dto.to_dict()
+    except Exception as exc:
+        log.warning("kg_service.rich_detail.vrti_lookup_failed name=%s error=%s", townland_name, exc)
+
+    # ── Build context string for LLM prompts ─────────────────────────────
+    tl = db_data.get("townland") or {}
+    ppl_s = db_data.get("people_summary") or {}
+    census_lines = "\n".join(
+        f"  {r['year']}: total={r['total']}, male={r['male']}, female={r['female']}, "
+        f"inhabited_houses={r['inhabited']}"
+        for r in db_data.get("census", [])
+    ) or "  (no census data)"
+    clearance_lines = "\n".join(
+        f"  {r['year']}: {r['evictions']} eviction(s)"
+        for r in db_data.get("clearances", [])
+    ) or "  (no eviction records)"
+    heritage_lines = "\n".join(
+        f"  {r['feature_group']}: {r['monument_class'] or 'n/a'}"
+        for r in db_data.get("heritage", [])
+    ) or "  (none recorded)"
+    surnames_line = ", ".join(
+        f"{r['surname']} ({r['n']})" for r in db_data.get("top_surnames", [])
+    ) or "(none)"
+    kg_uri = tl.get("kg_uri") or (vrti_data or {}).get("uri") or ""
+
+    context_block = f"""Townland: {tl.get('name', townland_name)}
+Irish name (Gaelic): {tl.get('name_gaelic') or 'unknown'}
+Civil Parish: {tl.get('civil_parish') or 'unknown'}
+Barony: {tl.get('barony') or 'unknown'}
+County: {tl.get('county') or 'Wicklow'}, Ireland
+Electoral Division: {tl.get('electoral_division') or 'unknown'}
+Placename Theme: {tl.get('placename_theme') or 'unknown'}
+Coordinates: {tl.get('centroid_lat')}, {tl.get('centroid_lon')}
+VRTI Knowledge Graph URI: {kg_uri}
+
+VRTI KG data (if available):
+  Boundary WKT: {(vrti_data or {}).get('boundary_wkt', 'not available')[:120] if (vrti_data or {}).get('boundary_wkt') else 'not available'}
+  External links: {', '.join((vrti_data or {}).get('links', [])) or 'none'}
+
+Estate records (mid-19th century):
+  Total people: {ppl_s.get('total_people', 0)}
+  Emigrants: {ppl_s.get('emigrants', 0)}
+  Evicted: {ppl_s.get('evicted', 0)}
+  Tenants: {ppl_s.get('tenants', 0)}
+  Year range: {ppl_s.get('earliest_year')} – {ppl_s.get('latest_year')}
+  Top surnames: {surnames_line}
+
+Census data (population):
+{census_lines}
+
+Eviction/clearances data:
+{clearance_lines}
+
+Heritage features:
+{heritage_lines}
+""".strip()
+
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+    model = os.environ.get("OPENROUTER_MODEL", "openai/gpt-oss-20b:free")
+    free_models = [
+        "openai/gpt-oss-20b:free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "google/gemma-3-27b-it:free",
+    ]
+    candidates = [model] + [m for m in free_models if m != model]
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://127.0.0.1:5001",
+        "X-Title": "Coolattin KG Townland Detail",
+    }
+
+    def _llm_call(messages: list[dict], max_tokens: int = 600) -> tuple[str, str | None]:
+        """Call LLM via OpenRouter, return (text, model_used). Returns ('', error) on failure."""
+        if not api_key:
+            return "", "LLM not configured — OPENROUTER_API_KEY not set."
+        for cand in candidates:
+            try:
+                resp = _req.post(
+                    f"{base_url}/chat/completions",
+                    headers=headers,
+                    json={"model": cand, "messages": messages, "max_tokens": max_tokens,
+                          "temperature": 0.2},
+                    timeout=20,
+                )
+                if resp.status_code == 200:
+                    content = resp.json()["choices"][0]["message"]["content"].strip()
+                    return content, None
+            except Exception as exc:
+                log.warning("kg_service.rich_detail.llm_call_failed model=%s error=%s", cand, exc)
+        return "", "All LLM candidates failed."
+
+    # ── LLM call 1: generate optimised SPARQL query ───────────────────────
+    sparql_prompt = f"""You are a SPARQL expert working with the VRTI (Virtual Record Treasury of Ireland) Knowledge Graph.
+
+The VRTI endpoint is: https://virtuoso.virtualtreasury.ie/sparql/
+The present-day places graph is: https://kg.virtualtreasury.ie/graph/present-day-places-v1
+
+Available prefixes:
+PREFIX crm:  <http://erlangen-crm.org/current/>
+PREFIX vrti: <https://ont.virtualtreasury.ie/ontology#>
+PREFIX geo:  <http://www.opengis.net/ont/geosparql#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX owl:  <http://www.w3.org/2002/07/owl#>
+PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+
+Key VRTI ontology patterns:
+- Townlands: ?place crm:P2_has_type vrti:PresentDayTownland ; rdfs:label ?name
+- English name filter: FILTER(langMatches(lang(?name), "en"))
+- Irish (Gaelic) name: rdfs:label ?nameGaelic FILTER(langMatches(lang(?nameGaelic), "ga"))
+- Geometry: geo:hasGeometry ?geom . ?geom geo:asWKT ?wkt
+- Parish containment: crm:P89_falls_within → vrti:PresentDayParish
+- Barony containment: crm:P89_falls_within → vrti:PresentDayBarony
+- County containment: crm:P89_falls_within → vrti:PresentDayCounty
+- External identifiers: owl:sameAs (links to logainm.ie, townlands.ie)
+- skos:closeMatch or skos:exactMatch for alternative references
+
+TOWNLAND CONTEXT:
+{context_block}
+
+TASK: Write ONE optimised SPARQL SELECT query that retrieves the maximum useful geographical and contextual information about the townland "{tl.get('name', townland_name)}" in County Wicklow from the VRTI KG. Include: English and Irish names, geometry/WKT boundary, parish hierarchy, barony, county, external identifier links (logainm, townlands.ie), and any alternative labels.
+
+Return ONLY the SPARQL query — no explanation, no markdown fences, no PREFIX block (prefixes are prepended automatically).
+Query must use: GRAPH <https://kg.virtualtreasury.ie/graph/present-day-places-v1> {{ ... }}
+Use OPTIONAL for fields that may not exist.
+LIMIT 1 is not needed — use LIMIT 20 to capture multiple rows from optional fields."""
+
+    sparql_query_raw, sparql_err = _llm_call([
+        {"role": "system", "content": "You are a SPARQL expert. Return only valid SPARQL SELECT queries."},
+        {"role": "user", "content": sparql_prompt},
+    ], max_tokens=500)
+
+    # Clean up the generated SPARQL (remove markdown fences if LLM adds them)
+    sparql_query = sparql_query_raw.strip()
+    for fence in ("```sparql", "```SPARQL", "```"):
+        sparql_query = sparql_query.replace(fence, "")
+    sparql_query = sparql_query.strip()
+
+    # ── Run the generated SPARQL against VRTI ────────────────────────────
+    sparql_results: list[dict] = []
+    sparql_run_error: str | None = None
+    if sparql_query and not sparql_err:
+        try:
+            from backend.integrations import vrti_sparql as _vs2
+            bindings = _vs2._execute(sparql_query)
+            sparql_results = [
+                {k: v.get("value", "") for k, v in b.items()}
+                for b in bindings[:30]
+            ]
+        except Exception as exc:
+            sparql_run_error = str(exc)
+            log.warning("kg_service.rich_detail.sparql_run_failed name=%s error=%s", townland_name, exc)
+
+    # ── LLM call 2: write rich narrative ─────────────────────────────────
+    sparql_result_summary = ""
+    if sparql_results:
+        cols = list(sparql_results[0].keys())
+        sparql_result_summary = " | ".join(cols) + "\n"
+        for row in sparql_results[:10]:
+            sparql_result_summary += " | ".join(str(row.get(c, "")) for c in cols) + "\n"
+
+    narrative_prompt = f"""You are a historical geographer and Irish heritage expert writing about a 19th-century Coolattin Estate townland for an academic audience.
+
+TOWNLAND DATA:
+{context_block}
+
+SPARQL QUERY RESULTS FROM VRTI KNOWLEDGE GRAPH:
+{sparql_result_summary or '(SPARQL query returned no results — use the context data above)'}
+
+TASK: Write a rich, informative description of the townland "{tl.get('name', townland_name)}" that covers:
+1. **Geographic identity** — location within its parish, barony, and county; Gaelic name meaning if known; coordinates
+2. **Historical significance** — what the estate records reveal about this place: population trends (from census), eviction events, emigration patterns, key family names
+3. **Heritage** — any holy wells, ring forts, or other heritage features present
+4. **Knowledge Graph context** — what the VRTI KG records about this place (external links, identifiers)
+
+Write 3–4 paragraphs of clear, engaging academic prose. Be specific with numbers. Do not invent facts not in the data."""
+
+    narrative, narrative_err = _llm_call([
+        {"role": "system", "content": "You are an Irish heritage and history expert. Write clear, accurate, academic prose."},
+        {"role": "user", "content": narrative_prompt},
+    ], max_tokens=700)
+
+    return {
+        "townland_name": townland_name,
+        "db_data": db_data,
+        "vrti_data": vrti_data,
+        "generated_sparql": sparql_query or None,
+        "sparql_error": sparql_err or sparql_run_error,
+        "sparql_results": sparql_results,
+        "narrative": narrative or None,
+        "narrative_error": narrative_err,
+        "context_used": context_block,
+    }
 
 
 # ------------------------------------------------------------------ #

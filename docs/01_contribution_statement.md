@@ -33,19 +33,19 @@ The core technical contribution is the design and implementation of a reproducib
 
 The integration pipeline (implemented in `backend/jobs/` and `backend/integrations/`) applies fuzzy place-name normalisation, canonical townland resolution, and derived-field inference (widow identification, family key construction, Canada destination detection, family size estimation) to produce a unified SQLite database with five tables: `townland`, `census_record`, `clearances_record`, `unified_record`, and `heritage_feature`. This approach is explicitly a **data warehouse pattern**: sources are uplifted once into the serving layer, and all runtime queries run against the local database. This is appropriate given that the source data is historically static.
 
-### 2.2 Multi-Stage Natural Language to SQL Pipeline
+### 2.2 Orchestrated Natural Language to SQL/SPARQL Pipeline
 
-The Ask page implements a novel multi-stage query pipeline designed for the specific constraints of historical record datasets:
+The Ask page implements a seven-phase orchestrated pipeline with intent-first routing, designed for the specific constraints of historical record datasets:
 
-1. **Template-first matching** — A library of 83 verified SQL templates is scored against the user's question using weighted keyword matching. Templates cover domain-expert competency questions and return exact, deterministic answers without involving an LLM call.
-2. **Townland resolution** — Place names in the question are resolved via exact match, normalised match, and fuzzy match with "did you mean?" suggestions, using the canonical townland catalogue.
-3. **LLM SQL generation** — If no template matches, the pipeline sends bounded schema context, sampled categorical values, approved query memory, and the user question to an LLM (OpenRouter / Ollama fallback) to generate a read-only SQL query.
-4. **Read-only SQL guardrail** — All LLM-generated SQL is validated to block any write statement before execution.
-5. **LLM answer rewrite** — The raw database result is rephrased into a natural-language answer contextualised to the historical domain.
-6. **VRTI SPARQL enrichment** — A parallel call to the VRTI SPARQL endpoint retrieves parish, barony, and county context for townlands mentioned in the answer, which is appended to the response.
-7. **PDF report export** — A hand-written PDF 1.4 report (no library dependency) is generated for every answered question, including the SQL query, data table, and VRTI context.
+1. **Entity resolution (Phase 1)** — Place names are resolved to canonical townland IDs and KG URIs using exact match, normalised match, and fuzzy match (rapidfuzz, threshold 80). Person references are disambiguated via a three-layer Mention/Person/Factoid identity model (Jaro-Winkler + Metaphone phonetic blocking + geographic/temporal co-occurrence).
+2. **Four fast lanes** — Before intent routing, four short-circuit paths are checked in priority order: (a) rule-based slot-fill with confidence ≥ 0.80 (0 LLM calls); (b) verified SQL template match; (c) approved memory reuse (token_sort_ratio + cosine ≥ 0.55); (d) TF-IDF + RRF embedding retrieval (cosine ≥ 0.68). Any hit bypasses the remaining pipeline.
+3. **Intent classification (Phase 5)** — `classify_intent()` assigns questions to ANALYTICAL, RELATIONAL, COMPARATIVE, or FALLBACK using keyword-priority rules. Core Rule 1 prevents heritage/sensemaking keywords from mis-routing count queries to the graph path.
+4. **Semantic layer — ANALYTICAL lane (Phase 2)** — A 22-metric registry maps analytical questions to a `SlotFill` struct (metric + dimensions + filters + confidence). Rule-based fill (confidence ≥ 0.80) or LLM slot-fill (confidence ≥ 0.70) feeds a deterministic SQL compiler — never free-form LLM SQL. The same SlotFill also compiles equivalent SPARQL for GraphDB comparison (RQ6).
+5. **Subgraph engine — RELATIONAL lane (Phase 3)** — Multi-hop VRTI SPARQL (place hierarchy, siblings, external links) + GraphDB k=2 neighbourhood expansion supplies qualitative context for geography/heritage questions. Counts always come from SQL.
+6. **Read-only SQL guardrail** — FORBIDDEN_SQL regex blocks all write operations (INSERT/UPDATE/DELETE/DROP/…); verified before every execution.
+7. **Multi-source synthesis (Phases 6–7)** — SQL, VRTI, and GraphDB results are fused with discrepancy detection; the LLM rewrites aggregated data into historically-contextualised prose with provenance annotation. PDF export (hand-written PDF 1.4, no library) generated per query.
 
-Pipeline stages stream progress to the browser via Server-Sent Events (SSE), giving the user live feedback during multi-second LLM operations.
+All pipeline stages stream SSE progress events to the browser. The `query_provenance.strategy` field in the result reports which path fired: `rule_fill | verified_analysis | slot_fill_llm | template | memory | llm_sql`.
 
 ### 2.3 Pluggable Analytics Module Architecture
 
@@ -92,4 +92,4 @@ The key distinction from existing systems is the combination of multi-source int
 
 ## 5. Summary Statement (for supervisor communication)
 
-> This dissertation contributes (1) a reproducible data warehouse architecture integrating heterogeneous Irish historical archival sources with the VRTI Knowledge Graph; (2) a multi-stage NL→SQL pipeline with template-first matching, LLM fallback, read-only guardrail, and VRTI SPARQL enrichment, evaluated against a 15-question domain-expert competency set; and (3) the first publicly accessible integrated computational interface for the Coolattin Estate records, enabling historical and genealogical research that was previously inaccessible without bespoke programming.
+> This dissertation contributes (1) a reproducible data warehouse architecture integrating heterogeneous Irish historical archival sources with the VRTI Knowledge Graph; (2) a seven-phase orchestrated NL→SQL/SPARQL pipeline with intent-first routing, a 22-metric semantic layer, subgraph-engine KG traversal, multi-source fusion, and read-only SQL guardrail, evaluated against a 15-question domain-expert competency set; (3) a place-first workhouse entity resolution pipeline using phonetic blocking, 7-signal scored matching (60-point scale), and persisted confidence bands; and (4) the first publicly accessible integrated computational interface for the Coolattin Estate records, enabling historical and genealogical research that was previously inaccessible without bespoke programming.

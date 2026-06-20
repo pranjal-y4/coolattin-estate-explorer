@@ -128,15 +128,59 @@ The database (`coolattin.db`) is created and migrated automatically on first run
 
 ## LLM / Ask pipeline
 
-The Ask page (`/ask`) runs an orchestrated 7-phase pipeline (`ASK_USE_NEW_PIPELINE=true` by default):
+The Ask page (`/ask`) runs an orchestrated pipeline (`ASK_USE_NEW_PIPELINE=true` by default). Entry point: `_orchestrated_pipeline_stream()` in `ask_service.py`.
 
-1. **Intent routing** (`intent_router.py`) — classifies questions as ANALYTICAL / RELATIONAL / COMPARATIVE / FALLBACK.
-2. **Hybrid retrieval / fast lane** (`embedding_index.py`) — TF-IDF + optional dense vector retrieval over templates, approved memory, and corpus chunks; high-confidence hits short-circuit remaining phases.
-3. **Semantic layer** (`semantic_layer.py`) — slot-fill compiler maps analytical questions to deterministic SQL + equivalent SPARQL without any LLM call.
-4. **Subgraph engine** (`subgraph_engine.py`) — KG traversal for relational/hierarchy/heritage questions via VRTI and local GraphDB.
-5. **LLM SQL generation** (fallback only) — invoked only when no earlier phase produced a valid query.
-6. **Identity resolution** (`identity_resolver.py`) — disambiguates repeated names using Jaro-Winkler + phonetic blocking + geographic/temporal scoring.
-7. **Multi-model synthesis** — aggregates SQL, KG results, and retrieved chunks; detects cross-source discrepancies; produces provenance-annotated answer.
+### Pipeline phases
+
+| Phase | File | What it does |
+|---|---|---|
+| Phase 1 | `identity_resolver.py` | Entity resolution — resolves townland + person identity once; `sql_id` + `kg_uri` shared by all downstream lanes |
+| Phase 2 | `semantic_layer.py` | Slot-fill compiler — maps analytical questions to deterministic SQL/SPARQL; three sub-layers: rule-based fill → LLM slot-fill → deterministic compiler |
+| Phase 3 | `subgraph_engine.py` | KG traversal — multi-hop VRTI SPARQL + GraphDB queries for relational/hierarchy/heritage questions |
+| Phase 4 | `embedding_index.py` | Hybrid retrieval — TF-IDF unigram+bigram cosine + keyword overlap → RRF over templates and approved memory |
+| Phase 5 | `intent_router.py` | Intent classification → ANALYTICAL / RELATIONAL / COMPARATIVE / FALLBACK |
+| Phase 6 | `ask_service.py` | Fusion & reconciliation — cross-source discrepancy detection between SQL + KG results |
+| Phase 7 | `ask_service.py` | Multi-model synthesis — LLM rewrites aggregated data into provenance-annotated answer |
+
+### Intent classification flow (Phase 5)
+
+Before `classify_intent` is ever called, **four fast lanes** can short-circuit routing entirely:
+
+1. **Semantic layer rule-based fill** — `try_rule_based_fill()` confidence ≥ 0.80 → deterministic SQL, no LLM, no routing.
+2. **Verified analysis** — question matches a pre-validated hard-coded SQL template.
+3. **Direct memory reuse** — approved thumbs-up query (high token-sort-ratio + cosine ≥ 0.55) → reuse cached SQL.
+4. **Phase 4 template fast lane** — TF-IDF/RRF cosine ≥ 0.68 on embedded templates → use template SQL directly.
+
+If no fast lane fires, `classify_intent(question, analysis, slot_fill)` runs with this **priority order** (first match wins):
+
+**1. COMPARATIVE** — any comparative keyword present:
+> `compare`, `compared to`, `compared with`, `versus`, `vs`, `difference between`, `contrast`, `relative to`, `how does`, `how did`, `better than`, `worse than`, `more than`, `less than`, `higher than`, `lower than`, `against`
+
+**2. RELATIONAL** — geography intent from `_analyse_question`, OR any keyword from these groups:
+- *Relational*: `related to`, `connected to`, `link between`, `in the same parish`, `same barony`, `part of`, `neighbouring`, `adjacent to`, `bordering`, `relationship between`, `linked to`
+- *Hierarchy*: `which parish`, `what parish`, `civil parish`, `in the barony`, `townlands in`, `where is`, `where does`, `located in`, `situated in`, `falls within`
+- *Heritage*: `heritage`, `archaeological`, `monument`, `ring fort`, `holy well`, `history of`, `tell me about`, `describe`, `historically`, `fortification`, `earthwork`
+- *Sensemaking*: `overview`, `about the estate`, `about coolattin`, `describe the estate`, `what kind of`, `background`, `summary of`, `general context`
+- **Exception** (Core Rule 1 override): if *only* heritage/sensemaking keywords triggered (no relational/hierarchy/geography signal) AND `output_mode` is `count`/`aggregate` AND any analytical keyword is present → falls through to **ANALYTICAL** instead.
+
+**3. ANALYTICAL** — any of:
+- `primary_intent` in `{population, eviction, emigration, tenancy}`
+- `output_mode` in `{count, aggregate, trend}`
+- Any analytical keyword: `how many`, `how much`, `total`, `count of`, `number of`, `average`, `mean`, `proportion`, `percent`, `percentage`, `per year`, `by year`, `trend`, `over time`, `distribution`, `breakdown`, `most`, `least`, `highest`, `lowest`, `maximum`, `minimum`, `sum of`, `rate`, `ratio`
+- `slot_fill is not None` (semantic layer found any candidate)
+
+**4. FALLBACK** — default when nothing above matched.
+
+### Dispatch per route
+
+| Route | What runs |
+|---|---|
+| **ANALYTICAL** | Phase 2 semantic_layer: rule-based slot-fill (0 LLM) → LLM slot-fill if confidence < 0.80 → deterministic SQL compiler. Never free-form LLM SQL. |
+| **RELATIONAL / HERITAGE** | Phase 3 subgraph (VRTI SPARQL + GraphDB) for qualitative context, then FALLBACK SQL lane for any numeric counts (counts always come from SQL, never the KG). |
+| **COMPARATIVE** | ANALYTICAL SQL + RELATIONAL subgraph in parallel. Phase 6 reconciliation handles cross-source discrepancies. |
+| **FALLBACK** | Old pipeline: verified_analysis → Phase 4 embedding template → approved memory → LLM free-form SQL generation. |
+
+All lanes then continue through safety check → SQLite execution → VRTI → GraphDB → Phase 6 fusion → Phase 7 LLM rewrite → SSE result.
 
 SSE streaming: each phase yields `{type, stage, status, detail, duration_ms}` events. Do not buffer.
 PDF generation is hand-written (no reportlab/fpdf dependency), written to `exports/ask/`.

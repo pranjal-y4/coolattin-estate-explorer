@@ -11,6 +11,10 @@ from typing import Any
 
 from backend.services.townland_service import canonical_name, normalize_townland_name
 
+_BRACKET_RE = re.compile(r'\[.*?\]')
+_PAREN_RE = re.compile(r'\(.*?\)')
+_PLACEHOLDER_RE = re.compile(r'^[-\s.]+$')
+
 _FORENAME_ABBREVIATIONS = {
     "JNO": "JOHN",
     "WM": "WILLIAM",
@@ -34,6 +38,27 @@ _SURNAME_VARIANTS = {
     "O'BRIEN": "OBRIEN",
     "Ó BRIEN": "OBRIEN",
 }
+
+
+def clean_estate_name_field(value: Any) -> str:
+    """
+    Strip editorial annotations from unified estate record name fields
+    before entity-resolution normalisation.
+
+    Removes: [?] / [illegible] / (In Lease) / (Sic) / (Junior) etc.
+    Treats a field that is only dashes or punctuation as empty (unknown forename).
+    Applied only to unified estate records — workhouse raw_name is left untouched.
+    """
+    if value is None:
+        return ""
+    text = str(value).strip()
+    text = _BRACKET_RE.sub('', text)   # [?], [Next Word Illegible], …
+    text = _PAREN_RE.sub('', text)     # (In Lease), (Sic), (Junior), …
+    text = re.sub(r'\?+', '', text)    # stray ? / ??
+    text = re.sub(r'\s+', ' ', text).strip()
+    if _PLACEHOLDER_RE.match(text) or not text:
+        return ""
+    return text
 
 
 def normalise_text(value: Any) -> str:
@@ -74,8 +99,11 @@ def phonetic_code(value: str) -> str:
         return text
 
 
+_PLACEHOLDER_TOKEN_RE = re.compile(r'^[-\.]+$')
+
+
 def split_person_name(raw_name: str, *, surname_first: bool = False) -> tuple[str, str]:
-    tokens = normalise_text(raw_name).split()
+    tokens = [t for t in normalise_text(raw_name).split() if not _PLACEHOLDER_TOKEN_RE.match(t)]
     if not tokens:
         return "", ""
     if len(tokens) == 1:

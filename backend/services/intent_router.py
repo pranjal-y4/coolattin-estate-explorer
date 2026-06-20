@@ -68,7 +68,7 @@ _ANALYTICAL_KEYWORDS = frozenset({
     "lowest", "maximum", "minimum", "sum of", "rate", "ratio",
 })
 
-_ANALYTICAL_INTENTS = frozenset({"population", "eviction", "emigration", "tenancy"})
+_ANALYTICAL_INTENTS = frozenset({"population", "eviction", "emigration", "tenancy", "people"})
 
 # Keyword sets that signal genuine relational depth (not just passing mentions).
 _STRONG_RELATIONAL = _RELATIONAL_KEYWORDS | _HIERARCHY_KEYWORDS
@@ -113,12 +113,24 @@ def classify_intent(
             )
             if pure_count:
                 return ANALYTICAL
+
+            # Person-detail guard: estate tenants (people) live in SQLite, not the KG.
+            # If only heritage/sensemaking keywords fired and the question names a
+            # specific person, SPARQL will return nothing — route straight to SQL.
+            _has_person = bool(
+                analysis.get("surname")
+                or analysis.get("forename")
+                or analysis.get("canonical_name")
+            )
+            if _has_person:
+                return FALLBACK
+
         return RELATIONAL
 
-    # ── 3. ANALYTICAL — aggregate / metric / count questions ──────────────────
+    # ── 3. ANALYTICAL — aggregate / metric / count / list / record questions ──
     analytical = (
         primary_intent in _ANALYTICAL_INTENTS
-        or output_mode in {"count", "aggregate", "trend"}
+        or output_mode in {"count", "aggregate", "trend", "list", "grouped"}
         or any(kw in q for kw in _ANALYTICAL_KEYWORDS)
         or slot_fill is not None  # semantic layer found a candidate
     )

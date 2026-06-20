@@ -391,82 +391,77 @@ Before any question is answered, two seeding operations run if not already done:
 
 ### Stage 1 — Pre-flight analysis (synchronous, no LLM)
 
-1. **Townland resolution** (`_resolve_townland_context`) — the question is scanned for townland names. Resolution order: exact match in normalised catalogue → fuzzy match via `rapidfuzz` → "did you mean?" suggestion warning if ambiguous.
-2. **Question analysis** (`_analyse_question`) — intent classification: primary_intent (emigration / eviction / tenancy / census / heritage / overview), extracted year, extracted surname, extracted radius.
+1. **Townland resolution** (`_resolve_townland_context`) — scans the question for townland names. Resolution: exact match in normalised catalogue → fuzzy match via `rapidfuzz` (threshold 80) → "did you mean?" suggestion. If `townland_hint` provided by frontend: use as authoritative.
+2. **Question analysis** (`_analyse_question`) — extracts `year` (regex), `surname` (6 patterns), `radius_km`; classifies `primary_intent`, `output_mode`, `group_by`, `scope`. No LLM, no DB.
 3. **Data coverage warnings** (`_question_data_coverage_warnings`) — checks for 1821 references (data starts 1841), future dates, etc.
-4. **Verified analysis check** (`_try_verified_analysis`) — scans the 83-entry `QUESTION_TEMPLATES` list. Each template has `required_keywords` (ALL must match) and `optional_keywords` (boost score). The highest-scoring template above threshold is selected. If a match is found, the pipeline takes the fast path — no LLM call.
-5. **Query memory check** (`_find_similar_approved_queries`) — approved thumbs-up queries are scored for similarity to the current question. A direct memory match can answer the question using previously validated SQL.
 
-### Stage 2 — SQL acquisition (SSE stage: `contacting_llm`)
+### Stage 2 — Four Fast Lanes (first match short-circuits all routing)
 
-**Fast path (template or memory match):**
-- SQL template: The SQL string is taken directly from `QUESTION_TEMPLATES[n]["sql_template"]`, with `{townland_norm}`, `{year}`, or `{surname}` placeholders substituted.
-- Memory reuse: The stored approved SQL is reused verbatim.
+1. **Rule-based slot-fill** (`semantic_layer.try_rule_based_fill`) — 22 metric keyword sets; confidence scoring starts at 1.0, penalised for competing metrics and no-filter queries. If confidence ≥ 0.80 → compile SQL directly. **0 LLM calls, < 5 ms.**
+2. **Verified template** (`_try_verified_analysis`) — 83 templates scored by `required_keywords` + `optional_keywords`. If match in `VERIFIED_ANALYSIS_TEMPLATE_IDS` → SQL, confidence 1.0.
+3. **Direct memory reuse** — `ask_query_memory` (TTL 60 s cache); `token_sort_ratio + cosine ≥ 0.55` → reuse approved SQL.
+4. **Embedding fast lane** (`embedding_index.py`) — TF-IDF + RRF; cosine ≥ 0.68 AND all required_keywords present → template SQL.
 
-**LLM path (no template match):**
-1. `_build_prompt_schema()` — assembles a bounded schema descriptor: table names, column names, sampled category values (from `_PROMPT_CATEGORY_COLUMNS`), and approved query memory examples. Cached for 5 minutes.
-2. LLM call to OpenRouter (primary) or Ollama (fallback). Model: configurable via `OPENROUTER_MODEL` env var; defaults to `openai/gpt-oss-20b:free`. Up to `OPENROUTER_MAX_RETRIES` (default 2) retry attempts.
-3. Response parsed for a SQL code block.
+### Stage 3 — Intent Classification → Route Dispatch (SSE: `classifying_intent`)
 
-### Stage 3 — SQL guardrail (SSE stage: `executing_sql`)
+`classify_intent(question, analysis, slot_fill)` in `intent_router.py`:
+- **COMPARATIVE** → ANALYTICAL (semantic layer SQL) + RELATIONAL (subgraph SPARQL) in parallel
+- **RELATIONAL** → `subgraph_engine.retrieve_subgraph()`: VRTI multi-hop + GraphDB neighbourhood (k=2)
+- **ANALYTICAL** → semantic layer slot-fill → `compile_sql()` deterministic compiler
+- **FALLBACK** → LLM free-form SQL
 
-`_run_read_only_query(sql)`:
-1. `FORBIDDEN_SQL` regex blocks any `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `CREATE`, `ATTACH`, `DETACH`, `PRAGMA`, `REINDEX`, `VACUUM`, `TRUNCATE`, `REPLACE` statement.
-2. A custom `distance_km` SQLite function is registered (haversine formula) for radius queries.
-3. Query executes; up to 1 automatic LLM-driven repair attempt on syntax error.
+### Stage 4 — SQL Acquisition
 
-### Stage 4 — LLM answer rewrite (SSE stage: `rewriting`)
+**ANALYTICAL lane (semantic_layer.py):**
+- 22-metric registry; each metric has SQL aggregate, dimensions, filter templates, and SPARQL equivalent
+- Rule-fill path (confidence ≥ 0.80): direct `compile_sql(slot_fill)` — no LLM
+- LLM slot-fill path (confidence ≥ 0.70): LLM returns JSON `{metric, dimensions, filters}` → `compile_sql()`
+- `compile_sparql(slot_fill)` generates GraphDB SPARQL equivalent for RQ6 comparison
 
-The raw table rows are serialised to a compact text representation and sent to the LLM with the original question, asking it to rephrase the answer in natural language. The rewrite is constrained: no hallucination of figures not in the data, appropriate hedging for sparse data, historically appropriate vocabulary.
+**FALLBACK lane:**
+- `_generate_sql()`: annotated schema + approved examples → LLM → SQL
+- LLM: OpenRouter (primary) → Ollama (fallback). Up to `OPENROUTER_MAX_RETRIES` (default 2) retries.
 
-### Stage 5 — VRTI enrichment (SSE stage: `enriching`, parallel)
+### Stage 5 — SQL guardrail (SSE: `framing_query`)
 
-Runs concurrently with Stage 4 via `concurrent.futures.ThreadPoolExecutor`. Calls `get_townland_details_by_name()` on the VRTI SPARQL endpoint for any townlands named in the question or answer. Returns parish, barony, county context. Results are cached in-process for 1 hour (`_VRTI_PARISH_CACHE`). If VRTI is unavailable, this stage is skipped with a 5-minute cooldown before retrying.
+`_sanitize_and_validate_sql(sql)`:
+1. `FORBIDDEN_SQL` regex blocks `INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|ATTACH|DETACH|PRAGMA|REINDEX|VACUUM|TRUNCATE|REPLACE`
+2. Must start with `SELECT` or `WITH`
+3. Execute via `_execute_with_recovery()`: registers `distance_km()` haversine function; 1 LLM repair attempt on syntax error
 
-### Stage 6 — PDF export (SSE stage: `building_pdf`)
+### Stage 6 — LLM Answer Rewrite (SSE: `synthesizing_answer`)
 
-`_write_pdf_report()` generates a hand-written PDF 1.4 file (no reportlab/fpdf) containing:
-- Question and natural-language answer
-- SQL query used
-- Full data table (up to 8 columns shown)
-- VRTI enrichment section (if populated)
-- Timestamp and pipeline metadata
+The raw table rows and VRTI/GraphDB context are sent to the LLM with the question, requesting historically-contextualised prose. No hallucination of figures not in the data. If LLM unavailable: return raw `actual_answer` unmodified.
 
-File is written to `exports/ask/ask_report_<timestamp>.pdf` and URL returned in the result payload.
+### Stage 7 — VRTI + GraphDB Enrichment (parallel, non-blocking)
 
-### Stage 7 — Final result (SSE event `type: result`)
+- VRTI: `get_townland_details_by_name()` → parish, barony, county context; TTL 1 hour; 5-min cooldown on failure
+- GraphDB: `graphdb_sparql.query()` → co: ontology neighbourhood; 15-second timeout; fails silently
 
-The final SSE event contains:
-- `answer` — natural-language answer string
-- `sql` — SQL executed (if `show_sql=true`)
-- `columns` / `rows` — raw table data for frontend rendering
-- `chart_hint` — chart type suggestion for verified analyses (`bar`, `line`, `doughnut`)
-- `pdf_url` — relative URL for PDF download
-- `vrti_context` — enrichment result
-- `warnings` — data coverage warning strings
-- `query_provenance` — which path was taken, memory IDs reused, LLM model used
-- `llm_meta` — model name, token counts, latency
+### Stage 8 — Fusion + PDF + Final Result
+
+- Phase 6 fusion: `_fuse_lanes()` compares SQLite vs GraphDB numeric results; flags discrepancies by magnitude
+- PDF: `_write_pdf_report()` → hand-written PDF 1.4 (no reportlab/fpdf); `exports/ask/ask_report_<timestamp>.pdf`
+- Final SSE `type: result`: `answer`, `llm_rephrased_answer`, `sql`, `columns`, `rows`, `chart`, `vrti_context`, `fusion`, `discrepancies`, `pdf_url`, `query_provenance`, `llm_meta`
 
 ---
 
-## 2.5 Template library — the 83 verified SQL templates
+## 2.5 Metric registry — the 22 semantic layer metrics
 
-The `QUESTION_TEMPLATES` list covers these categories:
+The `METRIC_REGISTRY` in `semantic_layer.py` covers these categories:
 
-| Category | Template count | Examples |
+| Category | Metrics | Examples |
 |---|---|---|
-| Emigration — totals & trends | 12 | Total emigrants; by year; by townland; by ship; by destination |
-| Emigration — people & lists | 6 | List all emigrants; emigrants by surname; household lists |
-| Eviction / clearances | 8 | Total evicted; by townland; by year; who was evicted |
-| Census — population data | 10 | Population by year/townland; estate totals; trend |
-| Tenancy — land & holdings | 9 | Average holding; largest/smallest plots; by townland |
-| People — cross-category | 8 | Widows count/proportion; children emigrated; family sizes |
-| Heritage — monument correlations | 2 | Holy wells; ring forts vs population |
-| Canada emigration | 2 | Peak period; which ship carried most families |
-| Overview & cross-source | 12 | Estate summary; emigration + eviction overlap; surname queries |
-| Competency questions (Ciarán) | 15 | All 15 verified and cross-checked (see §4.1) |
+| Emigration | emigration_count, canada_emigration_count | Total emigrants; Canada-only; by townland/year |
+| Eviction/clearances | eviction_event_count, evicted_person_count | Total evicted; by year; by townland |
+| Census/population | population, population_change, uninhabited_houses | Population by year; Famine-era change; house stats |
+| Tenancy/land | tenancy_count, avg_holding_acres | Tenancy records; average holding size |
+| People | person_count, widow_count | Distinct people; widows |
+| Geography | townland_count, parish_count, townland_attribute | Place listing; attributes |
 
-All 15 domain-expert competency questions have verified template IDs in `VERIFIED_ANALYSIS_TEMPLATE_IDS`. Templates in this set are treated as authoritative — the LLM path is never taken for them, and they include per-template `warning` strings that are surfaced to the user when data coverage is limited.
+All 15 domain-expert competency questions are covered by metrics in the registry. The semantic layer compiles both SQL and SPARQL from the same `SlotFill` struct, enabling the SQL-vs-SPARQL comparison for RQ6.
+
+**Verified templates (83 entries in `QUESTION_TEMPLATES`)** remain as the Fast Lane 2 path for exact keyword pattern matches. `VERIFIED_ANALYSIS_TEMPLATE_IDS` marks templates that are authoritative — the LLM path is never taken for them, and they include per-template `warning` strings surfaced to the user when data coverage is limited.
 
 ---
 

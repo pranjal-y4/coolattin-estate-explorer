@@ -1,5 +1,16 @@
 {% extends "base.html" %}
 {% block content %}
+
+<!-- Fixed loading banner — stays visible without scrolling -->
+<div id="askLoadingBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;
+  background:linear-gradient(90deg,#0f766e,#0369a1);color:#fff;padding:11px 20px;
+  align-items:center;gap:12px;box-shadow:0 2px 10px rgba(0,0,0,.25);font-size:13px;font-weight:700;">
+  <span id="askLoadingSpinner" style="flex-shrink:0;display:inline-block;width:16px;height:16px;
+    border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;
+    animation:spin 0.8s linear infinite;"></span>
+  <span id="askLoadingBannerText">Processing query…</span>
+</div>
+
 <style>
   @keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
   .ask-detail-summary {
@@ -23,25 +34,101 @@
     letter-spacing: .06em;
     margin-bottom: 6px;
   }
+
+  /* Townland autocomplete dropdown */
+  #askTownlandWrap { position: relative; }
+  #askTownlandDropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 200;
+    background: #fff;
+    border: 1px solid #bae6fd;
+    border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.12);
+    max-height: 260px;
+    overflow-y: auto;
+  }
+  .tl-option {
+    padding: 9px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    color: #0f172a;
+    border-bottom: 1px solid #f1f5f9;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .tl-option:last-child { border-bottom: none; }
+  .tl-option:hover, .tl-option.tl-active { background: #f0f9ff; color: #075985; }
+  .tl-option-name { font-weight: 700; }
+  .tl-option-meta { font-size: 11px; color: #94a3b8; }
+
+  /* ── Scoped markdown styles for the LLM answer box ─── */
+  .ask-md { font-size: 14px; line-height: 1.75; color: #1e293b; }
+  .ask-md p { margin: 0 0 10px; line-height: 1.75; }
+  .ask-md p:last-child { margin-bottom: 0; }
+  .ask-md h1, .ask-md h2, .ask-md h3, .ask-md h4 {
+    margin: 16px 0 6px; font-weight: 700; color: #064e3b; line-height: 1.3;
+  }
+  .ask-md h1 { font-size: 16px; } .ask-md h2 { font-size: 15px; }
+  .ask-md h3 { font-size: 14px; } .ask-md h4 { font-size: 13px; }
+  .ask-md ul, .ask-md ol { margin: 6px 0 10px 22px; padding: 0; }
+  .ask-md li { margin-bottom: 5px; line-height: 1.65; }
+  .ask-md li:last-child { margin-bottom: 0; }
+  .ask-md hr { border: none; border-top: 1.5px solid #d1d5db; margin: 20px 0; }
+  .ask-md strong { font-weight: 700; color: #0f172a; }
+  .ask-md em { font-style: italic; }
+  .ask-md code {
+    font-family: ui-monospace, monospace; font-size: 11px;
+    background: #f1f5f9; border: 1px solid #e2e8f0;
+    padding: 1px 5px; border-radius: 4px; color: #0f172a;
+  }
+  .ask-md pre { margin: 8px 0; }
+  .ask-md pre code {
+    display: block; padding: 10px 14px; background: #1e293b;
+    color: #e2e8f0; border: none; border-radius: 8px; font-size: 11px;
+    line-height: 1.6; overflow-x: auto; white-space: pre-wrap;
+  }
+  .ask-md blockquote {
+    margin: 10px 0; padding: 8px 14px;
+    border-left: 3px solid #059669; background: #f0fdf4;
+    border-radius: 0 6px 6px 0; color: #064e3b; font-size: 13px;
+  }
+  .ask-md table {
+    width: 100%; border-collapse: collapse; margin: 12px 0;
+    border: 1px solid #6ee7b7; border-radius: 8px; overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06); font-size: 13px;
+  }
+  .ask-md thead tr { background: #064e3b; }
+  .ask-md thead th {
+    padding: 8px 12px; color: #fff; font-weight: 700;
+    text-align: left; white-space: nowrap;
+  }
+  .ask-md tbody tr:nth-child(even) { background: #f0fdf4; }
+  .ask-md tbody tr:nth-child(odd) { background: #fff; }
+  .ask-md tbody td {
+    padding: 7px 12px; color: #1e293b;
+    border-bottom: 1px solid #d1fae5; vertical-align: top;
+  }
+  .ask-md tbody tr:last-child td { border-bottom: none; }
 </style>
 <section class="section">
   <div class="container" style="max-width:1180px;">
 
     <h1 class="section-title" style="margin-bottom:6px;">Ask the Archive</h1>
     <p class="section-sub" style="max-width:920px;">
-      Ask in plain English. The system tries to build a transparent SQL query from the live
-      database schema, categories, and previously approved query patterns, then shows the real
-      database result first. When the configured LLM is available, it rewrites the answer in
-      plain English and can learn from your thumbs-up / thumbs-down feedback.
+      Ask in plain English. The system queries the live estate database using LLM-generated SQL (with the
+      full schema and approved patterns as context), shows you the raw data result first, then provides a
+      plain-English explanation. Townland geographic context is enriched from the Knowledge Graph.
+      Every answer shows which tables and record IDs were used so you can verify accuracy.
     </p>
 
-    <!-- LLM + GraphDB status badges -->
+    <!-- LLM status badge only -->
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;min-height:24px;align-items:center;">
       <div id="llmStatus"></div>
-      <div id="graphdbStatusChip" style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0;">
-        <span id="graphdbStatusDot" style="width:7px;height:7px;border-radius:50%;background:#94a3b8;display:inline-block;"></span>
-        <span id="graphdbStatusText">GraphDB: checking…</span>
-      </div>
     </div>
 
     <!-- Input panel -->
@@ -50,22 +137,36 @@
         Your question
       </label>
       <textarea id="askQuestion" rows="3"
-        placeholder="e.g. how many people emigrated from this townland?"
+        placeholder="e.g. how many women over 65 emigrated in 1861?"
         style="width:100%;resize:vertical;padding:12px 14px;border:1px solid #d8d2c8;border-radius:10px;background:#fff;color:#0f172a;font-size:14px;"></textarea>
 
       <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:12px;align-items:end;">
         <div>
           <label for="askTownlandHint" style="display:block;font-size:12px;font-weight:700;color:#475467;margin-bottom:6px;">
-            Townland context hint (optional)
+            Townland context <span style="font-weight:400;color:#94a3b8;">(optional — County Wicklow townlands · leave blank for estate-wide)</span>
           </label>
-          <input id="askTownlandHint" type="text" placeholder="e.g. BALLINACOR"
-            autocomplete="off"
-            style="width:100%;padding:10px 12px;border:1px solid #d8d2c8;border-radius:10px;background:#fff;color:#0f172a;" />
-          <div id="askTownlandSuggest" style="display:none;margin-top:6px;gap:6px;flex-wrap:wrap;"></div>
+          <div id="askTownlandWrap">
+            <input id="askTownlandHint" type="text" placeholder="Type a townland name, or select All Townlands…"
+              autocomplete="off"
+              style="width:100%;padding:10px 12px;border:1px solid #d8d2c8;border-radius:10px;background:#fff;color:#0f172a;" />
+            <div id="askTownlandDropdown" role="listbox"></div>
+          </div>
+          <div id="askTownlandResolution" style="display:none;margin-top:6px;"></div>
         </div>
         <div style="display:flex;gap:8px;align-items:end;">
           <button id="askSubmit" class="btn btn-primary" style="min-width:120px;">Ask</button>
         </div>
+      </div>
+
+      <!-- Inline loading indicator — visible without scrolling while query runs -->
+      <div id="askInlineStatus" style="display:none;margin-top:10px;padding:9px 14px;border-radius:10px;
+        background:linear-gradient(135deg,#f0fdf4,#eff6ff);border:1px solid #a7f3d0;
+        align-items:center;gap:10px;">
+        <span style="flex-shrink:0;width:14px;height:14px;border:2px solid rgba(5,150,105,.25);
+          border-top-color:#059669;border-radius:50%;animation:spin 0.8s linear infinite;
+          display:inline-block;"></span>
+        <span id="askInlineStatusText" style="font-size:12px;font-weight:600;color:#065f46;"></span>
+        <span id="askInlineStage" style="margin-left:auto;font-size:11px;color:#64748b;font-weight:400;"></span>
       </div>
 
       <!-- Example questions -->
@@ -82,12 +183,12 @@
       </div>
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
         <span style="font-size:11px;color:#64748b;align-self:center;font-weight:600;">Research examples:</span>
+        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="how many women above 65 have emigrated in year 1861?">Women 65+ emigrated 1861</button>
         <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="On average, did male tenants have more land than female tenants?">Male vs female land</button>
         <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="How many widows appear in the records?">Widows in records</button>
         <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="What was the range of family sizes in the eviction records?">Eviction family size range</button>
         <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="What was the peak period for emigration to Canada?">Canada peak period</button>
         <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="Which ship carried the most Coollattin families to Canada?">Top Canada ship</button>
-        <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="Is there a statistical relationship between townlands with holy wells and townlands with high population figures?">Holy wells vs population</button>
       </div>
     </div>
 
@@ -101,207 +202,199 @@
     <section id="askResult" class="panel" style="display:none;margin-top:16px;padding:0;overflow:hidden;">
 
       <!-- Top bar -->
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:16px 18px;border-bottom:1px solid #f1f5f9;">
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <h2 style="margin:0;font-size:18px;color:#0f172a;">Result</h2>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px;border-bottom:2px solid #f1f5f9;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <h2 style="margin:0;font-size:17px;color:#0f172a;font-weight:800;">Answer</h2>
           <span id="askRetrievalLane"></span>
           <span id="askConfidenceBadge"></span>
+          <span id="askGateBadge" style="display:none;"></span>
+          <span id="askVerifierBadge" style="display:none;"></span>
         </div>
         <a id="askPdfLink" class="btn btn-ghost" href="#" target="_blank" rel="noopener" style="display:none;font-size:12px;">
-          ↓ Download PDF
+          ↓ Download PDF Report
         </a>
       </div>
 
-      <!-- ── 1. SQLite result table (primary data view) ─────────────────── -->
-      <div style="padding:14px 18px;border-bottom:1px solid #f1f5f9;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-          <div class="ask-section-label" style="margin:0;">Database Result</div>
-          <div id="askSourceTables" style="font-size:11px;color:#94a3b8;font-style:italic;"></div>
+      <!-- ══ SECTION 1: LLM INTERPRETATION ═══════════════════════════════════ -->
+      <div style="padding:16px 18px;border-bottom:2px solid #f1f5f9;background:linear-gradient(135deg,#f0fdf4 0%,#f8fafc 100%);">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          <div style="width:4px;height:18px;border-radius:2px;background:#059669;"></div>
+          <div class="ask-section-label" style="margin:0;color:#065f46;">1 · LLM Interpretation</div>
+          <span style="font-size:10px;color:#94a3b8;margin-left:auto;">AI-generated summary of the data below</span>
         </div>
-        <div style="overflow:auto;border:1px solid #e2e8f0;border-radius:10px;max-height:360px;">
-          <table id="askTable" style="width:100%;border-collapse:collapse;background:#fff;"></table>
-        </div>
-        <!-- Compact actual answer shown below table -->
-        <div id="askActualAnswer" style="margin-top:8px;font-size:12px;color:#475467;font-style:italic;display:none;"></div>
-      </div>
-
-      <!-- ── 2. Warnings / townland resolution ─────────────────────────── -->
-      <div id="askWarnings" style="padding:0 18px;"></div>
-      <div id="askTownlandResolution" style="display:none;padding:0 18px 10px;"></div>
-
-      <!-- ── 3. LLM answer (secondary — plain-English rewrite) ─────────── -->
-      <div style="padding:14px 18px;border-top:1px solid #f1f5f9;">
-        <div class="ask-section-label">Plain-English Summary</div>
-        <div id="askLlmAnswer" style="margin-top:4px;padding:12px 14px;border:1px solid #e2e8f0;background:#f8fafc;border-radius:10px;color:#334155;font-size:13px;line-height:1.6;"></div>
-      </div>
-
-      <!-- ── 4. SQL vs Graph comparison (side-by-side) ─────────────────── -->
-      <div id="askGraphComparisonBlock" style="display:none;margin:0 18px 14px;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
-
-        <!-- Panel header -->
-        <div style="padding:9px 14px;background:#f8fafc;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-          <div style="font-size:12px;font-weight:700;color:#0f172a;">SQLite vs. GraphDB Comparison</div>
-          <div id="askGraphStatus" style="font-size:11px;color:#64748b;"></div>
-        </div>
-
-        <!-- Metrics bar -->
-        <div id="askGraphMetrics" style="display:flex;gap:8px;flex-wrap:wrap;padding:10px 14px;background:#fafafa;border-bottom:1px solid #f1f5f9;"></div>
-
-        <!-- Setup hint -->
-        <div id="askGraphSetupHint" style="display:none;padding:8px 14px;background:#fffbeb;border-bottom:1px solid #fde68a;font-size:11px;color:#92400e;"></div>
-
-        <!-- Approach row -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;border-bottom:1px solid #f1f5f9;background:#fafafa;">
-          <div style="padding:5px 12px;border-right:1px solid #f1f5f9;font-size:11px;color:#64748b;">
-            <strong style="color:#166534;">Relational</strong> · SQL (SQLite) · Closed-world
-          </div>
-          <div style="padding:5px 12px;font-size:11px;color:#64748b;">
-            <strong style="color:#1e40af;">RDF Graph</strong> · SPARQL 1.1 · Open-world
-          </div>
-        </div>
-
-        <!-- Side-by-side tables -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;">
-
-          <!-- SQLite side -->
-          <div style="border-right:1px solid #e2e8f0;">
-            <div style="padding:7px 12px;background:#f0fdf4;border-bottom:1px solid #bbf7d0;display:flex;align-items:center;gap:6px;">
-              <span style="font-size:11px;font-weight:700;color:#166534;">SQLite</span>
-              <span id="askGraphSqlMeta" style="font-size:10px;color:#64748b;"></span>
-            </div>
-            <div style="overflow:auto;max-height:280px;">
-              <table id="askGraphSqlTable" style="width:100%;border-collapse:collapse;background:#fff;"></table>
-            </div>
-            <details>
-              <summary class="ask-detail-summary">▸ SQL Query</summary>
-              <pre id="askGraphSqlQuery" style="margin:0;padding:10px 12px;background:#0f172a;color:#e2e8f0;font-size:11px;line-height:1.5;overflow:auto;max-height:160px;white-space:pre-wrap;"></pre>
-            </details>
-          </div>
-
-          <!-- GraphDB side -->
-          <div>
-            <div style="padding:7px 12px;background:#eff6ff;border-bottom:1px solid #bfdbfe;display:flex;align-items:center;gap:6px;">
-              <span style="font-size:11px;font-weight:700;color:#1e40af;">GraphDB (SPARQL)</span>
-              <span id="askGraphGdbMeta" style="font-size:10px;color:#64748b;"></span>
-            </div>
-            <div style="overflow:auto;max-height:280px;">
-              <table id="askGraphSparqlTable" style="width:100%;border-collapse:collapse;background:#fff;"></table>
-            </div>
-            <details>
-              <summary class="ask-detail-summary">▸ SPARQL Query</summary>
-              <pre id="askGraphSparqlQuery" style="margin:0;padding:10px 12px;background:#111827;color:#e5e7eb;font-size:11px;line-height:1.5;overflow:auto;max-height:160px;white-space:pre-wrap;"></pre>
-            </details>
-          </div>
-
-        </div>
-
-        <!-- Mismatch explanation (shown only when counts differ) -->
-        <div id="askMismatchExplanation" style="display:none;padding:10px 14px;background:#fefce8;border-top:1px solid #fde68a;">
-          <div style="font-size:11px;font-weight:700;color:#713f12;margin-bottom:4px;">Why results differ</div>
-          <div id="askMismatchText" style="font-size:12px;color:#713f12;line-height:1.6;"></div>
+        <div id="askLlmAnswer" class="ask-md" style="padding:14px 16px;border:1px solid #a7f3d0;background:#fff;border-radius:12px;font-weight:500;"></div>
+        <!-- Warnings shown here, below the interpretation -->
+        <div id="askWarnings"></div>
+        <!-- Insights -->
+        <div id="askInsightsBlock" style="display:none;margin-top:10px;">
+          <div style="font-size:11px;font-weight:700;color:#065f46;margin-bottom:4px;">Related Insights</div>
+          <div id="askInsights" style="display:grid;gap:6px;"></div>
         </div>
       </div>
 
-      <!-- ── 5. Chart (if present) ──────────────────────────────────────── -->
-      <div id="askChartBlock" style="display:none;padding:0 18px 14px;">
-        <div class="ask-section-label">Graph View</div>
+      <!-- ══ SECTION 2: SQLITE DATABASE RESULT ════════════════════════════════ -->
+      <div style="padding:16px 18px;border-bottom:2px solid #f1f5f9;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          <div style="width:4px;height:18px;border-radius:2px;background:#0369a1;"></div>
+          <div class="ask-section-label" style="margin:0;color:#0369a1;">2 · SQLite Database Result</div>
+          <div id="askSourceTables" style="font-size:11px;color:#94a3b8;font-style:italic;margin-left:auto;"></div>
+        </div>
+
+        <!-- SQL result table -->
+        <div style="margin-bottom:10px;">
+          <div style="font-size:11px;font-weight:700;color:#334155;margin-bottom:4px;display:flex;align-items:center;gap:6px;">
+            <span style="background:#0f172a;color:#22c55e;padding:2px 7px;border-radius:4px;font-family:monospace;font-size:10px;">SQL</span>
+            SQLite Estate Database
+            <span id="askSqlRowCount" style="color:#94a3b8;font-weight:400;font-size:10px;"></span>
+          </div>
+          <div style="overflow:auto;border:1px solid #e2e8f0;border-radius:10px;max-height:340px;">
+            <table id="askTable" style="width:100%;border-collapse:collapse;background:#fff;"></table>
+          </div>
+          <div id="askActualAnswer" style="margin-top:6px;font-size:12px;color:#475467;font-style:italic;display:none;"></div>
+        </div>
+
+        <!-- Estate overview panel (shown only for All-Townlands estate-wide queries) -->
+        <div id="askEstateOverview" style="display:none;margin-bottom:14px;padding:14px 16px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:12px;">
+          <div style="font-size:13px;font-weight:700;color:#1e3a8a;margin-bottom:4px;">County Wicklow &amp; Coolattin Estate — Overview</div>
+          <div style="font-size:12px;color:#3b82f6;margin-bottom:10px;">No townland filter applied — showing estate-wide and county-level statistics from the database.</div>
+          <div id="askEstateOverviewBody" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;"></div>
+        </div>
+      </div>
+
+      <!-- ══ SECTION 2b: KNOWLEDGE GRAPH RESULT ════════════════════════════════ -->
+      <div id="askKgSection" style="display:none;padding:16px 18px;border-bottom:2px solid #f1f5f9;background:linear-gradient(135deg,#faf5ff 0%,#f8fafc 100%);">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          <div style="width:4px;height:18px;border-radius:2px;background:#6b21a8;"></div>
+          <div class="ask-section-label" style="margin:0;color:#6b21a8;">2b · Knowledge Graph Result</div>
+          <span style="font-size:10px;color:#94a3b8;margin-left:auto;">Virtual Record Treasury of Ireland (VRTI)</span>
+        </div>
+
+        <!-- KG / SPARQL result table -->
+        <div id="askKgResultBlock" style="display:none;">
+          <div style="font-size:11px;font-weight:700;color:#6b21a8;margin-bottom:4px;display:flex;align-items:center;gap:6px;">
+            <span style="background:#6b21a8;color:#fff;padding:2px 7px;border-radius:4px;font-family:monospace;font-size:10px;">KG</span>
+            VRTI Knowledge Graph — Structured Records
+            <span id="askKgRowCount" style="color:#94a3b8;font-weight:400;font-size:10px;"></span>
+          </div>
+          <div style="overflow:auto;border:1px solid #ede9fe;border-radius:10px;max-height:260px;">
+            <table id="askVrtiTable" style="width:100%;border-collapse:collapse;background:#fff;"></table>
+          </div>
+        </div>
+
+        <!-- KG geographic townland detail cards -->
+        <div id="askKgBlock" style="display:none;margin-top:10px;">
+          <div style="font-size:11px;font-weight:700;color:#6b21a8;margin-bottom:4px;">Knowledge Graph — Geographic Context</div>
+          <div id="askKgContent" style="display:grid;gap:6px;"></div>
+        </div>
+      </div>
+
+      <!-- ══ SECTION 3: EXPLAINABILITY & JUSTIFICATION ═══════════════════════ -->
+      <div id="askExplainBlock" style="padding:16px 18px;border-bottom:2px solid #f1f5f9;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          <div style="width:4px;height:18px;border-radius:2px;background:#b45309;"></div>
+          <div class="ask-section-label" style="margin:0;color:#92400e;">3 · Explainability &amp; Provenance</div>
+        </div>
+        <div id="askExplainContent" style="display:grid;gap:6px;"></div>
+        <!-- Suggestions if data is missing -->
+        <div id="askSuggestionsBlock" style="display:none;margin-top:8px;">
+          <div style="font-size:11px;font-weight:700;color:#92400e;margin-bottom:4px;">If Data Is Missing</div>
+          <div id="askSuggestions" style="display:grid;gap:6px;"></div>
+        </div>
+      </div>
+
+      <!-- ══ SECTION 4: GENERATED QUERIES ═══════════════════════════════════ -->
+      <div style="padding:16px 18px;border-bottom:2px solid #f1f5f9;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          <div style="width:4px;height:18px;border-radius:2px;background:#7c3aed;"></div>
+          <div class="ask-section-label" style="margin:0;color:#5b21b6;">4 · Generated Queries</div>
+          <span style="font-size:10px;color:#94a3b8;margin-left:auto;">Queries executed against the database and knowledge graph</span>
+        </div>
+        <!-- SQL query -->
+        <div style="margin-bottom:10px;">
+          <div style="padding:6px 10px;background:#0f172a;border-radius:8px 8px 0 0;display:flex;align-items:center;gap:8px;">
+            <span style="font-size:10px;font-weight:700;background:#22c55e;color:#0f172a;padding:2px 6px;border-radius:4px;font-family:monospace;">SQL</span>
+            <span style="font-size:11px;color:#94a3b8;font-weight:600;">SQLite — Estate Records Database</span>
+            <span id="askCopySql" style="margin-left:auto;font-size:10px;color:#64748b;cursor:pointer;padding:2px 6px;border-radius:4px;border:1px solid #334155;" onclick="navigator.clipboard.writeText(document.getElementById('askSqliteQuery').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)})">Copy</span>
+          </div>
+          <pre id="askSqliteQuery" style="margin:0;padding:12px;background:#1e293b;color:#e2e8f0;overflow:auto;font-size:11px;line-height:1.6;max-height:220px;white-space:pre-wrap;border-radius:0 0 8px 8px;"></pre>
+        </div>
+        <!-- SPARQL query (shown only when present) -->
+        <div id="askSparqlBlock" style="display:none;">
+          <div style="padding:6px 10px;background:#4c1d95;border-radius:8px 8px 0 0;display:flex;align-items:center;gap:8px;">
+            <span style="font-size:10px;font-weight:700;background:#a78bfa;color:#1e1b4b;padding:2px 6px;border-radius:4px;font-family:monospace;">SPARQL</span>
+            <span style="font-size:11px;color:#c4b5fd;font-weight:600;">VRTI Knowledge Graph</span>
+            <span id="askCopySparql" style="margin-left:auto;font-size:10px;color:#a78bfa;cursor:pointer;padding:2px 6px;border-radius:4px;border:1px solid #5b21b6;" onclick="navigator.clipboard.writeText(document.getElementById('askSparqlQuery').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)})">Copy</span>
+          </div>
+          <pre id="askSparqlQuery" style="margin:0;padding:12px;background:#2e1065;color:#ddd6fe;overflow:auto;font-size:11px;line-height:1.6;max-height:220px;white-space:pre-wrap;border-radius:0 0 8px 8px;"></pre>
+        </div>
+      </div>
+
+      <!-- ══ SECTION 5: CHART ════════════════════════════════════════════════ -->
+      <div id="askChartBlock" style="display:none;padding:16px 18px;border-bottom:2px solid #f1f5f9;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          <div style="width:4px;height:18px;border-radius:2px;background:#0f766e;"></div>
+          <div class="ask-section-label" style="margin:0;color:#0f766e;">Visual Overview</div>
+        </div>
         <div id="askChart" style="padding:12px 14px;border:1px solid #e2e8f0;background:#fff;border-radius:10px;overflow:auto;"></div>
       </div>
 
-      <!-- ── 6. Suggestions / Insights (collapsible) ────────────────────── -->
-      <div id="askSuggestionsBlock" style="display:none;padding:0 18px 14px;">
-        <div class="ask-section-label">If Data Is Missing</div>
-        <div id="askSuggestions" style="display:grid;gap:6px;"></div>
-      </div>
-
-      <div id="askInsightsBlock" style="display:none;padding:0 18px 14px;">
-        <div class="ask-section-label">Related Insights</div>
-        <div id="askInsights" style="display:grid;gap:6px;"></div>
-      </div>
-
-      <!-- ── 7. Feedback ────────────────────────────────────────────────── -->
-      <div style="margin:0 18px 14px;padding:12px 14px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
-        <div class="ask-section-label">Feedback</div>
-        <div style="font-size:12px;color:#475467;">
-          Thumbs up saves a good SQL pattern; thumbs down records that this answer was not good enough.
-        </div>
-        <input id="askFeedbackNote" type="text" placeholder="Optional note"
-          style="width:100%;margin-top:8px;padding:10px 12px;border:1px solid #d8d2c8;border-radius:10px;background:#fff;color:#0f172a;" />
-        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
-          <button id="askFeedbackUp" class="btn btn-soft" type="button">Thumbs Up</button>
-          <button id="askFeedbackDown" class="btn btn-soft" type="button">Thumbs Down</button>
-        </div>
-        <div id="askFeedbackStatus" style="margin-top:8px;font-size:12px;color:#475467;"></div>
-      </div>
-
-      <!-- ── 8. Technical details (collapsible) ────────────────────────── -->
+      <!-- ══ SECTION 6: HIDDEN — LLM & Data Workflow ═══════════════════════ -->
       <details style="border-top:1px solid #f1f5f9;">
-        <summary class="ask-detail-summary" style="padding:10px 18px;font-size:12px;">▸ Technical Details &amp; Provenance</summary>
-        <div style="padding:0 18px 14px;display:grid;gap:12px;">
+        <summary class="ask-detail-summary" style="padding:10px 18px;">
+          ▸ LLM Connection · Data Workflow · Query Provenance · Context Used
+        </summary>
+        <div style="padding:0 18px 16px;display:grid;gap:14px;">
 
-          <!-- Generated Queries -->
+          <!-- LLM Connection + Data Workflow -->
           <div>
-            <div class="ask-section-label">Generated Queries</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-              <div style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
-                <div style="padding:7px 10px;background:#f8fafc;font-size:11px;font-weight:700;color:#334155;">SQLite</div>
-                <pre id="askSqliteQuery" style="margin:0;padding:10px;background:#0f172a;color:#e2e8f0;overflow:auto;font-size:11px;line-height:1.5;max-height:160px;"></pre>
-              </div>
-              <div style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
-                <div style="padding:7px 10px;background:#f8fafc;font-size:11px;font-weight:700;color:#334155;">PostgreSQL — VRTI Warehouse</div>
-                <pre id="askVrtiPgQuery" style="margin:0;padding:10px;background:#111827;color:#e5e7eb;overflow:auto;font-size:11px;line-height:1.5;max-height:160px;"></pre>
-              </div>
-            </div>
-          </div>
-
-          <!-- LLM Connection metadata -->
-          <div>
-            <div class="ask-section-label">LLM Connection + Data Workflow</div>
+            <div class="ask-section-label">LLM Connection &amp; Data Workflow</div>
             <div id="askLlmMeta" style="display:grid;gap:5px;font-size:12px;color:#475467;"></div>
           </div>
 
           <!-- Query Provenance -->
           <div>
-            <div class="ask-section-label" style="display:flex;align-items:center;gap:8px;">
-              Query Provenance
-              <span id="askGateBadge" style="display:none;"></span>
-              <span id="askVerifierBadge" style="display:none;"></span>
-            </div>
+            <div class="ask-section-label">Query Provenance</div>
             <div id="askProvenance" style="display:grid;gap:5px;font-size:12px;color:#475467;"></div>
           </div>
 
-          <!-- VRTI Townland Context -->
-          <div id="askKgBlock" style="display:none;">
-            <div class="ask-section-label">VRTI Townland Context</div>
-            <div id="askKgContent" style="display:grid;gap:6px;"></div>
-          </div>
-
-          <!-- VRTI graph table -->
+          <!-- Summarised stats block -->
           <div>
-            <div class="ask-section-label">Processed Table — VRTI Graph</div>
-            <div style="overflow:auto;border:1px solid #e2e8f0;border-radius:10px;max-height:200px;">
-              <table id="askVrtiTable" style="width:100%;border-collapse:collapse;background:#fff;"></table>
-            </div>
+            <div class="ask-section-label">Summarised Statistics</div>
+            <div id="askSummary" style="padding:12px 14px;border:1px solid #dbeafe;background:#eff6ff;border-radius:10px;color:#1e3a8a;font-size:12px;line-height:1.6;"></div>
           </div>
 
-          <!-- Summarised Output -->
-          <div>
-            <div class="ask-section-label">Summarised Output</div>
-            <div id="askSummary" style="padding:12px 14px;border:1px solid #dbeafe;background:#eff6ff;border-radius:10px;color:#1e3a8a;font-size:13px;line-height:1.6;"></div>
-          </div>
-
-          <!-- Supporting Context -->
+          <!-- Supporting Context used by LLM -->
           <div id="askSupportContextBlock" style="display:none;">
-            <div class="ask-section-label">Supporting Context Used By LLM</div>
+            <div class="ask-section-label">Context Used by LLM</div>
             <div id="askSupportContext" style="display:grid;gap:6px;"></div>
           </div>
 
         </div>
       </details>
 
+      <!-- ══ SECTION 7: FEEDBACK ════════════════════════════════════════════ -->
+      <div style="padding:20px 18px;background:#fafaf9;border-top:2px solid #e2e8f0;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+          <div style="width:4px;height:18px;border-radius:2px;background:#6b7280;"></div>
+          <div class="ask-section-label" style="margin:0;color:#374151;">Rate this answer</div>
+        </div>
+        <p style="font-size:12px;color:#6b7280;margin:0 0 10px;line-height:1.6;">
+          Your feedback trains the system. A <strong>thumbs up</strong> saves the SQL query as an approved pattern — future similar questions will reuse it instantly without an LLM call, making answers faster and more consistent.
+          A <strong>thumbs down</strong> flags the query for review so the pattern is never reused.
+        </p>
+        <input id="askFeedbackNote" type="text" placeholder="Optional note — what was right or wrong about this answer?"
+          style="width:100%;padding:9px 12px;border:1px solid #d8d2c8;border-radius:10px;background:#fff;color:#0f172a;font-size:12px;box-sizing:border-box;" />
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <button id="askFeedbackUp"   class="btn btn-soft" type="button">👍 Looks correct</button>
+          <button id="askFeedbackDown" class="btn btn-soft" type="button">👎 Needs improvement</button>
+          <div id="askFeedbackStatus" style="font-size:12px;color:#475467;"></div>
+        </div>
+      </div>
+
     </section>
   </div>
 </section>
 
-<script src="{{ url_for('static', filename='js/ask.js') }}?v=15"></script>
+<script src="{{ url_for('static', filename='js/marked.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ask.js') }}?v=26"></script>
 {% endblock %}

@@ -159,6 +159,17 @@ def kg_townland_persons(name: str):
     return jsonify(data)
 
 
+@bp.get("/townland-rich/<path:name>")
+def kg_townland_rich(name: str):
+    """
+    Return enriched geographical detail for a townland:
+    local DB stats, VRTI KG data, LLM-generated SPARQL query, and a rich narrative.
+    """
+    from backend.services.kg_service import get_townland_rich_detail
+    data = get_townland_rich_detail(name)
+    return jsonify(data)
+
+
 @bp.get("/rdf-status")
 def kg_rdf_status():
     from backend.services.kg_service import _load_rdf_graph, _ttl_path

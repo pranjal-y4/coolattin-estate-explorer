@@ -17,15 +17,16 @@ The Ask page pipeline was rewritten from a flat 7-step sequence into a fully orc
 
 | Phase | Module | What it does |
 |---|---|---|
-| 1 | `intent_router.py` | Classifies question: ANALYTICAL / RELATIONAL / COMPARATIVE / FALLBACK |
-| 2 | `embedding_index.py` | Hybrid TF-IDF + dense retrieval; fast-lane short-circuit for high-confidence template/memory hits |
-| 3 | `semantic_layer.py` | Slot-fill compiler → deterministic SQL + SPARQL without LLM |
-| 4 | `subgraph_engine.py` | KG traversal (VRTI + GraphDB) for relational/hierarchy/heritage questions |
-| 5 | `ask_service.py` | LLM SQL generation (fallback only) |
-| 6 | `identity_resolver.py` | Person name disambiguation (Mention/Person/Factoid three-layer model) |
-| 7 | `ask_service.py` | Multi-model synthesis: aggregate SQL + KG + retrieved chunks → structured answer |
+| Pre-flight | `ask_service.py` | 4 fast lanes checked in order: rule-fill (conf ≥ 0.80) → verified template → memory reuse (cosine ≥ 0.55) → embedding retrieval (cosine ≥ 0.68) |
+| 1 | `identity_resolver.py` | Resolve townland + person identity once; `sql_id` + `kg_uri` shared downstream |
+| 2 | `semantic_layer.py` | Slot-fill compiler → deterministic SQL + SPARQL; 22-metric registry; 0 LLM for rule-fill path |
+| 3 | `subgraph_engine.py` | KG traversal — VRTI multi-hop SPARQL + GraphDB k=2 neighbourhood expansion |
+| 4 | `embedding_index.py` | Hybrid TF-IDF + RRF; fast-lane threshold 0.68 for template short-circuit |
+| 5 | `intent_router.py` | Classifies question: ANALYTICAL / RELATIONAL / COMPARATIVE / FALLBACK (priority order) |
+| 6 | `ask_service.py` | Fusion + discrepancy detection across SQL + VRTI + GraphDB results |
+| 7 | `ask_service.py` | LLM synthesis → provenance-annotated answer; FALLBACK lane uses LLM SQL generation only |
 
-**Key SSE event stages added:** `retrieving_vectors`, `retrieving_sparse`, `fusing_results`, `synthesising_answer`, `done`
+**Key SSE event stages:** `resolving_identity`, `slot_filling`, `schema_sql`, `classifying_intent`, `querying_subgraph`, `embedding_retrieval`, `contacting_llm`, `framing_query`, `querying_database`, `querying_vrti_graph`, `querying_graphdb`, `querying_fusion`, `synthesizing_answer`, `preparing_output`
 
 **Files changed:** `backend/services/ask_service.py` (major), `frontend/static/js/ask.js`, `frontend/templates/ask.html`
 
@@ -254,3 +255,108 @@ Baselines captured (stored as JSON in `backend/services/eval_results/`):
 **Why keep TF-IDF alongside dense embeddings?** Dense retrieval struggles on exact entity names and rare historical terms. TF-IDF keyword overlap catches what dense misses. RRF fusion reliably outperforms either alone on the template/memory matching task.
 
 **Why the semantic layer generates both SQL and SPARQL?** The dissertation research question (RQ6) asks whether SPARQL over a purpose-built KG gives different results from SQL over a relational schema. The semantic layer is the mechanism that answers this: the same `SlotFill` struct is compiled to both, so results can be directly compared without LLM variance.
+
+---
+
+# Handoff Notes — June 2026 Performance & Stability Sprint
+
+**Sprint period:** 10–21 June 2026  
+**Commits covered:** `666e790`, `371f7b8`, `c82377a`, `fddfdd8`, `dd02e46`
+
+---
+
+## 1. What Was Fixed / Built
+
+### 1.1 Workhouse ER Performance (`666e790`)
+
+The workhouse entity resolution pipeline was producing 15–25 s page loads on the home page because the ER `_match_index` was being rebuilt on every request.
+
+**Fix:** Cached the match index in the `workhouse_service` module with a 10-minute in-process TTL. Batched the ER candidate query from individual `SELECT` calls per record to a single `WHERE id IN (...)` query (max batch size 200).
+
+**Security hardening applied in the same commit:**
+- Replaced f-string SQL interpolation with parameterised `sqlite3` placeholders throughout `workhouse_entity_resolution.py`, `scoring.py`, and `normalise.py` to eliminate SQL injection risk
+- Validated GeoJSON `lat`/`lon` values are numeric before use in the Leaflet map marker constructor (crashed browser on `null` or `"N/A"` geometry)
+- Removed a reflected-input XSS vector in the home page search box — user input is now escaped before insertion into the DOM
+
+**Files changed:** `backend/services/workhouse_entity_resolution.py`, `backend/services/entity_resolution/scoring.py`, `backend/services/entity_resolution/normalise.py`, `backend/services/workhouse_service.py`, `frontend/static/js/main.js`, `frontend/templates/base.html`
+
+### 1.2 Seed Database Updated (`371f7b8`)
+
+The committed `coolattin.db` seed snapshot was updated to include:
+- 140 confirmed workhouse→estate entity resolution links (in `workhouse_unified_links`)
+- The full in-process property graph (49,081 `graph_nodes` rows, 64,342 `graph_edges` rows) pre-loaded so the app starts without needing to run `scripts/build_graph.py`
+
+This means fresh Azure deployments that use the seed DB get both the ER links and GraphRAG graph immediately without a separate build step.
+
+### 1.3 Map Load + Unified Records Cache (`c82377a`)
+
+**Problems:**
+- The Leaflet map was silently failing to render on Azure because `/api/unified/records` (called by the map marker layer) was timing out — the unified DataFrame was being rebuilt from CSV on every cold start under gunicorn
+- `/api/unified/records` with no filter was returning all 13,707 rows synchronously, blocking the gunicorn worker for 8–12 s
+
+**Fixes:**
+- Added a module-level `_UNIFIED_RECORDS_CACHE` in `unified_service.py` with a 5-minute TTL; the DataFrame is loaded once and served from cache on subsequent requests
+- Added `limit=500` default cap to the `/api/unified/records` endpoint when called without explicit filters; the map marker layer now requests only what it needs
+- Batched the ER enrichment call in `unified_service.search_records()`: instead of one DB round-trip per row, a single `WHERE record_id IN (...)` query fetches all workhouse link data
+
+**Files changed:** `backend/services/unified_service.py`, `backend/routes/unified.py`
+
+### 1.4 Gunicorn Worker Timeout Fix (`fddfdd8`)
+
+The `/api/unified/records` endpoint was hitting the gunicorn 30 s worker timeout on Azure on cold start because the CSV load + DataFrame build was running synchronously in the request cycle.
+
+**Fix:** Pre-warm the unified cache at application startup in `create_app.py` by calling `unified_service._warm_cache()` inside the app context after blueprints are registered. The first gunicorn worker to start pays the CSV load cost (~2 s); subsequent requests and workers hit the in-process cache.
+
+**Files changed:** `create_app.py`, `backend/services/unified_service.py`
+
+### 1.5 CSP Fix — Leaflet and D3.js CDN Resources (`dd02e46`)
+
+The Content Security Policy headers in `base.html` were blocking Leaflet tile requests (`*.openstreetmap.org`) and D3.js CDN script loads (`cdn.jsdelivr.net`) on Azure, producing silent map/graph failures in production.
+
+**Fix:** Updated the `Content-Security-Policy` header in `base.html`:
+- Added `https://*.openstreetmap.org` and `https://*.tile.openstreetmap.org` to `img-src` and `connect-src`
+- Added `https://cdn.jsdelivr.net` to `script-src` and `style-src`
+- Added `https://unpkg.com` to `script-src` (Leaflet CDN fallback)
+
+**Files changed:** `frontend/templates/base.html`
+
+---
+
+## 2. What Changed in Existing Files (June 14–21)
+
+| File | What changed |
+|---|---|
+| `backend/services/unified_service.py` | Added `_UNIFIED_RECORDS_CACHE` (5-min TTL), `_warm_cache()`, batch ER enrichment; `search_records()` now cache-first |
+| `backend/routes/unified.py` | Added `limit=500` default cap on no-filter requests |
+| `backend/services/workhouse_service.py` | Match index cached with 10-min TTL |
+| `backend/services/workhouse_entity_resolution.py` | Parameterised all SQL; removed f-string interpolation |
+| `backend/services/entity_resolution/scoring.py` | Parameterised SQL queries |
+| `backend/services/entity_resolution/normalise.py` | Parameterised SQL queries |
+| `frontend/static/js/main.js` | Fixed null-geometry crash on Leaflet marker construction; escaped DOM insertion of user search input |
+| `frontend/templates/base.html` | CSP header updated to allow Leaflet CDN + D3.js CDN + OSM tiles |
+| `create_app.py` | Added `unified_service._warm_cache()` call on startup |
+| `coolattin.db` | Seed snapshot updated with 140 ER links + full graph_nodes/graph_edges |
+
+---
+
+## 3. Outstanding Items (as of 2026-06-21)
+
+| Item | Priority | Notes |
+|---|---|---|
+| D8 — Load co: ontology repo with data | High | `scripts/rdf_uplift.py` + GraphDB data load; needed for RQ6 full comparison |
+| D3 — Dataset audit | Medium | 4 SQL queries against `coolattin.db`; just needs running and write-up |
+| D4 — Geospatial alignment audit | Medium | 4 SQL queries against `townland` table; read `reconciliation_gaps.csv` |
+| D10 — Free-form LLM eval | Medium | Run 10+ non-template questions; record SQL validity + repair rate |
+| D11 — User evaluation | Medium | 4–6 participants; task-based session |
+| D5 review UI | Low | Entity resolution candidate review page; data is already there |
+| D12 — Dissertation write-up | Required | Weeks 7–12 of plan |
+
+---
+
+## 4. Architecture Decision Log (June 14–21)
+
+**Why pre-warm the unified cache at startup rather than on first request?** Under gunicorn with multiple workers, first-request warming means whichever worker handles the first `/api/unified/records` call pays the full cold-start cost and the response is slow. Pre-warming in `create_app.py` ensures all workers share a warm cache before traffic arrives.
+
+**Why cap `/api/unified/records` at 500 by default?** The map marker layer never needs all 13,707 rows — it renders pins for the visible viewport. Sending all rows to the browser on every page load was responsible for both the gunicorn timeout and the slow map render. The explicit `?limit=` parameter still allows callers to request more.
+
+**Why batch ER enrichment rather than per-row queries?** The original `search_records()` loop called `workhouse_service.get_matches(record_id)` for each returned row, producing N+1 queries for every search. Replacing with a single `WHERE record_id IN (...)` reduces round-trips from O(n) to O(1) regardless of result set size.

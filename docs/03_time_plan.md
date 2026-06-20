@@ -125,7 +125,7 @@
   - Data integration pipeline: source formats, normalisation, derived fields
   - Unified record schema design decisions
   - Analytics module architecture
-  - Ask pipeline: template matching → LLM SQL generation → guardrail → VRTI enrichment → SSE streaming → PDF export
+  - Ask pipeline: four fast lanes (rule-fill / verified template / memory / embedding) → intent classification → semantic layer SQL (ANALYTICAL) / subgraph engine (RELATIONAL) / FALLBACK → read-only guardrail → SQL execution → VRTI + GraphDB enrichment → Phase 6 fusion → Phase 7 LLM rewrite → SSE streaming → PDF export
   - Frontend architecture: Leaflet maps, SSE handling, analytics rendering
 - [ ] Include architecture diagram (can be drawn in draw.io or Mermaid and exported)
 - [ ] Describe the data warehouse design decision and justify it (Declan's point: static data, batch refresh, appropriate for this use case)

@@ -439,44 +439,48 @@ document.addEventListener("DOMContentLoaded", async () => {
     `;
   }
 
-  window.openSourceDetails = async function (idx, sourceType) {
+  window.openSourceDetails = function (idx, sourceType) {
     const group = state.activeGroups[idx];
     if (!group) return;
 
     const sourceLabel = sourceType === "workhouse" ? "Workhouse" : sourceType === "emigration" ? "Emigration" : "Source";
-    $("recordModalTitle").innerText = `${group.label} - ${sourceLabel} Details`;
-    $("recordModalBody").innerHTML = "<div style='padding:20px;text-align:center;color:#64748b;'>Loading source details...</div>";
-    openModal(recordModal);
+    $("recordModalTitle").innerText = `${group.label} — ${sourceLabel}`;
+
+    let bodyHTML = "";
 
     if (sourceType === "emigration") {
-      $("recordModalBody").innerHTML = emigrationSectionHTML(group.records);
-      return;
-    }
-
-    if (sourceType === "workhouse") {
+      bodyHTML = emigrationSectionHTML(group.records);
+    } else if (sourceType === "workhouse") {
       const ordered = group.records
         .slice()
         .sort((a, b) => (normalizeYear(a.year) || 0) - (normalizeYear(b.year) || 0));
 
-      const chunks = await Promise.all(
-        ordered.map(async (r) => {
-          const matchBundle = await fetchWorkhouseMatches(r.record_id);
-          if (!(matchBundle.count || 0)) return "";
-          return `
-            <div style="margin-bottom:10px;">
-              <div style="font-size:12px;font-weight:800;color:#334155;margin:6px 0;">${canonicalName(r)} (Record ${r.record_id})</div>
-              ${workhouseSectionHTML(matchBundle)}
+      const sections = ordered.map((r) => {
+        const linked   = Array.isArray(r.linked_workhouse_records)  ? r.linked_workhouse_records  : [];
+        const possible = Array.isArray(r.please_check_records)       ? r.please_check_records
+                       : Array.isArray(r.possible_workhouse_matches) ? r.possible_workhouse_matches : [];
+        const all = [...linked, ...possible];
+        if (!all.length) return "";
+        return `
+          <div style="margin-bottom:14px;">
+            <div style="font-size:11px;font-weight:800;color:#334155;margin:0 0 6px;
+                        padding-bottom:4px;border-bottom:1px solid #e2e8f0;">
+              ${canonicalName(r)}
+              <span style="font-size:10px;font-weight:400;color:#64748b;margin-left:4px;">Record ${r.record_id}</span>
             </div>
-          `;
-        })
-      );
-
-      const html = chunks.join("");
-      $("recordModalBody").innerHTML = html || "<div style='padding:20px;color:#64748b;'>No workhouse records in this selection.</div>";
-      return;
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:stretch;">
+              ${linked.map(m => _whMatchCard(m, true)).join("")}
+              ${possible.map(m => _whMatchCard(m, false)).join("")}
+            </div>
+          </div>`;
+      });
+      bodyHTML = sections.join("") || "<div style='padding:20px;color:#64748b;'>No workhouse matches found for this selection.</div>";
+    } else {
+      bodyHTML = "<div style='padding:20px;color:#64748b;'>Unsupported source type.</div>";
     }
 
-    $("recordModalBody").innerHTML = "<div style='padding:20px;color:#64748b;'>Unsupported source type.</div>";
+    $("recordModalBody").innerHTML = bodyHTML;
+    openModal(recordModal);
   };
 
   function yearSummaryHTML(records) {
@@ -604,43 +608,107 @@ document.addEventListener("DOMContentLoaded", async () => {
     `;
   }
 
+  const _WH_DETAIL_LABELS = {
+    electoral_division: "Electoral Division",
+    sex: "Sex",
+    status: "Status",
+    employment: "Employment",
+    religion: "Religion",
+    disability: "Health",
+    spouse: "Spouse / Notes",
+    children_count: "Children",
+    admitted_or_born: "Admitted / Born",
+    died_or_left: "Died / Left",
+    register_number: "Register No.",
+    source_sheet: "Source Sheet",
+  };
+
+  function _whDetailRows(detail) {
+    if (!detail || typeof detail !== "object") return "";
+    const rows = Object.entries(_WH_DETAIL_LABELS)
+      .filter(([k]) => detail[k] != null && String(detail[k]).trim() !== "")
+      .map(([k, label]) =>
+        `<div style="display:flex;gap:4px;margin-bottom:3px;">
+          <span style="font-size:10px;color:#7c3aed;font-weight:600;min-width:105px;flex-shrink:0;">${label}</span>
+          <span style="font-size:10px;color:#1e1b4b;word-break:break-word;">${detail[k]}</span>
+        </div>`);
+    return rows.join("");
+  }
+
+  function _whMatchCard(m, isConfirmed) {
+    const pct = m.confidence_score != null ? Math.round(Number(m.confidence_score) * 100) : null;
+    const name = m.name || m.raw_name || "Unknown";
+    const detail = m.workhouse_detail || {};
+    const evidence = Array.isArray(m.why_it_matched) && m.why_it_matched.length ? m.why_it_matched : [];
+    const missing = Array.isArray(m.what_evidence_is_missing) && m.what_evidence_is_missing.length ? m.what_evidence_is_missing : [];
+
+    const border  = isConfirmed ? "#86efac" : "#c4b5fd";
+    const bg      = isConfirmed ? "#f0fdf4" : "#faf5ff";
+    const pctBg   = isConfirmed ? "#16a34a" : "#7c3aed";
+    const lblBg   = isConfirmed ? "#dcfce7" : "#ede9fe";
+    const lblClr  = isConfirmed ? "#15803d" : "#6d28d9";
+    const lbl     = isConfirmed ? "Confirmed" : "Possible";
+
+    return `
+      <div style="border:1px solid ${border};border-radius:9px;background:${bg};
+                  display:flex;flex-direction:column;min-width:210px;flex:1;overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid ${border};">
+          ${pct != null ? `
+            <div style="flex-shrink:0;background:${pctBg};color:#fff;border-radius:7px;
+                        padding:5px 8px;text-align:center;min-width:46px;">
+              <div style="font-size:16px;font-weight:800;line-height:1.1;">${pct}%</div>
+              <div style="font-size:8px;font-weight:700;letter-spacing:.04em;opacity:.85;">MATCH</div>
+            </div>` : ""}
+          <div style="flex:1;min-width:0;">
+            <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-bottom:2px;">
+              <span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:999px;
+                           background:${lblBg};color:${lblClr};">${lbl}</span>
+              <span style="font-weight:700;color:#1e1b4b;font-size:12px;">${name}</span>
+            </div>
+            ${m.source_record_id ? `<div style="font-size:10px;color:#94a3b8;">Ref: ${m.source_record_id}</div>` : ""}
+          </div>
+        </div>
+        <div style="padding:8px 10px;flex:1;">
+          ${_whDetailRows(detail) || `<div style="font-size:10px;color:#94a3b8;font-style:italic;">No additional detail available</div>`}
+          ${evidence.length ? `
+            <div style="margin-top:7px;padding-top:6px;border-top:1px solid ${border};">
+              <div style="font-size:9px;font-weight:700;color:${pctBg};text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px;">Why matched</div>
+              ${evidence.map(e => `<div style="font-size:10px;color:#374151;margin-bottom:1px;">• ${e}</div>`).join("")}
+            </div>` : ""}
+          ${missing.length ? `
+            <div style="margin-top:5px;">
+              <div style="font-size:9px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Evidence missing</div>
+              ${missing.map(e => `<div style="font-size:10px;color:#78350f;margin-bottom:1px;">• ${e}</div>`).join("")}
+            </div>` : ""}
+        </div>
+      </div>`;
+  }
+
   function inlineWorkhouseHTML(rec) {
-    const linked = Array.isArray(rec.linked_workhouse_records) ? rec.linked_workhouse_records : [];
-    const possible = Array.isArray(rec.please_check_records) ? rec.please_check_records
-      : Array.isArray(rec.possible_workhouse_matches) ? rec.possible_workhouse_matches : [];
+    const linked   = Array.isArray(rec.linked_workhouse_records)  ? rec.linked_workhouse_records  : [];
+    const possible = Array.isArray(rec.please_check_records)       ? rec.please_check_records
+                   : Array.isArray(rec.possible_workhouse_matches) ? rec.possible_workhouse_matches : [];
     const all = [...linked, ...possible];
     if (!all.length) return "";
 
-    const renderCard = (m, isConfirmed) => {
-      const bg = isConfirmed ? "#f0fdf4" : "#faf5ff";
-      const border = isConfirmed ? "#86efac" : "#d8b4fe";
-      const nameColor = isConfirmed ? "#14532d" : "#4c1d95";
-      const label = isConfirmed ? "Confirmed link" : "Please verify";
-      const labelBg = isConfirmed ? "#dcfce7" : "#ede9fe";
-      const labelColor = isConfirmed ? "#15803d" : "#6d28d9";
-      const name = m.name || m.raw_name || `${m.forename || ""} ${m.surname || ""}`.trim() || "Unknown";
-      const score = m.confidence_score != null ? ` · Score: ${(Number(m.confidence_score) * 100).toFixed(0)}%` : "";
-      return `
-        <div style="padding:8px 10px;border:1px solid ${border};border-radius:7px;background:${bg};margin-bottom:6px;">
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
-            <span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:999px;background:${labelBg};color:${labelColor};">${label}</span>
-            <span style="font-weight:700;color:${nameColor};font-size:12px;">${name}</span>
-          </div>
-          <div style="font-size:11px;color:#475569;">Place: ${m.place || m.electoral_division || m.raw_place || "-"} · Year: ${m.year || "-"} · Age: ${m.age || "-"}${score}</div>
-          ${m.why_it_matched && m.why_it_matched.length ? `<div style="font-size:10px;color:#6b7280;">Evidence: ${m.why_it_matched.join("; ")}</div>` : ""}
-          ${m.what_evidence_is_missing && m.what_evidence_is_missing.length ? `<div style="font-size:10px;color:#92400e;">Missing: ${m.what_evidence_is_missing.join("; ")}</div>` : ""}
-        </div>`;
-    };
-
     return `
-      <div style="margin-top:8px;padding:10px 12px;background:#faf5ff;border:1px solid #d8b4fe;border-radius:8px;">
-        <div style="font-size:10px;font-weight:800;color:#4c1d95;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">🏥 Workhouse Records</div>
-        <div style="font-size:11px;color:#78350f;background:#fef3c7;border:1px solid #fde68a;border-radius:5px;padding:5px 8px;margin-bottom:8px;line-height:1.5;">
-          ⚠ These workhouse records were algorithmically matched to this estate record.
-          <strong>Please verify</strong> that they refer to the same individual before drawing conclusions.
+      <div style="margin-top:10px;padding:10px 12px 12px;background:#faf5ff;
+                  border:2px solid #a78bfa;border-radius:10px;">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:7px;">
+          <span style="font-size:13px;">🏥</span>
+          <span style="font-size:11px;font-weight:800;color:#4c1d95;text-transform:uppercase;
+                       letter-spacing:.07em;">Workhouse Possible Matches</span>
+          <span style="font-size:10px;font-weight:600;background:#7c3aed;color:#fff;
+                       border-radius:999px;padding:1px 7px;margin-left:auto;">${all.length}</span>
         </div>
-        ${linked.map(m => renderCard(m, true)).join("")}
-        ${possible.map(m => renderCard(m, false)).join("")}
+        <div style="font-size:10px;color:#6d28d9;background:#ede9fe;border-radius:5px;
+                    padding:5px 8px;margin-bottom:8px;line-height:1.5;">
+          Algorithmically matched — percentages show match probability. Verify independently before drawing conclusions.
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:stretch;">
+          ${linked.map(m => _whMatchCard(m, true)).join("")}
+          ${possible.map(m => _whMatchCard(m, false)).join("")}
+        </div>
       </div>`;
   }
 

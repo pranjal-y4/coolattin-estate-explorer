@@ -2,6 +2,15 @@
 backend/services/entity_resolution/scoring.py
 
 Transparent scoring for workhouse-to-unified-record candidate links.
+
+Signal weights (60 pts max → normalised to 0–1):
+  Full name similarity   10
+  Exact surname          10  (phonetic fallback: 7)
+  Forename               10  (missing either side → neutral 5)
+  Townland name norm     10  (variant match: 6)
+  Birth-year alignment    5  (gap ≤ 3 yrs: 5; ≤ 8 yrs: 3)
+  Gender                 10  (missing → neutral 5; mismatch → 0 + conflict)
+  Timeline alignment      5  (age-progression consistency across records)
 """
 from __future__ import annotations
 
@@ -11,8 +20,10 @@ from typing import Any
 
 try:
     from rapidfuzz import fuzz
-except Exception:  # pragma: no cover - optional fallback
+except Exception:  # pragma: no cover
     fuzz = None
+
+_MAX_POINTS = 60.0
 
 
 def _ratio(a: str, b: str) -> float:
@@ -21,14 +32,6 @@ def _ratio(a: str, b: str) -> float:
     if fuzz is not None:
         return float(fuzz.token_sort_ratio(a, b))
     return SequenceMatcher(None, a, b).ratio() * 100.0
-
-
-def _token_overlap(a: str, b: str) -> float:
-    sa = {tok for tok in (a or "").split() if tok}
-    sb = {tok for tok in (b or "").split() if tok}
-    if not sa or not sb:
-        return 0.0
-    return len(sa & sb) / max(len(sa | sb), 1)
 
 
 @dataclass
@@ -44,135 +47,142 @@ def score_candidate(mention: dict[str, Any], candidate: dict[str, Any]) -> Score
     evidence: list[str] = []
     conflicts: list[str] = []
     missing: list[str] = []
+    raw = 0.0
 
-    raw_points = 0.0
-
-    name_ratio = _ratio(mention.get("normalised_name") or "", candidate.get("normalised_name") or "")
-    name_points = min(25.0, (name_ratio / 100.0) * 25.0)
-    raw_points += name_points
-    if name_points >= 20:
+    # ── 1. Full name similarity (max 10) ─────────────────────────────────────
+    m_name = mention.get("normalised_name") or ""
+    c_name = candidate.get("normalised_name") or ""
+    name_ratio = _ratio(m_name, c_name)
+    if name_ratio >= 90:
+        raw += 10.0
         evidence.append(f"Strong name similarity ({name_ratio:.0f}%)")
-    elif name_points > 0:
+    elif name_ratio >= 75:
+        raw += 7.0
+        evidence.append(f"Good name similarity ({name_ratio:.0f}%)")
+    elif name_ratio >= 60:
+        raw += 4.0
         evidence.append(f"Partial name similarity ({name_ratio:.0f}%)")
     else:
         missing.append("No strong full-name match")
 
-    surname_points = 0.0
+    # ── 2. Surname (max 10; phonetic fallback 7) ──────────────────────────────
     if mention.get("surname") and mention.get("surname") == candidate.get("surname"):
-        surname_points = 15.0
+        raw += 10.0
         evidence.append("Exact surname match")
     elif (
         mention.get("phonetic_surname")
         and mention.get("phonetic_surname") == candidate.get("phonetic_surname")
     ):
-        surname_points = 11.0
+        raw += 7.0
         evidence.append("Phonetic surname match")
     else:
-        missing.append("No exact or phonetic surname match")
-    raw_points += surname_points
+        missing.append("No surname match")
 
-    # Forename compatibility: when both forenames are known and clearly different,
-    # subtract points equal to the surname bonus so that surname+place homonyms
-    # cannot be confirmed on surname alone. The penalty only fires when the
-    # forename ratio is well below the typical variant threshold (Jno/John = 100%,
-    # Judy/Judith ≈ 73% — safe; Peter/Mary-Anne ≈ 17% — flagged).
+    # ── 3. Forename (max 10; one side missing → neutral 5) ───────────────────
     m_fore = mention.get("forename") or ""
     c_fore = candidate.get("forename") or ""
-    if m_fore and c_fore:
-        forename_ratio = _ratio(m_fore, c_fore)
-        if forename_ratio < 60.0:
-            raw_points -= 15.0
+    if not m_fore or not c_fore:
+        raw += 5.0
+        missing.append("Forename unknown on one side")
+    else:
+        fore_ratio = _ratio(m_fore, c_fore)
+        if fore_ratio >= 90:
+            raw += 10.0
+            evidence.append("Exact forename match")
+        elif fore_ratio >= 80:
+            raw += 7.0
+            evidence.append(f"Close forename match ({fore_ratio:.0f}%)")
+        elif fore_ratio >= 60:
+            raw += 4.0
+            evidence.append(f"Partial forename similarity ({fore_ratio:.0f}%)")
+        else:
             conflicts.append(
-                f"Forename mismatch ({m_fore} vs {c_fore}; {forename_ratio:.0f}% similarity)"
+                f"Forename mismatch ({m_fore} vs {c_fore}; {fore_ratio:.0f}%)"
             )
 
-    place_points = 0.0
+    # ── 4. Townland / place normalisation (max 10; variant 6) ────────────────
     m_place = mention.get("normalised_place") or ""
     c_place = candidate.get("normalised_place") or ""
     if m_place and c_place and m_place == c_place:
-        place_points = 20.0
+        raw += 10.0
         evidence.append("Same canonical place")
     elif m_place and c_place and (m_place in c_place or c_place in m_place):
-        place_points = 12.0
+        raw += 6.0
         evidence.append("Variant or nearby place match")
-    elif m_place and c_place:
-        # Places are known but don't match — genuine geographic conflict.
-        # Workhouse uses Electoral Division; estate records use townland.
-        # Only flag as a conflict when both sides have resolvable place data.
-        conflicts.append("Place mismatch (ED vs townland may be incompatible)")
-    # When either side has no place data, neither a bonus nor a conflict applies.
-    raw_points += place_points
+    elif not m_place or not c_place:
+        missing.append("Place data missing on one side")
+    else:
+        missing.append("Place mismatch (Electoral Division vs townland may differ)")
 
-    age_points = 0.0
+    # ── 5. Birth-year alignment (max 5) ──────────────────────────────────────
     m_birth = mention.get("inferred_birth_year")
     c_birth = candidate.get("inferred_birth_year")
     if m_birth and c_birth:
         birth_gap = abs(int(m_birth) - int(c_birth))
         if birth_gap <= 3:
-            age_points = 15.0
-            evidence.append("Birth-year estimates are closely aligned")
+            raw += 5.0
+            evidence.append("Birth-year estimates closely aligned")
         elif birth_gap <= 8:
-            age_points = 9.0
-            evidence.append("Birth-year estimates are broadly compatible")
+            raw += 3.0
+            evidence.append("Birth-year estimates broadly compatible")
         elif birth_gap > 20:
             conflicts.append("Impossible age/date conflict")
     else:
         missing.append("Missing age or birth-year evidence")
-    raw_points += age_points
 
-    household_points = 0.0
-    overlap = _token_overlap(
-        mention.get("household_fields") or "",
-        candidate.get("household_fields") or "",
-    )
-    if overlap >= 0.5:
-        household_points = 15.0
-        evidence.append("Household or family overlap")
-    elif overlap > 0.0:
-        household_points = 7.0
-        evidence.append("Weak household overlap")
+    # ── 6. Gender (max 10; missing → neutral 5; mismatch → 0 + conflict) ─────
+    m_gender = (mention.get("gender") or "").upper()[:1]
+    c_gender = (candidate.get("gender") or "").upper()[:1]
+    if m_gender and c_gender:
+        if m_gender == c_gender:
+            raw += 10.0
+            evidence.append("Gender match")
+        else:
+            conflicts.append(f"Gender mismatch ({m_gender} vs {c_gender})")
     else:
-        missing.append("No household overlap evidence")
-    raw_points += household_points
+        raw += 5.0
+        missing.append("Gender unknown on one or both sides")
 
-    occupation_points = 0.0
-    occ_overlap = _token_overlap(
-        mention.get("occupation_norm") or "",
-        candidate.get("occupation_norm") or "",
-    )
-    if occ_overlap > 0.0:
-        occupation_points = 5.0
-        evidence.append("Occupation similarity")
-    else:
-        missing.append("No occupation similarity")
-    raw_points += occupation_points
-
-    timeline_points = 0.0
+    # ── 7. Timeline alignment — age-progression check (max 5) ────────────────
+    # Primary: if both records have year + age, verify the age-progression is
+    # consistent (person aged 20 in 1861 should be 28–32 in 1871).
+    # Fallback: if only years are known, check temporal plausibility.
     m_year = mention.get("event_year")
     c_year = candidate.get("event_year")
-    if m_year and c_year:
+    m_age = mention.get("age")
+    c_age = candidate.get("age")
+
+    if m_year and c_year and m_age and c_age:
+        year_gap = int(c_year) - int(m_year)
+        expected_c_age = int(m_age) + year_gap
+        age_diff = abs(expected_c_age - int(c_age))
+        if age_diff <= 2:
+            raw += 5.0
+            evidence.append("Age progression consistent across records")
+        elif age_diff <= 5:
+            raw += 3.0
+            evidence.append("Age progression broadly compatible")
+        elif age_diff > 30:
+            conflicts.append("Impossible timeline gap")
+    elif m_year and c_year:
         gap = abs(int(m_year) - int(c_year))
         if gap <= 2:
-            timeline_points = 5.0
+            raw += 5.0
             evidence.append("Timeline strongly aligned")
         elif gap <= 10:
-            timeline_points = 2.5
+            raw += 2.5
             evidence.append("Timeline broadly aligned")
         elif gap > 40:
             conflicts.append("Impossible timeline gap")
     else:
-        missing.append("No event-year evidence")
-    raw_points += timeline_points
+        missing.append("No event-year evidence for timeline check")
 
-    if mention.get("gender") and candidate.get("gender"):
-        if str(mention["gender"]).upper()[:1] != str(candidate["gender"]).upper()[:1]:
-            conflicts.append("Incompatible gender")
-
+    # ── Label ─────────────────────────────────────────────────────────────────
     impossible = any(
-        conflict in conflicts
-        for conflict in ("Impossible age/date conflict", "Impossible timeline gap", "Incompatible gender")
+        c in conflicts
+        for c in ("Impossible age/date conflict", "Impossible timeline gap")
     )
-    score = max(0.0, min(raw_points / 100.0, 1.0))
+    score = max(0.0, min(raw / _MAX_POINTS, 1.0))
     if impossible:
         score = min(score, 0.39)
 

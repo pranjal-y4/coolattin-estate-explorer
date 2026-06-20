@@ -115,7 +115,7 @@ The seven RQs are defined in `docs/08_implementation_status.md` and the tracking
 
 **CONCEPTS TO COVER:** Semantic parsing, encoder-decoder architectures, cross-domain transfer, benchmark datasets.
 
-**System component motivating this:** `backend/services/semantic_layer.py` (slot-fill compiler, 1,185 lines), `QUESTION_TEMPLATES` library (83 templates), LLM SQL generation fallback in `ask_service.py`
+**System component motivating this:** `backend/services/semantic_layer.py` (slot-fill compiler): 22-metric registry, `SlotFill` dataclass, `try_rule_based_fill()` (0 LLM, confidence ≥ 0.80), LLM slot-fill (confidence ≥ 0.70), `compile_sql()` deterministic compiler. 83 verified SQL templates remain as Fast Lane 2 in `embedding_index.py`. LLM free-form SQL generation is FALLBACK lane only (never used for ANALYTICAL).
 
 **[MISSING EVIDENCE: literature]** — Suggested search terms: "Spider NL-to-SQL benchmark cross-domain", "WikiSQL dataset neural semantic parsing", "IGSQL context-dependent text-to-SQL", "few-shot NL-to-SQL GPT", "schema linking NL-to-SQL"
 
@@ -506,12 +506,12 @@ CREATE TABLE heritage_feature (
 - Python runtime: 3.12
 - Flask application factory pattern (`create_app.py`)
 
-**Neo4j removal rationale (from `docs/flow.md`, `eval_results/graphrag_migration_verification.md`):**
-- Neo4j required a separate server process + Bolt protocol driver
-- Replaced with in-process SQLite graph tables (`graph_nodes`, `graph_edges`)
-- Zero external graph server dependency; no port 7687 or 7474
-- RQ6 SQL-vs-SPARQL comparison moved to GraphDB (SPARQL) vs SQLite (SQL) — two well-defined paradigms
-- **Iron-rule guarantee:** the in-process graph is used only for qualitative context; aggregates always come from SQLite; the LLM synthesis prompt explicitly labels graph context as "do NOT use to produce counts or statistics" (verified: `ask_service.py` line 7720–7726)
+**External-server removal rationale (from `docs/06_architecture_and_workflow.md` §11, `docs/flow.md`):**
+- Neo4j/external graph server required a separate server process + Bolt protocol driver
+- Replaced with: (a) local GraphDB SPARQL endpoint (`backend/integrations/graphdb_sparql.py`, co: ontology `https://coolattin.ie/ontology#`); (b) in-process graph tables for fast-lane retrieval
+- Zero dependency on port 7687 or 7474; GraphDB runs locally for development, VRTI SPARQL for production
+- RQ6 SQL-vs-SPARQL comparison: GraphDB (SPARQL) vs SQLite (SQL) — two well-defined paradigms
+- **Iron-rule guarantee:** KG context is used only for qualitative enrichment; aggregates always come from SQLite; the LLM synthesis prompt explicitly labels graph context as "do NOT use to produce counts or statistics" (verified: `ask_service.py` Phase 7 synthesis prompt)
 
 **Canonical deployment configuration (`docs/11_demo_freeze.md` §2):**
 
@@ -1212,7 +1212,7 @@ The complete tables are: `ask_query_feedback`, `ask_query_memory`, `census_recor
 | Cross-metric intersection | widow + emigra | → None (LLM fallback) |
 | Score threshold | < 2 | → None (LLM fallback) |
 
-**[MISSING EVIDENCE]** — The full 83-template library with template IDs, required_keywords, optional_keywords, and SQL templates should be extracted from `ask_service.py`'s `QUESTION_TEMPLATES` list for Appendix B. The candidate should run: `grep -n "QUESTION_TEMPLATES\|template_id\|required_keywords" backend/services/ask_service.py | head -200`.
+**[MISSING EVIDENCE]** — Appendix B should document both (a) the 22-metric semantic layer registry from `semantic_layer.py` (metric name, required dimensions, filters, output SQL pattern) and (b) the 83 verified SQL templates from `embedding_index.py` used in Fast Lane 2. To extract: `grep -n "metric\|SlotFill\|compile_sql\|QUESTION_TEMPLATES\|template_id" backend/services/semantic_layer.py backend/services/embedding_index.py | head -300`.
 
 ---
 

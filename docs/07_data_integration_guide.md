@@ -365,27 +365,40 @@ The resolved townland name (`townland_norm`) is injected into all subsequent SQL
 
 ---
 
-### Stage 2 — Template Matching (83 verified templates)
-```
-_try_verified_analysis(question, townland_resolution)
+### Stage 2 — Four Fast Lanes (first match short-circuits routing)
 
-→ Score all 83 QUESTION_TEMPLATES against the question text
-  Scoring: keyword hits (weighted) + townland match bonus
-→ If top score ≥ threshold → use that template's sql_template string
-  → inject {townland_norm}, {year}, {year_start}, {year_end} placeholders
-→ All templates query unified_record, often JOINed to townland or census_record
-→ Returns instantly — no LLM call
+```
+Before intent classification, four lanes are checked in priority order:
+
+Fast Lane 1 — Rule-based slot-fill (semantic_layer.try_rule_based_fill)
+  → Match question keywords against 22 metric keyword sets
+  → Confidence scoring: starts 1.0, penalised for competing metrics / no filters
+  → If confidence ≥ 0.80 → compile SQL directly (0 LLM calls, < 5 ms)
+
+Fast Lane 2 — Verified template
+  → _try_verified_analysis(question, townland_norm, analysis)
+  → Score 83 QUESTION_TEMPLATES by required_keywords + optional_keywords
+  → If match in VERIFIED_ANALYSIS_TEMPLATE_IDS → SQL, confidence = 1.0
+
+Fast Lane 3 — Direct memory reuse
+  → Query ask_query_memory (TTL 60 s cache)
+  → token_sort_ratio + cosine ≥ 0.55 → reuse approved SQL
+
+Fast Lane 4 — Embedding template retrieval (embedding_index.py)
+  → TF-IDF unigram+bigram cosine merged by RRF over templates + memory
+  → cosine ≥ 0.68 AND all required_keywords present → use template SQL
 ```
 
-Example template SQL (Q1 — emigration count for a townland):
+Example compiled SQL (emigration count, rule-fill path):
 ```sql
-SELECT COUNT(DISTINCT record_id) AS emigrated_people
+SELECT COUNT(DISTINCT record_id) AS emigration_count
 FROM unified_record
 WHERE has_emigration_record = 1
   AND townland_norm = 'AGHOWLE LOWER'
+  AND year = 1852
 ```
 
-Example template SQL (Q8 — population trend with census join):
+Example compiled SQL (population trend, semantic layer):
 ```sql
 WITH emigrants AS (
   SELECT townland_norm, COUNT(DISTINCT record_id) AS emigrated_people
@@ -410,46 +423,61 @@ ORDER BY e.emigrated_people DESC LIMIT 30
 
 ---
 
-### Stage 3 — LLM SQL Generation (fallback if no template matched)
-```
-_generate_sql(question, townland_hint, schema_context)
+### Stage 3 — Intent Classification → Route Dispatch
 
-→ Sends to OpenRouter (cloud) or Ollama (local):
-  - System prompt: schema descriptor for unified_record + townland + census_record
-                   + join conventions + safety rules
-  - User message: the question
-→ LLM returns a SQL SELECT statement
-→ _sanitize_and_validate_sql(): block any INSERT/UPDATE/DELETE/DROP
-→ _execute_with_recovery(): run SQL; if error → send error back to LLM for repair (1 retry)
 ```
+classify_intent(question, analysis, slot_fill)   ← intent_router.py
 
-The schema descriptor tells the LLM exactly:
-- What tables exist and what each column means
-- That `unified_record.townland_norm` joins to `UPPER(townland.name)`
-- That `has_emigration_record = 1` filters to emigration records
-- Not to use table aliases the LLM might hallucinate
+COMPARATIVE  → ANALYTICAL (SQL) + RELATIONAL (SPARQL) in parallel
+RELATIONAL   → subgraph_engine (VRTI + GraphDB traversal)
+ANALYTICAL   → semantic_layer slot-fill → deterministic SQL compiler
+FALLBACK     → _generate_sql() via LLM (OpenRouter → Ollama fallback)
+
+ANALYTICAL lane (semantic_layer.py):
+  → rule-fill (confidence ≥ 0.80, 0 LLM) OR LLM slot-fill (confidence ≥ 0.70)
+  → compile_sql(slot_fill): assembles SQL from 22-metric registry
+  → compile_sparql(slot_fill): generates SPARQL equivalent for GraphDB (RQ6)
+
+RELATIONAL lane (subgraph_engine.py):
+  → VRTI SPARQL: townland→parish→barony hierarchy, siblings, external links
+  → GraphDB: get_entity_neighborhood(name, k=2, max_nodes=40)
+  → Qualitative context only; counts always come from SQL
+
+FALLBACK lane:
+  → _generate_sql(question, schema, townland_norm, analysis, approved_examples)
+  → LLM prompt: annotated schema + question plan + approved examples
+  → _sanitize_and_validate_sql(): FORBIDDEN_SQL regex blocks all writes
+  → _execute_with_recovery(): run SQL; if error → 1 LLM repair attempt
+```
 
 ---
 
 ### Stage 4 — SQL Execution
-```
-_run_read_only_query(sql, conn)
 
-→ Executes against coolattin.db
-→ Returns rows as list of dicts
-→ Result is capped to prevent excessively large payloads
+```
+_execute_with_recovery(question, townland_hint, sql, approved_examples)
+
+→ conn = get_db_conn()  [WAL mode, Row factory, foreign_keys=ON]
+→ conn.create_function("distance_km", 4, _haversine_km)
+→ conn.execute(sql).fetchall()
+→ On OperationalError: 1 LLM repair attempt → re-execute
+→ Cap: 500 rows; serialize non-JSON types
 ```
 
-Tables the SQL may touch: `unified_record`, `townland`, `census_record`, `clearances_record`.
+Tables SQL may touch: `unified_record`, `townland`, `census_record`, `clearances_record`, `heritage_feature`.
 
 ---
 
-### Stage 5 — LLM Answer Rewrite
+### Stage 5 — Phase 7: LLM Answer Rewrite
+
 ```
-→ Sends raw DB result rows to LLM
-→ LLM writes a human-readable answer in paragraph form
-→ Includes: factual numbers, townland context, hedging for data gaps
-→ If townland was fuzzy-matched, explicitly states which townland was used
+_generate_rephrased_answer(question, actual_answer, data_context, kg_context)
+
+→ SYSTEM: "You are a digital historian specialising in 19th century Irish social history..."
+→ DATA: first 20 rows + VRTI context + fusion discrepancies
+→ USER: original question
+→ LLM writes historically-contextualised prose answer
+→ If LLM unavailable: return actual_answer unchanged
 ```
 
 ---

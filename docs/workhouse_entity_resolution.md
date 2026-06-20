@@ -12,130 +12,157 @@ problem.
 - Workhouse mapping: generate explicit, reviewable candidate identity links.
 
 Because of that, workhouse matching uses deterministic normalisation, fuzzy
-matching, and transparent scoring. It does not use pgvector.
+matching, and transparent scoring. It does not use pgvector or any LLM.
+
+---
 
 ## Main modules
 
-- `backend/services/workhouse_entity_resolution.py`
-- `backend/services/entity_resolution/normalise.py`
-- `backend/services/entity_resolution/candidates.py`
-- `backend/services/entity_resolution/scoring.py`
-- `backend/services/workhouse_service.py`
-- `backend/routes/unified.py`
-- `frontend/static/js/main.js`
+| Module | Role |
+|---|---|
+| `backend/services/workhouse_entity_resolution.py` | Pipeline orchestrator |
+| `backend/services/entity_resolution/normalise.py` | Name + place normalisation |
+| `backend/services/entity_resolution/candidates.py` | Blocking + candidate generation |
+| `backend/services/entity_resolution/scoring.py` | Multi-signal scoring |
+| `backend/services/workhouse_service.py` | Excel sheet loader |
+| `backend/routes/unified.py` | API surface (links enrichment) |
+
+---
 
 ## Persisted tables
 
-The persisted SQLite tables are created in `extensions.py`.
+Created by `extensions.py::ensure_schema()`. All four preserve source-level
+evidence and keep uncertain links reviewable rather than silently merging records.
 
-- `source_mentions`
-- `entity_resolution_candidates`
-- `workhouse_unified_links`
-- `entity_resolution_decisions`
+| Table | Contents |
+|---|---|
+| `source_mentions` | One row per name occurrence in a source record (150 workhouse rows → 150 mentions) |
+| `entity_resolution_candidates` | Scored candidate links: mention → unified_record (up to 25 per mention) |
+| `workhouse_unified_links` | Final accepted workhouse→estate record links |
+| `entity_resolution_decisions` | Human review decisions on borderline candidates |
 
-These tables preserve source-level evidence and keep uncertain links reviewable
-instead of silently merging records.
+---
 
-## Normalisation
+## Full Pipeline
 
-`backend/services/entity_resolution/normalise.py` handles:
+### Step 1 — Load workhouse data
 
-- case and punctuation normalisation
-- initials and common abbreviations such as `Jno -> John`, `Wm -> William`, `Jas -> James`
-- `Mc` / `Mac` handling
-- `O` / `Ó` surname variants
-- place and townland normalisation
-- phonetic encoding through `jellyfish.metaphone`
+`workhouse_service.get_workhouse()` reads `workhouse_data_final.xlsx` (two sheets):
+- Sheet "1-127": `Pauper Name` (surname-first format), `Number in Register`
+- Sheet "from 128": 13 fields including `Names and Surnames of Paupers`, `Electoral division`, `Sex`, `Age`, `date when admitted or born in workhouse`, `Date when died or left workhouse`
 
-## Candidate generation
+### Step 2 — Normalise each mention
 
-`backend/services/entity_resolution/candidates.py::generate_candidates(...)`
-builds reviewable candidate sets using:
+`normalise.normalise_person_fields(raw_name)`:
+1. Unicode normalisation (NFKD decomposition)
+2. Uppercase conversion
+3. Remove editorial annotations: `[?]`, `[illegible]`, `(In Lease)`, `(Sic)`
+4. Expand abbreviations: `JNO→JOHN`, `WM→WILLIAM`, `JAS→JAMES`, `THOS→THOMAS`, `RD→RICHARD`, `EDWD→EDWARD`, `SAML→SAMUEL`, `ELIZH→ELIZABETH`, `MARGT→MARGARET`
+5. Surname variants: `MCDONNELL/MACDONNELL→MCDONNELL`, `OBRIEN/O'BRIEN→OBRIEN`, `MCCARTHY/MACCARTHY→MCCARTHY`
+6. Remove accents
+7. Phonetic encoding: `jellyfish.metaphone()`
 
-- exact normalised name match
-- surname + forename initial match
-- phonetic surname match
-- fuzzy full-name similarity
-- same canonical or normalised place
-- nearby or variant place matching
-- year compatibility
+`normalise.normalise_place_name(electoral_division)`:
+- Applies the same normalisation pipeline to place names
+- Matches against `townland_aliases.json` for canonical resolution
 
-## Transparent scoring
+### Step 3 — Build unified index
 
-`backend/services/entity_resolution/scoring.py::score_candidate(...)` applies
-weighted evidence:
+`build_unified_index()` returns all 13,707 `unified_record` rows with normalised
+fields, filtered by place match (electoral_division + townland_norm) as the first
+blocking pass.
 
-- name similarity: up to 25
-- surname exact or phonetic evidence: up to 15
-- place/townland evidence: up to 20
-- age/birth-year compatibility: up to 15
-- household overlap: up to 15
-- occupation similarity: up to 5
-- timeline consistency: up to 5
+### Step 4 — Generate candidates
 
-The final score is normalised to `0.0 - 1.0` and labelled as:
+`candidates.generate_candidates(mention, unified_index)` applies blocking to
+produce up to 25 ranked candidates per mention using:
 
-- `CONFIRMED_MATCH` for `>= 0.85`
-- `POSSIBLE_MATCH` for `>= 0.65` and `< 0.85`
-- `WEAK_CANDIDATE` for `>= 0.40` and `< 0.65`
-- `NO_MATCH` for `< 0.40`
+- Exact normalised name match
+- Surname + forename initial match
+- Phonetic surname match (Metaphone)
+- Place + name combination
+- Fuzzy full-name similarity (rapidfuzz token_sort_ratio)
+- Year compatibility (±1 year window around event_year)
 
-Hard negative rules block unsafe auto-linking, including impossible age/date
-conflicts and incompatible timeline or gender evidence.
+### Step 5 — Score candidates
+
+`scoring.score_candidate(mention, candidate)` applies a 7-signal weighted formula:
+
+| Signal | Max points | Scoring rule |
+|---|---|---|
+| Full name similarity (token_sort_ratio) | 10 | ≥90%: 10 pts; ≥75%: 7 pts; ≥60%: 4 pts; else: 0 |
+| Exact surname | 10 | Exact match: 10 pts; Metaphone match: 7 pts; else: 0 |
+| Forename match | 10 | Either side missing: 5 pts (neutral); exact: 10; ≥80%: 7; ≥60%: 4; else: 0 + conflict |
+| Townland normalisation | 10 | Exact match: 10 pts; variant match: 6 pts; else: 0 |
+| Birth-year alignment | 5 | Gap ≤3 yrs: 5 pts; ≤8 yrs: 3 pts; else: 0 |
+| Gender | 10 | Both missing: 5 pts (neutral); exact match: 10; mismatch: 0 + conflict |
+| Timeline alignment | 5 | Age-progression consistency |
+| **TOTAL** | **60** | Normalised: `raw_points / 60.0 → 0.0–1.0` |
+
+### Confidence band assignment
+
+```
+score ≥ 0.75 → CONFIRMED_MATCH   (high confidence; auto-accepted)
+score ≥ 0.50 → POSSIBLE_MATCH    (medium; flagged for review)
+score  < 0.50 → WEAK_CANDIDATE   (low; requires explicit review)
+all signals missing → NO_MATCH
+```
+
+Hard negative rules block unsafe auto-linking:
+- Impossible age/date conflict
+- Incompatible gender evidence
+- Irreconcilable timeline
+
+### Step 6 — Persist
+
+```
+source_mentions table   ← one row per workhouse mention (150 total)
+entity_resolution_candidates ← all scored candidates
+workhouse_unified_links ← CONFIRMED_MATCH and above-threshold decisions
+entity_resolution_decisions ← full audit trail
+```
+
+### Step 7 — Review
+
+`match_review_repository.py` provides CRUD for the `match_review` table. Borderline
+candidates have `review_required=1`. No web UI is currently wired up; the data is
+accessible directly via the SQLite tables.
+
+---
 
 ## No silent merge
 
-The pipeline does not overwrite unified records and does not collapse
-conflicting facts into one record just because names are similar.
+The pipeline does not overwrite unified records. It does not collapse conflicting
+facts just because names are similar. Each candidate stores:
 
-Instead it stores:
+- `supporting_evidence_json` — signals that support the match
+- `missing_evidence_json` — signals that could not be evaluated (field absent)
+- `conflicting_evidence_json` — signals where evidence contradicts
 
-- supporting evidence
-- missing evidence
-- conflicting evidence
-- review-required flags
+---
 
-That is why uncertain candidates are surfaced to the UI instead of merged.
+## Evidence surfaced in the unified search API
 
-## “Please check these records”
+Unified search responses include workhouse enrichment:
 
-Possible but unconfirmed workhouse links are returned in:
+```json
+{
+  "linked_workhouse_records": [...],
+  "possible_workhouse_matches": [...],
+  "please_check_records": [...],
+  "identity_is_ambiguous": false,
+  "identity_disambiguation_note": "...",
+  "supporting_evidence": [...],
+  "conflicting_evidence": [...]
+}
+```
 
-- `possible_workhouse_matches`
-- `please_check_records`
+Each candidate shows: source, source record ID, name, place, year, age,
+confidence score, why it matched, what evidence is missing, conflicting evidence.
 
-The UI renders these under a dedicated section titled:
+---
 
-- `Please check these records`
-
-Each candidate shows:
-
-- source
-- source record id
-- name
-- place
-- year
-- age
-- confidence score
-- why it matched
-- what evidence is missing
-- conflicting evidence
-
-## APIs
-
-Unified search responses now include:
-
-- `linked_workhouse_records`
-- `possible_workhouse_matches`
-- `please_check_records`
-- `identity_is_ambiguous`
-- `identity_disambiguation_note`
-- `supporting_evidence`
-- `conflicting_evidence`
-
-Legacy workhouse match lookups also reuse the persisted links when available.
-
-## Linking and validation jobs
+## Running the pipeline
 
 Build persisted workhouse links:
 
@@ -143,7 +170,7 @@ Build persisted workhouse links:
 python scripts/link_workhouse_records.py
 ```
 
-Optional limited run with audit output:
+Limited run with audit output:
 
 ```bash
 python scripts/link_workhouse_records.py --limit 200 --audit-dir exports/workhouse_er
@@ -155,25 +182,38 @@ Validate persisted results:
 python scripts/validate_workhouse_er.py
 ```
 
-The validation script prints:
+The validation script reports:
+- Records processed / source mentions created
+- Confirmed links / possible links / weak candidates / unresolved
+- Records requiring review
+- Top ambiguous names
+- Example confirmed matches and "Please check" cases
 
-- records processed
-- source mentions created
-- confirmed links
-- possible links
-- weak candidates
-- unresolved records
-- records requiring review
-- top ambiguous names
-- example confirmed matches
-- example “Please check these records” cases
+If no golden set exists, precision/recall is reported as unavailable.
 
-If no golden set exists, precision/recall is reported as unavailable rather than guessed.
+---
 
-## Focused tests
-
-Run the workhouse entity-resolution tests with:
+## Tests
 
 ```bash
 pytest -q tests/test_workhouse_entity_resolution.py
 ```
+
+---
+
+## Scoring worked example
+
+**Workhouse mention:** "Jno Murphy, Aghowle, 1851, age 35, male"
+**Candidate:** John Murphy, AGHOWLE LOWER, 1851, age 37, male
+
+| Signal | Raw calculation | Points |
+|---|---|---|
+| Full name similarity | token_sort_ratio("JOHN MURPHY", "JOHN MURPHY") = 100% | 10 |
+| Exact surname | "MURPHY" = "MURPHY" | 10 |
+| Forename | "JOHN" = "JOHN" (after JNO expansion) | 10 |
+| Townland | "AGHOWLE" variant matches "AGHOWLE LOWER" | 6 |
+| Birth-year | |1851-35 - 1851-37| = 2 yrs ≤ 3 | 5 |
+| Gender | male = male | 10 |
+| Timeline | age progression consistent | 5 |
+| **Total** | | **56 / 60 = 0.93** |
+| **Label** | | **CONFIRMED_MATCH** |

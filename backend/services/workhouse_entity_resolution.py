@@ -20,6 +20,7 @@ from extensions import get_db_conn
 
 from backend.services.entity_resolution import (
     build_unified_index,
+    clean_estate_name_field,
     generate_candidates,
     normalise_person_fields,
     normalise_place_name,
@@ -34,6 +35,27 @@ _LABEL_TO_CONFIDENCE = {
     "WEAK_CANDIDATE": "Low",
     "NO_MATCH": "Low",
 }
+
+_PAYLOAD_SKIP_KEYS = frozenset({"raw_name", "source_record_id", "forename", "surname"})
+_PAYLOAD_JUNK_VALUES = frozenset({"", '"', "'", ",", ".", "-", "--"})
+
+
+def _extract_workhouse_detail(source_payload_json: str | None) -> dict[str, Any]:
+    """Decode source_payload_json and return only non-null, displayable fields."""
+    if not source_payload_json:
+        return {}
+    try:
+        raw = json.loads(source_payload_json)
+    except Exception:
+        return {}
+    return {
+        k: v
+        for k, v in raw.items()
+        if not k.startswith("_")
+        and k not in _PAYLOAD_SKIP_KEYS
+        and v is not None
+        and str(v).strip() not in _PAYLOAD_JUNK_VALUES
+    }
 _TOWNLAND_ID_CACHE: dict[str, int | None] = {}
 
 
@@ -152,9 +174,9 @@ def _load_unified_records() -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for row in df.to_dict(orient="records"):
         person = normalise_person_fields(
-            raw_name=row.get("canonical_name") or "",
-            forename=row.get("forename"),
-            surname=row.get("surname"),
+            raw_name=clean_estate_name_field(row.get("canonical_name") or ""),
+            forename=clean_estate_name_field(row.get("forename")),
+            surname=clean_estate_name_field(row.get("surname")),
             surname_first=False,
         )
         normalised_place = normalise_place_name(
@@ -426,6 +448,7 @@ def get_record_resolution(record_id: str) -> dict[str, Any]:
             "what_evidence_is_missing": missing,
             "conflicting_evidence": conflicts,
             "review_required": bool(row.get("review_required")),
+            "workhouse_detail": _extract_workhouse_detail(row.get("source_payload_json")),
         }
         mention_ids.append(int(row["mention_id"]))
         supporting.extend(evidence)
@@ -475,7 +498,7 @@ def get_resolution_map(record_ids: list[str]) -> dict[str, dict[str, Any]]:
               l.unified_record_id, l.score, l.label, l.review_required,
               l.supporting_evidence_json, l.conflicting_evidence_json, l.missing_evidence_json,
               s.id AS mention_id, s.source_record_id, s.raw_name, s.raw_place, s.event_year,
-              s.age, s.occupation
+              s.age, s.occupation, s.source_payload_json
             FROM workhouse_unified_links l
             JOIN source_mentions s ON s.id = l.mention_id
             ORDER BY l.unified_record_id, l.score DESC
@@ -520,6 +543,7 @@ def get_resolution_map(record_ids: list[str]) -> dict[str, dict[str, Any]]:
                 "what_evidence_is_missing": missing,
                 "conflicting_evidence": conflicts,
                 "review_required": bool(row.get("review_required")),
+                "workhouse_detail": _extract_workhouse_detail(row.get("source_payload_json")),
             }
             mention_ids.append(int(row["mention_id"]))
             supporting.extend(evidence)

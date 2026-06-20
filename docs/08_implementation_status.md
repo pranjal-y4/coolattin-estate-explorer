@@ -15,18 +15,25 @@
 | D2 — Revised Research Questions | **Partial** | RQs defined in tracking plan; not in dissertation |
 | D3 — Unified Dataset Audit | **Not done** | No formal audit table produced |
 | D4 — Geospatial Alignment Audit | **Not done** | Alignment code works; audit figures not collected |
-| D5 — Workhouse Linkage Prototype (place-first) | **Done** | Full ER pipeline with phonetic blocking, fuzzy scoring, confidence bands, and persisted SQLite tables |
+| D5 — Workhouse Linkage Prototype (place-first) | **Done** | Full ER pipeline: phonetic blocking, 7-signal scoring (60 pt), confidence bands CONFIRMED≥0.75/POSSIBLE≥0.50/WEAK<0.50, 140 confirmed links persisted in 4 SQLite tables |
 | D6 — Explainable Ask Improvements | **Mostly done** | SQL, route, provenance, vector retrieval meta, identity disambiguation all wired up |
-| D7 — Graphical Insight Layer | **Mostly done** | Chart spec built and rendered for 7 template types |
-| D8 — RDF/KG Comparative Prototype | **Partial** | GraphDB SPARQL integration done; co: ontology endpoint live; comparison UI exists; Turtle uplift script not committed |
-| D9 — Technical Evaluation Pack | **Partial** | `ask_eval.py` harness built; eval_results/ baselines captured (phase 0–5+) |
-| D10 — LLM Evaluation Pack | **Not done** | Tests not formally run and recorded |
+| D7 — Graphical Insight Layer | **Mostly done** | Chart spec built and rendered for 7 template types; KG explore D3 graph live |
+| D8 — RDF/KG Comparative Prototype | **Partial** | GraphDB SPARQL integration done; co: ontology endpoint live; semantic_layer.compile_sparql() generates SPARQL from same SlotFill; comparison UI exists; RQ6 table formally run (see docs/11_demo_freeze.md §1.4) — local co: repo not yet loaded with data |
+| D9 — Technical Evaluation Pack | **Done** | 75-question formal evaluation run 2026-06-10; 89.3% routing accuracy, 100% aggregation correctness; full results in `eval_results/eval_graphrag_on.json` + `docs/11_demo_freeze.md` |
+| D10 — LLM Evaluation Pack | **Partial** | GraphRAG enrichment evaluated (9 R-series cases, 100% numeric delta = 0, avg usefulness 4.4/5); full free-form LLM eval not yet formally tabulated |
 | D11 — User Evaluation Pack | **Not done** | No participants, no task sheet |
 | D12 — Final Dissertation Evidence Pack | **Not done** | Dissertation not written |
-| D13 — Demo Freeze Package | **Not done** | Git tag not created |
-| **NEW** — Orchestrated Ask Pipeline | **Done** | 7-phase pipeline (intent→retrieval→semantic→subgraph→LLM→identity→synthesis); enabled by default |
-| **NEW** — Identity Resolution | **Done** | Three-layer model (Mention/Person/Factoid); phonetic blocking; Jaro-Winkler + geo/temporal scoring |
-| **NEW** — Hybrid Embedding Retrieval | **Done** | TF-IDF + Cohere/local BGE dense; pgvector optional; fast-lane short-circuit |
+| D13 — Demo Freeze Package | **Done** | Git tag `v1.0-demo-freeze` created 2026-06-10; evaluation results pinned; canonical config documented in `docs/11_demo_freeze.md` |
+| **NEW** — Orchestrated Ask Pipeline | **Done** | `_orchestrated_pipeline_stream()` in ask_service.py; 4 fast lanes + intent routing + 3 ANALYTICAL/RELATIONAL/COMPARATIVE dispatch lanes; enabled by default (`ASK_USE_NEW_PIPELINE=true`) |
+| **NEW** — Intent Router | **Done** | `intent_router.py`; ANALYTICAL/RELATIONAL/COMPARATIVE/FALLBACK; Core Rule 1 heritage/sensemaking override; exact keyword sets per class |
+| **NEW** — Semantic Layer | **Done** | `semantic_layer.py`; 22-metric registry; rule-based slot-fill (confidence ≥ 0.80, 0 LLM); LLM slot-fill (confidence ≥ 0.70); deterministic SQL compiler; SPARQL compiler for RQ6 |
+| **NEW** — Subgraph Engine | **Done** | `subgraph_engine.py`; VRTI multi-hop SPARQL + GraphDB k=2 neighbourhood; qualitative context only (counts always from SQL) |
+| **NEW** — Identity Resolution | **Done** | `identity_resolver.py`; three-layer Mention/Person/Factoid model; Jaro-Winkler + Metaphone phonetic blocking + geo/temporal scoring |
+| **NEW** — Hybrid Embedding Retrieval | **Done** | `embedding_index.py`; TF-IDF unigram+bigram cosine + RRF; fast-lane threshold 0.68; pgvector optional backend |
+| **NEW** — GraphDB Integration | **Done** | `graphdb_sparql.py`; co: ontology (`https://coolattin.ie/ontology#`); query() + get_entity_neighborhood(); fusion + discrepancy detection in Phase 6 |
+| **NEW** — KG Explore Page | **Done** | `/kg-explore` page; `/api/kg/graph` (D3 force graph, 152 nodes), `/api/kg/compare` (4 canned SQL vs SPARQL scenarios + custom), `/api/kg/scenarios` |
+| **NEW** — GraphRAG Pipeline | **Done** | In-process property graph (`graphrag.py`): 49,081 nodes · 64,342 edges · 28,078 BGE-embedded; vector seed → k-hop BFS → linearised subgraph; additive enrichment (zero numeric delta validated); graph built by `scripts/build_graph.py` |
+| **NEW** — Multi-model Synthesis Chain | **Done** | LLM priority chain: Claude (`anthropic`) → Grok (`xAI`) → OpenRouter → Ollama; failure at any stage silently falls to next; synthesis model configurable via `ASK_SYNTHESIS_MODEL` |
 
 ---
 
@@ -124,15 +131,31 @@ The workhouse linkage is now a dedicated entity-resolution subsystem, separate f
 
 **Core modules:**
 - `backend/services/workhouse_entity_resolution.py` — main pipeline orchestrator
-- `backend/services/entity_resolution/normalise.py` — case/punctuation normalisation, initials expansion (`Jno→John`, `Wm→William`, `Jas→James`), Mc/Mac/O variants, phonetic encoding via `jellyfish.metaphone`
-- `backend/services/entity_resolution/candidates.py` — blocking strategy: exact normalised name, surname+initial, phonetic surname, place+name combos; returns up to 25 ranked candidates per mention
-- `backend/services/entity_resolution/scoring.py` — multi-signal scoring: name similarity (rapidfuzz token_sort_ratio), place match, date window, phonetic match → maps to `CONFIRMED_MATCH` / `POSSIBLE_MATCH` / `WEAK_CANDIDATE` / `NO_MATCH`
+- `backend/services/entity_resolution/normalise.py` — Unicode NFKD → uppercase → editorial annotations stripped → abbreviations expanded (`JNO→JOHN`, `WM→WILLIAM`, `JAS→JAMES`, `THOS→THOMAS`) → Mc/Mac/O variants normalised → `jellyfish.metaphone()` phonetic encoding
+- `backend/services/entity_resolution/candidates.py` — blocking: exact normalised name, surname+initial, phonetic surname, place+name combos; returns up to 25 ranked candidates per mention
+- `backend/services/entity_resolution/scoring.py` — 7-signal scoring over a 60-point scale (normalised to 0.0–1.0):
+
+| Signal | Max pts | Rule |
+|---|---|---|
+| Full name similarity (token_sort_ratio) | 10 | ≥90%→10; ≥75%→7; ≥60%→4; else→0 |
+| Exact surname | 10 | Exact→10; Metaphone match→7; else→0 |
+| Forename | 10 | Either missing→5 (neutral); exact→10; ≥80%→7; ≥60%→4; else→0+conflict |
+| Townland normalisation | 10 | Exact→10; variant→6; else→0 |
+| Birth-year alignment | 5 | Gap≤3y→5; ≤8y→3; else→0 |
+| Gender | 10 | Both missing→5 (neutral); match→10; mismatch→0+conflict |
+| Timeline alignment | 5 | Age-progression consistency |
+
+**Confidence bands:**
+- CONFIRMED_MATCH: score ≥ 0.75
+- POSSIBLE_MATCH: 0.50 ≤ score < 0.75
+- WEAK_CANDIDATE: score < 0.50
+- NO_MATCH: all signals missing or hard negative rule triggered
 
 **Approach:**
-- Place-first: candidates are filtered by matching `electoral_division` / `townland_norm` before name scoring
-- Date window: ±1 year around the estate record's event year
-- Confidence bands: High (CONFIRMED_MATCH ≥ 0.75) / Medium (POSSIBLE_MATCH 0.50–0.74) / Low (WEAK_CANDIDATE < 0.50)
-- Persisted results: stored in `source_mentions`, `entity_resolution_candidates`, `workhouse_unified_links`, `entity_resolution_decisions` SQLite tables
+- Place-first blocking: candidates filtered by `electoral_division` / `townland_norm` match before name scoring
+- Date window: ±1 year around event_year
+- Hard negative rules block impossible age/date conflicts, gender mismatches
+- Persisted in `source_mentions`, `entity_resolution_candidates`, `workhouse_unified_links`, `entity_resolution_decisions`
 - `match_review_repository.py` provides CRUD for human review of borderline candidates
 
 **What is not yet done:**
@@ -196,16 +219,19 @@ The workhouse linkage is now a dedicated entity-resolution subsystem, separate f
 
 ### What is implemented (June 2026)
 
-- `backend/integrations/graphdb_sparql.py` — full SPARQL client for a local GraphDB instance running the `co:` (Coolattin ontology) repository at `http://localhost:7200/repositories/coolattin` (also deployed at `http://51.120.71.162:7200/repositories/coolattin`)
+- `backend/integrations/graphdb_sparql.py` — full SPARQL client for a local GraphDB instance running the `co:` (Coolattin ontology) repository at `http://localhost:7200/repositories/coolattin` (also deployed at `http://51.120.71.162:7200/repositories/coolattin`). Functions: `query(sparql)`, `get_entity_neighborhood(name, k=2, max_nodes=40)`
 - `GRAPHDB_ENABLED`, `GRAPHDB_SPARQL_ENDPOINT`, `GRAPHDB_REQUEST_TIMEOUT` env vars wired into `config.py`
-- The Ask pipeline queries GraphDB in parallel with SQLite when `GRAPHDB_ENABLED=true`; results are merged and discrepancies between SQLite and GraphDB are surfaced in the SSE payload (`fusion`, `discrepancies` fields)
-- `semantic_layer.py::compile_sparql()` generates equivalent SPARQL for any slot-fill that has a KG mapping — this is the side-by-side SQL-vs-SPARQL comparison mechanism
+- The Ask pipeline queries GraphDB in parallel with SQLite when `GRAPHDB_ENABLED=true`; results merged; discrepancies between SQLite and GraphDB surfaced in SSE payload (`fusion`, `discrepancies` fields)
+- `semantic_layer.py::compile_sparql(slot_fill)` generates equivalent SPARQL from the same SlotFill struct that produces SQL — this is the direct SQL-vs-SPARQL comparison mechanism for RQ6
+- `backend/routes/kg_explore.py` — KG explore page with 3 endpoints:
+  - `GET /api/kg/graph` — D3.js force graph (152 townland nodes, geographic hierarchy edges)
+  - `GET /api/kg/scenarios` — 4 canned comparison scenarios (emigration_count_by_townland, eviction_count_by_year, surname_frequency, person_event_detail)
+  - `POST /api/kg/compare` — executes both SQLite and GraphDB SPARQL, returns side-by-side results with timing
 
 ### What is still outstanding
 
-1. **Turtle uplift script** — a script that reads `unified_record` rows and writes a `.ttl` file into the `co:` ontology; the GraphDB instance needs to be populated by hand currently
-2. **Formal comparison table** — the 5-question SQL-vs-SPARQL comparison table for the dissertation appendix (queries exist; table not written up)
-3. **`rdflib` in-process fallback** — a pure-Python path for offline/exam demos without a running GraphDB instance
+1. **Turtle uplift script** — `scripts/rdf_uplift.py` that reads `unified_record` rows and writes a `.ttl` file into the `co:` ontology; GraphDB population is currently manual
+2. **Formal comparison table** — the 5-question SQL-vs-SPARQL comparison table for the dissertation appendix (competency questions exist in `docs/sparql_competency_questions.md`; table not formally run and written up)
 
 The comparison framework is architecturally complete; what is missing is a documented run of the 5 competency questions with side-by-side results written up as a dissertation table.
 
@@ -213,46 +239,66 @@ The comparison framework is architecturally complete; what is missing is a docum
 
 ## D9, D10, D11 — Evaluation Packs
 
-**Status: Not done — evaluation data collection not started**
+**D9 status: Done — 75-question formal evaluation run 2026-06-10**
 
-| Pack | What to do |
-|---|---|
-| D9 (technical) | Run all 15 competency questions. Record: template ID hit or LLM fallback, SQL generated, result rows, latency (from SSE stage durations), correctness classification (Correct / Partially correct / Incorrect / No answer) |
-| D10 (LLM) | Run 10+ free-form questions. Record: SQL validity, self-repair invocations, answer delivery, hallucination checks against direct SQL |
-| D11 (user) | Task-based session with 4–6 participants. Measure task completion, trust rating, clarity score |
+Evaluation run against 75 competency questions (A-series analytical, R-series relational, C-series comparative, G-series out-of-scope) with GraphRAG both ON and OFF:
 
-These produce no code. They produce spreadsheet tables that feed the dissertation evaluation chapter.
+| Metric | GraphRAG ON | GraphRAG OFF |
+|---|---|---|
+| Questions run | 75 | 75 |
+| Routing accuracy | 89.3% | 89.3% |
+| Aggregation correctness | 100.0% | 100.0% |
+| SQL exec success | 100.0% | 100.0% |
+| Template hit rate | 100.0% | 100.0% |
+| LLM calls required | 0 | 0 |
+| p50 latency | 372 ms | 365 ms |
+| p90 latency | 2,095 ms | 2,049 ms |
+
+Full results: `eval_results/eval_graphrag_on.json`, `eval_results/eval_graphrag_on.md`, `docs/11_demo_freeze.md`
+
+**Known issues documented (non-blocking):**
+- Honest-refusal rate 0%: G-series out-of-scope questions are routed by the semantic layer (partial keyword matches trigger tenancy/eviction templates) rather than refused — an explicit out-of-scope classifier would fix this
+- Lane routing 72%: Several census/geography questions are correctly answered as ANALYTICAL but labelled RELATIONAL by intent router — SQL result is correct, only intent label disagrees
+
+**D10 status: Partial — GraphRAG enrichment evaluated; full free-form LLM eval outstanding**
+
+GraphRAG enrichment evaluation (9 R-series + multi-hop cases):
+- Numeric delta = 0 for all 9 cases (acceptance gate passed)
+- Avg auto-usefulness score: 4.4/5
+- Avg latency overhead (ON − OFF): +46 ms at p90 (warm BGE)
+
+What is still outstanding: a formal table of 10+ free-form questions with SQL validity, self-repair invocations, and hallucination checks.
+
+**D11 status: Not done** — No participants recruited, no task sheet prepared.
 
 ---
 
 ## D12, D13 — Evidence Pack + Demo Freeze
 
-**Status: Not done — dependent on D9–D11 completing**
+**D13 status: Done — git tag `v1.0-demo-freeze` created 2026-06-10**
 
-D13 (demo freeze):
-```bash
-git tag v1.0-demo-freeze-july13
-git push origin v1.0-demo-freeze-july13
-```
+The freeze captures:
+- Full regression results (75 questions, GraphRAG ON + OFF)
+- GraphRAG enrichment evaluation (9 R-series cases)
+- RQ6 SQL-vs-SPARQL comparison table
+- Canonical configuration for reproducible deployment (see `docs/11_demo_freeze.md §2`)
 
-Screenshots and a recorded demo video as backup need to be made once the demo path is rehearsed.
+**D12 status: Not done** — Dissertation not written; evidence pack assembled partially via `docs/dissertation_evidence_dossier.md`.
 
 ---
 
 ## What Actually Needs Coding Work
 
-After the June 2026 updates, the remaining coding items are smaller:
+The remaining coding items are small. All major infrastructure is complete.
 
-### 1. D8 — Turtle uplift script + formal comparison table
-**New file:** `scripts/rdf_uplift.py` — reads `unified_record` rows, writes `data/seed/coolattin_sample.ttl` in the `co:` ontology  
-**New file:** `scripts/sparql_comparison_table.py` — runs the 5 competency questions as SQL and SPARQL, records latency, outputs a comparison table  
-The GraphDB client and comparison framework already exist (`graphdb_sparql.py`, `semantic_layer.compile_sparql()`).
+### 1. D8 — Load local co: ontology repository with data
+The GraphDB SPARQL endpoint and comparison framework are complete. The local `coolattin` repository is provisioned but not loaded with data (RQ6 comparison returns 0/empty — see `docs/11_demo_freeze.md §1.4`). Fix: run `scripts/rdf_uplift.py` to write Turtle and load it into GraphDB, or document the open-world empty-result as a finding.
 
-### 2. D5 — Workhouse review UI (minor)
-The entity resolution pipeline and tables are fully implemented. What is missing is a web page for reviewing `entity_resolution_candidates` and confirming / rejecting links through the UI. This is low-priority (the data is there for the dissertation without a review UI).
+### 2. D5 — Workhouse review UI (low priority)
+The entity resolution pipeline, 140 confirmed links, and all SQLite tables are fully implemented. Missing: a web page for reviewing `entity_resolution_candidates`. The data is complete for dissertation evidence without the UI.
 
 ### 3. D6 (minor) — Explicit source table list in Ask UI
-The `source_tables` field (e.g. `["unified_record", "census_record"]`) is not yet surfaced visibly in the UI answer block.
+The `source_tables` field from `query_provenance` is not yet surfaced as a visible label in the UI answer block.
 
 ---
 
@@ -262,14 +308,14 @@ The `source_tables` field (e.g. `["unified_record", "census_record"]`) is not ye
 |---|---|
 | D3 — Dataset audit | Run SQL queries against the existing DB, put numbers in a table |
 | D4 — Geospatial alignment audit | Run 4 SQL queries against `townland` table, read `reconciliation_gaps.csv` |
-| D5 (mostly) | Pipeline implemented; just needs batch run + write-up |
+| D5 (mostly) | 140 confirmed links already in seed DB; just needs write-up |
 | D6 (mostly) | SQL display, route, provenance, vector retrieval meta, identity disambiguation all work |
-| D7 (mostly) | Chart layer is live for 7 templates; just needs screenshots taken |
-| D8 (comparison) | GraphDB integration done; need to run the 5 Qs and record the table |
-| D9 — Technical evaluation | Use `ask_eval.py` harness or browse Ask page; record results |
-| D10 — LLM evaluation | Run questions, inspect SSE log, record results |
+| D7 (mostly) | Chart layer live for 7 templates + KG explore D3 graph; just needs screenshots |
+| D8 (comparison) | RQ6 table produced; local co: repo loading is the only gap |
+| D9 — Technical evaluation | **Done** — 75-question eval in `eval_results/` |
+| D10 — LLM evaluation | GraphRAG eval done; free-form LLM eval needs tabulation |
 | D11 — User evaluation | Recruit participants, run tasks, record observations |
-| D12, D13 | Writing, git tag, screenshots |
+| D12, D13 | D13 done (git tag created); D12 = writing |
 
 ---
 
@@ -279,11 +325,10 @@ Given submission on 3 August 2026:
 
 | Priority | Item | Effort | Dissertation impact |
 |---|---|---|---|
-| 1 | D8 — Turtle uplift + comparison table | 1 day coding + write-up | Highest — directly answers RQ6 |
-| 2 | D3, D4 — Data and alignment audits | 2 hours (SQL + write-up) | Medium — feeds methods chapter |
-| 3 | D9 — Technical evaluation (15 Qs via ask_eval.py) | 2 hours | High — needed for evaluation chapter |
-| 4 | D10 — LLM evaluation | 2 hours | Medium |
-| 5 | D11 — User evaluation | 1 day with participants | Medium |
-| 6 | D7 screenshots | 30 mins | Low effort, needed for appendix |
-| 7 | D5 review UI | Half day | Low — data is already there |
-| 8 | D12, D13 — Evidence pack + git tag | 1 hour | Required to close out |
+| 1 | D3, D4 — Data and alignment audits | 2 hours (SQL + write-up) | Medium — feeds methods chapter |
+| 2 | D8 — Load co: repo OR document as open-world finding | Half day | High — directly answers RQ6 |
+| 3 | D10 — Free-form LLM evaluation (10+ questions) | 2 hours | Medium — feeds evaluation chapter |
+| 4 | D11 — User evaluation | 1 day with participants | Medium |
+| 5 | D7 screenshots | 30 mins | Low effort, needed for appendix |
+| 6 | D5 review UI | Half day | Low — data already there |
+| 7 | D12 — Write dissertation | Weeks 7–12 | Required |

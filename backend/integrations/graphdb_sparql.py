@@ -34,7 +34,8 @@ from config import ActiveConfig
 
 log = logging.getLogger(__name__)
 
-_PROBE_CACHE_TTL_S = 10.0
+_PROBE_CACHE_TTL_SUCCESS_S = 30.0   # re-check a healthy GraphDB every 30 s
+_PROBE_CACHE_TTL_FAILURE_S = 300.0  # don't spam warnings when GraphDB is offline
 _probe_cache: dict[str, float | bool | None] = {
     "checked_at": 0.0,
     "status": None,
@@ -174,15 +175,22 @@ def probe(*, force: bool = False) -> bool:
     now = time.monotonic()
     cached = _probe_cache.get("status")
     checked_at = float(_probe_cache.get("checked_at") or 0.0)
-    if not force and cached is not None and (now - checked_at) < _PROBE_CACHE_TTL_S:
-        return bool(cached)
+    if not force and cached is not None:
+        ttl = _PROBE_CACHE_TTL_SUCCESS_S if cached else _PROBE_CACHE_TTL_FAILURE_S
+        if (now - checked_at) < ttl:
+            return bool(cached)
     try:
         resp = requests.get(_size_endpoint(), timeout=_probe_timeout_seconds())
         resp.raise_for_status()
+        if not _probe_cache.get("status"):
+            log.info("graphdb_sparql.probe_ok | endpoint=%s", ActiveConfig.GRAPHDB_SPARQL_ENDPOINT)
         _probe_cache = {"checked_at": now, "status": True}
         return True
     except Exception as exc:
-        log.warning("graphdb_sparql.probe_failed | endpoint=%s error=%s", ActiveConfig.GRAPHDB_SPARQL_ENDPOINT, exc)
+        if _probe_cache.get("status") is not False:
+            log.warning("graphdb_sparql.probe_failed | endpoint=%s error=%s", ActiveConfig.GRAPHDB_SPARQL_ENDPOINT, exc)
+        else:
+            log.debug("graphdb_sparql.probe_still_offline | endpoint=%s", ActiveConfig.GRAPHDB_SPARQL_ENDPOINT)
         _probe_cache = {"checked_at": now, "status": False}
         return False
 

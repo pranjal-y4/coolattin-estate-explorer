@@ -43,7 +43,7 @@ The primary evaluation instrument is the 15-question competency set provided by 
 For each question:
 
 1. **Enter the question verbatim** into the Ask page in a clean browser session.
-2. **Record the pipeline route taken**: template match (and which template ID), LLM fallback, or failure.
+2. **Record the pipeline route taken**: check `query_provenance.strategy` in the SSE result — values are `rule_fill` (semantic layer rule-based), `verified_analysis` (fast-lane verified template), `slot_fill_llm` (semantic layer LLM slot-fill), `template` (embedding fast lane), `memory` (approved memory reuse), or `llm_sql` (FALLBACK free-form LLM SQL).
 3. **Record the SQL query executed** (shown in the Ask page response).
 4. **Independently verify the answer** by running the same SQL directly against the SQLite database using a command-line tool, and cross-checking against the source CSV/Excel files where possible.
 5. **Assess the NL rewrite**: Is the rephrased answer factually consistent with the raw data? Is it appropriately hedged where data is sparse?
