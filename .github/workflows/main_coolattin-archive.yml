@@ -23,14 +23,13 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Strip heavy local-only packages for Azure deployment
+      - name: Create virtual environment and install dependencies
         run: |
           grep -v -E "^(torch|sentence-transformers|psycopg)" requirements.txt > requirements-azure.txt
-          cp requirements-azure.txt requirements.txt
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+          python -m venv antenv
+          source antenv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements-azure.txt
 
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
@@ -38,7 +37,6 @@ jobs:
           name: python-app
           path: |
             .
-            !antenv/
             !venv/
             !.venv/
 
@@ -68,4 +66,4 @@ jobs:
         with:
           app-name: 'coolattin-live'
           slot-name: 'Production'
-          startup-command: 'gunicorn --bind=0.0.0.0:$PORT --timeout 600 --workers 2 --worker-class gthread --threads 4 --access-logfile - --error-logfile - app:app'
+          startup-command: 'antenv/bin/gunicorn --bind=0.0.0.0:$PORT --timeout 600 --workers 2 --worker-class gthread --threads 4 --access-logfile - --error-logfile - app:app'
