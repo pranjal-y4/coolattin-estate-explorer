@@ -46,6 +46,10 @@ def ask_query():
     if not question:
         return jsonify({"error": "question is required"}), 400
 
+    # Audit log: IP + question length (not full text) for abuse detection.
+    _ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
+    log.info("ask_api.query ip=%s q_len=%d townland_hint=%s", _ip, len(question), bool(townland_hint))
+
     from backend.services.ask_service import answer_question_stream
 
     @stream_with_context
@@ -297,7 +301,9 @@ def estate_overview():
 def ask_pdf_download(filename: str):
     from config import ActiveConfig
     safe_name = Path(filename).name
+    if not safe_name.lower().endswith(".pdf"):
+        abort(400, description="Only PDF files may be downloaded from this endpoint.")
     pdf_path = ActiveConfig.EXPORTS_DIR / "ask" / safe_name
     if not pdf_path.exists():
         abort(404, description="Report not found.")
-    return send_file(pdf_path, as_attachment=True, download_name=safe_name)
+    return send_file(pdf_path, as_attachment=True, download_name=safe_name, mimetype="application/pdf")

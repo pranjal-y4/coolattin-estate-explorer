@@ -45,8 +45,12 @@ def _resolve_database_path() -> Path:
     return Path(raw).expanduser()
 
 
+_DEFAULT_SECRET = "dev-secret-change-in-prod"
+
+
 class Config:
-    SECRET_KEY: str = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
+    SECRET_KEY: str = os.environ.get("SECRET_KEY", _DEFAULT_SECRET)
+    ADMIN_API_KEY: str = os.environ.get("ADMIN_API_KEY", "")
 
     # ------------------------------------------------------------------ #
     # Database — SQLite lives at project root                             #
@@ -127,6 +131,7 @@ config_by_name: dict[str, type[Config]] = {
     "default": DevelopmentConfig,
 }
 
-ActiveConfig = config_by_name.get(
-    os.environ.get("FLASK_ENV", "development"), DevelopmentConfig
-)
+_flask_env = os.environ.get("FLASK_ENV", "").strip().lower()
+# Default to production when FLASK_ENV is not explicitly "development"
+# so Azure deployments are safe even if the env var is unset.
+ActiveConfig = config_by_name.get(_flask_env, ProductionConfig)

@@ -1,22 +1,35 @@
-flask
-flask-limiter
-gunicorn
-pandas
-rapidfuzz
-openpyxl
-requests
-rdflib
-shapely
-jellyfish
-numpy
-anthropic
-psycopg[binary]>=3.1
+# ── Web framework ─────────────────────────────────────────────────────────────
+Flask>=3.1.2
+flask-limiter>=4.1          # required — rate-limiting on LLM endpoints
+gunicorn>=22.0
+
+# ── Data processing ───────────────────────────────────────────────────────────
+pandas>=2.3
+numpy>=2.3
+openpyxl>=3.1.5
+rapidfuzz>=3.14
+jellyfish>=1.0
+
+# ── HTTP + Knowledge Graph ────────────────────────────────────────────────────
+requests>=2.32
+rdflib>=6.3
+
+# ── Spatial ───────────────────────────────────────────────────────────────────
+shapely>=2.1
+
+# ── Graph (in-process GraphRAG) ───────────────────────────────────────────────
+networkx>=3.6
+
+# ── LLM providers ────────────────────────────────────────────────────────────
+anthropic>=0.28
 cohere>=5
 voyageai>=0.2
-# In-process property graph (GraphRAG substrate — replaces Neo4j)
-networkx>=3.0
-# Local embedding provider (BAAI/bge-large-en-v1.5) — only needed when
-# EMBEDDING_PROVIDER=local. Too large for Azure App Service (~2 GB).
-# Install locally with: pip install sentence-transformers torch
+
+# ── Database ─────────────────────────────────────────────────────────────────
+psycopg[binary]>=3.1        # optional PostgreSQL / pgvector backend
+
+# ── Local embedding provider (BAAI/bge-large-en-v1.5) ────────────────────────
+# Too large for Azure App Service (~2 GB). Install locally only:
+#   pip install sentence-transformers torch
 # sentence-transformers
 # torch

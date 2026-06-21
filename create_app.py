@@ -51,6 +51,11 @@ def create_app(config_class=None) -> Flask:
     # Config                                                               #
     # ------------------------------------------------------------------ #
     app.config["SECRET_KEY"] = config_class.SECRET_KEY
+    if not config_class.DEBUG and config_class.SECRET_KEY == "dev-secret-change-in-prod":
+        log.error(
+            "create_app.insecure_secret_key — SECRET_KEY is the default placeholder. "
+            "Set a strong random value in the SECRET_KEY environment variable before deploying."
+        )
     app.config["DATABASE_PATH"] = config_class.DATABASE_PATH
     app.config["VRTI_SPARQL_ENDPOINT"] = config_class.VRTI_SPARQL_ENDPOINT
     app.config["CENSUS_STALE_AFTER_DAYS"] = config_class.CENSUS_STALE_AFTER_DAYS
