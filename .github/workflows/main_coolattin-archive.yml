@@ -28,9 +28,9 @@ jobs:
           grep -v -E "^(torch|sentence-transformers|psycopg)" requirements.txt > requirements-azure.txt
           cp requirements-azure.txt requirements.txt
 
-      - name: Install core dependencies for syntax check
+      - name: Install dependencies
         run: |
-          pip install flask flask-limiter pandas rapidfuzz openpyxl requests rdflib jellyfish numpy
+          pip install -r requirements.txt
 
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
@@ -68,3 +68,4 @@ jobs:
         with:
           app-name: 'coolattin-live'
           slot-name: 'Production'
+          startup-command: 'gunicorn --bind=0.0.0.0:$PORT --timeout 600 --workers 2 --worker-class gthread --threads 4 --access-logfile - --error-logfile - app:app'
