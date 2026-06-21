@@ -125,6 +125,20 @@ def townland_suggest():
     })
 
 
+@bp.get("/townland-catalog")
+def townland_catalog():
+    """All Wicklow townlands with metadata — fetched once on page load for client-side filtering."""
+    from backend.services.ask_service import _townland_catalog
+    items = [
+        {"name": i["name"], "civil_parish": i.get("civil_parish"), "name_gaelic": i.get("name_gaelic")}
+        for i in _townland_catalog()
+        if (i.get("county") or "").strip().lower() == "wicklow"
+    ]
+    resp = jsonify(items)
+    resp.headers["Cache-Control"] = "public, max-age=300"
+    return resp
+
+
 @bp.get("/ollama-status")
 def ollama_status():
     from backend.services.ask_service import check_llm_status

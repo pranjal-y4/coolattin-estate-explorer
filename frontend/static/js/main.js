@@ -1198,13 +1198,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function loadOptions() {
     const [townlandsRes, geoRes] = await Promise.all([
       fetch("/api/unified/townlands"),
-      fetch("/static/data/townlands.json")
+      // Reuse already-loaded geo data (set by loadTownlandsGeo) to avoid re-downloading 6.2 MB
+      townlandsGeoData ? Promise.resolve(null) : fetch("/static/data/townlands.json"),
     ]);
     const unified = townlandsRes.ok ? await townlandsRes.json() : [];
-    const geo = geoRes.ok ? await geoRes.json() : { features: [] };
-
-    // Set geo data early so dropdown→map highlight works immediately
-    townlandsGeoData = geo;
+    if (!townlandsGeoData && geoRes) {
+      townlandsGeoData = geoRes.ok ? await geoRes.json() : { features: [] };
+    }
+    const geo = townlandsGeoData || { features: [] };
 
     const geoNames = new Set(
       (geo.features || []).map(f => String(f.properties?.TL_ENGLISH || "").trim().toLowerCase())
@@ -2020,19 +2021,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   (async () => {
-    // Load the map boundaries first so the visual is responsive immediately,
-    // then fetch the 4.4 MB unified records in the background.
+    // Kick off geo render and unified records fetch in parallel — they are independent.
+    // loadTownlandsGeo (6.2 MB) and loadUnifiedData (4.4 MB) previously downloaded
+    // sequentially; running them together cuts total wait time roughly in half.
+    const unifiedDataP = loadUnifiedData();
+
     try {
       await loadTownlandsGeo();
     } catch (e) {
       console.error("Townland map load failed:", e);
     }
 
-    // Deferred: unified records + options (runs after map paint).
+    // Unified records are already in flight; await the shared promise.
     // URL param handling also lives here because it depends on loaded options.
     queueMicrotask(async () => {
       try {
-        await loadUnifiedData();
+        await unifiedDataP;
         await loadOptions();
         await wireSurnameAutocomplete();
       } catch (e) {

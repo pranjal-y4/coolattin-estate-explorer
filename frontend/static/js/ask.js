@@ -72,6 +72,34 @@ document.addEventListener("DOMContentLoaded", () => {
   let dropdownActiveIdx = -1;
   let closeDropdownTimer = null;
 
+  // Pre-load full townland catalog on page load for instant client-side filtering.
+  let _townlandCatalog = null;
+  fetch("/api/ask/townland-catalog")
+    .then(r => r.ok ? r.json() : null)
+    .then(data => { if (Array.isArray(data)) _townlandCatalog = data; })
+    .catch(() => {});
+
+  function _filterTownlandsClientSide(query) {
+    if (!_townlandCatalog) return null;
+    const q = query.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!q) return [];
+    const results = [];
+    for (const item of _townlandCatalog) {
+      const name = (item.name || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const gaelic = (item.name_gaelic || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (!name) continue;
+      let score = 0;
+      if (name === q) score = 1.0;
+      else if (name.startsWith(q)) score = 0.9 - (name.length - q.length) * 0.01;
+      else if (name.includes(q)) score = 0.75;
+      else if (gaelic && gaelic.startsWith(q)) score = 0.7;
+      else if (gaelic && gaelic.includes(q)) score = 0.6;
+      if (score > 0) results.push({ ...item, score });
+    }
+    results.sort((a, b) => b.score - a.score || (a.name || "").localeCompare(b.name || ""));
+    return results.slice(0, 8);
+  }
+
   // ── Utilities ──────────────────────────────────────────────────────────────
   function setStatus(msg, stageLabel) {
     if (statusEl) statusEl.textContent = msg || "";
@@ -211,6 +239,13 @@ document.addEventListener("DOMContentLoaded", () => {
       if (townlandSuggestTimer) clearTimeout(townlandSuggestTimer);
       if (val.length === 0) { renderDropdown([], true); return; }
       if (val.length < 2) { closeDropdown(); return; }
+
+      // Use pre-loaded catalog for instant filtering; fall back to network if not ready
+      const clientResults = _filterTownlandsClientSide(val);
+      if (clientResults !== null) {
+        renderDropdown(clientResults, true);
+        return;
+      }
       townlandSuggestTimer = setTimeout(async () => {
         try {
           const res = await fetch(`/api/ask/townland-suggest?q=${encodeURIComponent(val)}`);
