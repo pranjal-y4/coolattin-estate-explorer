@@ -1002,7 +1002,9 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!lines.length) continue;
         const dataText = lines.map(l => l.slice(5).trim()).join("\n");
         if (!dataText) continue;
-        try { onEvent(JSON.parse(dataText)); } catch { /* ignore malformed */ }
+        let _parsed;
+        try { _parsed = JSON.parse(dataText); } catch { continue; }
+        onEvent(_parsed);
       }
     }
   }

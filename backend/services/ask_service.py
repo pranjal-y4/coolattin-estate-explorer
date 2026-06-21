@@ -3528,16 +3528,20 @@ def _orchestrated_pipeline_stream(
             "fusion_text": fusion_result["fusion_text"],
         },
     }
-    pdf_path = _write_pdf_report(
-        question=question, answer=actual_answer, sql=safe_sql,
-        columns=columns, rows=rows, llm_meta=llm_meta,
-        kg_context=kg_context, include_sql=True,
-        vrti_postgres_sql=vrti_postgres_sql,
-        vrti_columns=vrti_columns, vrti_rows=vrti_rows,
-        summary_block=summary_block,
-        llm_rephrased_answer=llm_rephrased_answer,
-        llm_rewrite_meta=llm_rewrite_meta,
-    )
+    try:
+        pdf_path = _write_pdf_report(
+            question=question, answer=actual_answer, sql=safe_sql,
+            columns=columns, rows=rows, llm_meta=llm_meta,
+            kg_context=kg_context, include_sql=True,
+            vrti_postgres_sql=vrti_postgres_sql,
+            vrti_columns=vrti_columns, vrti_rows=vrti_rows,
+            summary_block=summary_block,
+            llm_rephrased_answer=llm_rephrased_answer,
+            llm_rewrite_meta=llm_rewrite_meta,
+        )
+    except Exception as _pdf_exc:
+        log.warning("ask_service.pdf_write_failed error=%s", _pdf_exc)
+        pdf_path = None
     if llm_meta.get("mode") == "fallback_rule":
         warnings.append("LLM SQL generation unavailable — fallback SQL template used.")
     elif llm_meta.get("mode") == "no_validated_sql":
@@ -3575,7 +3579,7 @@ def _orchestrated_pipeline_stream(
         "query_provenance": query_provenance,
         "suggestions": availability.get("suggestions", []),
         "structured_output": structured_output,
-        "pdf_url": f"/api/ask/pdf/{pdf_path.name}",
+        "pdf_url": f"/api/ask/pdf/{pdf_path.name}" if pdf_path else None,
         "warnings": warnings,
         "source_tables": _extract_tables(safe_sql) if safe_sql else [],
         "graph_comparison": graph_comparison,
@@ -4289,14 +4293,18 @@ def answer_question_stream(
         },
     }
 
-    pdf_path = _write_pdf_report(
-        question=clean_q, answer=actual_answer, sql=safe_sql, columns=columns, rows=rows,
-        llm_meta=llm_meta, kg_context=kg_context, include_sql=True,
-        vrti_postgres_sql=vrti_postgres_sql, vrti_columns=vrti_columns,
-        vrti_rows=vrti_rows, summary_block=summary_block,
-        llm_rephrased_answer=llm_rephrased_answer,
-        llm_rewrite_meta=llm_rewrite_meta,
-    )
+    try:
+        pdf_path = _write_pdf_report(
+            question=clean_q, answer=actual_answer, sql=safe_sql, columns=columns, rows=rows,
+            llm_meta=llm_meta, kg_context=kg_context, include_sql=True,
+            vrti_postgres_sql=vrti_postgres_sql, vrti_columns=vrti_columns,
+            vrti_rows=vrti_rows, summary_block=summary_block,
+            llm_rephrased_answer=llm_rephrased_answer,
+            llm_rewrite_meta=llm_rewrite_meta,
+        )
+    except Exception as _pdf_exc:
+        log.warning("ask_service.pdf_write_failed error=%s", _pdf_exc)
+        pdf_path = None
 
     if llm_meta.get("mode") == "fallback_rule":
         warnings.append("LLM SQL generation unavailable - fallback SQL template used.")
@@ -4332,7 +4340,7 @@ def answer_question_stream(
         "query_provenance": query_provenance,
         "suggestions": availability.get("suggestions", []),
         "structured_output": structured_output,
-        "pdf_url": f"/api/ask/pdf/{pdf_path.name}",
+        "pdf_url": f"/api/ask/pdf/{pdf_path.name}" if pdf_path else None,
         "warnings": warnings,
         "source_tables": _extract_tables(safe_sql) if safe_sql else [],
         "graph_comparison": graph_comparison,
