@@ -62,7 +62,8 @@ VOYAGE_OUTPUT_DIMENSION: int = COHERE_OUTPUT_DIMENSION
 
 _init_lock = threading.Lock()
 _key_loaded: bool = False
-_client = None  # cohere.ClientV2 instance, populated by _init_key()
+_client = None       # cohere.ClientV2 instance, populated by _init_key()
+_voyage_client = None  # voyageai.Client instance, populated by _init_key()
 
 # Maps the public-facing input_type names (kept compatible with Voyage API callers)
 # to Cohere's required values.  Translation happens only inside _api_embed —
@@ -74,7 +75,7 @@ _COHERE_INPUT_TYPE: dict[str, str] = {
 
 
 def _init_key() -> None:
-    global COHERE_API_KEY, COHERE_MODEL, VOYAGE_API_KEY, _key_loaded, _client
+    global COHERE_API_KEY, COHERE_MODEL, VOYAGE_API_KEY, _key_loaded, _client, _voyage_client
     if _key_loaded:
         return
     with _init_lock:
@@ -84,7 +85,7 @@ def _init_key() -> None:
         model = _getenv("COHERE_MODEL")
         if model:
             COHERE_MODEL = model
-        VOYAGE_API_KEY = COHERE_API_KEY  # keep legacy alias readable
+        VOYAGE_API_KEY = _getenv("VOYAGE_API_KEY") or COHERE_API_KEY
         _key_loaded = True
 
         if COHERE_API_KEY:
@@ -99,6 +100,19 @@ def _init_key() -> None:
             except Exception as exc:
                 log.warning("voyage_embeddings.cohere_init_failed error=%s", exc)
                 _client = None
+
+        if VOYAGE_API_KEY:
+            try:
+                import voyageai  # type: ignore
+                _voyage_client = voyageai.Client(api_key=VOYAGE_API_KEY)
+                log.info(
+                    "voyage_embeddings.voyage_init model=%s dim=%d",
+                    _getenv("VOYAGE_MODEL") or VOYAGE_MODEL,
+                    VOYAGE_OUTPUT_DIMENSION,
+                )
+            except Exception as exc:
+                log.warning("voyage_embeddings.voyage_init_failed error=%s", exc)
+                _voyage_client = None
 
 
 # ── In-process document cache ─────────────────────────────────────────────────
@@ -205,13 +219,16 @@ def embed_texts(
     input_type: "query" | "document"  (Voyage-compatible names)
     provider=local  → BAAI/bge-large-en-v1.5 via SentenceTransformers (no API key)
     provider=cohere → Cohere Embed v3 (requires COHERE_API_KEY)
-    provider=voyage → alias for cohere (legacy)
+    provider=voyage → Voyage AI voyage-3 (requires VOYAGE_API_KEY)
     Returns empty list on API error.
     """
     provider = _get_embedding_provider()
     if provider == "local":
         from backend.services.local_embeddings import embed_texts_local
         return embed_texts_local(texts, input_type=input_type)
+
+    if provider == "voyage":
+        return _embed_voyage(texts, input_type, use_cache=use_cache)
 
     _init_key()
     if not COHERE_API_KEY or _client is None:
@@ -295,6 +312,62 @@ def embed_texts(
                 fetched_vecs.extend(
                     [[] for _ in range(batch_start + len(batch) - len(fetched_vecs))]
                 )
+
+        for list_idx, orig_idx in enumerate(uncached_indices):
+            vec = fetched_vecs[list_idx] if list_idx < len(fetched_vecs) else []
+            results[orig_idx] = vec
+            if use_cache and input_type == "document" and vec:
+                _cache_set(texts[orig_idx], vec)
+
+    return [v for v in results if v is not None]
+
+
+def _embed_voyage(
+    texts: list[str],
+    input_type: str = "document",
+    *,
+    use_cache: bool = True,
+) -> list[list[float]]:
+    _init_key()
+    if not VOYAGE_API_KEY or _voyage_client is None:
+        log.debug("voyage_embeddings.voyage_no_key — dense embeddings disabled")
+        return []
+    if not texts:
+        return []
+
+    results: list[list[float] | None] = [None] * len(texts)
+    uncached_indices: list[int] = []
+
+    if use_cache and input_type == "document":
+        for i, t in enumerate(texts):
+            hit = _cache_get(t)
+            if hit is not None:
+                results[i] = hit
+            else:
+                uncached_indices.append(i)
+    else:
+        uncached_indices = list(range(len(texts)))
+
+    if uncached_indices:
+        model = _getenv("VOYAGE_MODEL") or VOYAGE_MODEL
+        uncached_texts = [texts[i] for i in uncached_indices]
+        VOYAGE_MAX_BATCH = 128
+        fetched_vecs: list[list[float]] = []
+        for batch_start in range(0, len(uncached_texts), VOYAGE_MAX_BATCH):
+            batch = uncached_texts[batch_start: batch_start + VOYAGE_MAX_BATCH]
+            try:
+                result = _voyage_client.embed(batch, model=model, input_type=input_type)
+                batch_vecs = result.embeddings or []
+                if batch_vecs and len(batch_vecs[0]) != VOYAGE_OUTPUT_DIMENSION:
+                    log.warning(
+                        "voyage_embeddings.voyage_dim_mismatch expected=%d actual=%d",
+                        VOYAGE_OUTPUT_DIMENSION,
+                        len(batch_vecs[0]),
+                    )
+                fetched_vecs.extend(batch_vecs)
+            except Exception as exc:
+                log.warning("voyage_embeddings.voyage_batch_failed error=%s", exc)
+                fetched_vecs.extend([[] for _ in batch])
 
         for list_idx, orig_idx in enumerate(uncached_indices):
             vec = fetched_vecs[list_idx] if list_idx < len(fetched_vecs) else []

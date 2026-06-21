@@ -12,6 +12,7 @@ numpy
 anthropic
 psycopg[binary]>=3.1
 cohere>=5
+voyageai>=0.2
 # Local embedding provider — CPU-only on macOS; on Linux:
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
 sentence-transformers
