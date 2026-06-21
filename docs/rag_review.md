@@ -2,7 +2,7 @@
 ### Design & Operating Reference
 
 **Branch:** `main` (merged from `feat/rag-v2-rebuild`)  
-**Status as of 2026-06-21:** Core pipeline validated at v1.0-demo-freeze (2026-06-10). See `docs/11_demo_freeze.md` for full evaluation results.  
+**Status as of 2026-06-21:** Core pipeline validated at v1.0-demo-freeze (2026-06-10). Azure deployment stabilised (CI/CD via OIDC + Oryx, gthread workers, security hardening). See `docs/11_demo_freeze.md` for full evaluation results.  
 **Scope of this document:** how the rebuilt *retrieval* pipeline answers questions on the Ask page, the mechanisms that make its answers accurate, the current implementation status, and what must be true before it can be trusted in deployment.
 **Out of scope:** the display layout is unchanged except for the specific fixes noted in §5 and §8.
 
@@ -145,7 +145,7 @@ The result is rendered in six sections, with SQL and KG kept separate throughout
 
 ## 8. Deployment readiness checklist
 
-The pipeline is deployed on Azure and validated at `v1.0-demo-freeze`. Items remaining:
+The pipeline is deployed on Azure at `coolattin-app.azurewebsites.net` and validated at `v1.0-demo-freeze`. Items remaining:
 
 - [x] VRTI enrichment uses the correct HTTP GET method; endpoint reachable.
 - [x] Grok `XAI_API_KEY` not set → chain skips to OpenRouter cleanly (no crash).
@@ -155,8 +155,14 @@ The pipeline is deployed on Azure and validated at `v1.0-demo-freeze`. Items rem
 - [x] `COUNTY_INTEGRITY_AUDIT.md` reviewed; Wicklow Coolattin townland added as `id=4365`.
 - [x] API keys configured in Azure App Service environment; `.env.local` is git-ignored.
 - [x] CSP headers updated for Leaflet CDN + D3.js CDN + OSM tiles (commit `dd02e46`).
+- [x] SSE `No final result received` fixed — gthread workers (2 × 4 threads) prevent SSE deadlock (commit `4bdbeea`).
+- [x] Analytics page 500 fixed; Chart.js dashboard renders; `/kg-explore` alias wired (commit `aefd1c1`).
+- [x] CI/CD pipeline (`azure-deploy.yml`) deploys on push to main via OIDC + Oryx zip deploy (commit `1e6f2ac`).
+- [x] Voyage AI embedding provider wired for Azure (no torch dependency) (commit `4cd49f1`).
+- [x] Security hardening: `ADMIN_API_KEY` on admin endpoints, audit log on Ask, `FLASK_ENV` defaults to production (commit `755f6ad`).
+- [x] Map page loads GeoJSON + unified data in parallel; Ask townland catalog pre-loaded client-side (commit `e2189b3`).
 - [ ] GraphDB `coolattin` repository loaded with RDF data — currently provisioned but empty; open-world queries return 0. Either load data via `scripts/rdf_uplift.py` or document as a finding.
-- [ ] Grok `XAI_API_KEY` set in production environment to enable the full synthesis chain.
+- [ ] `GROK_API_KEY` set in Azure App Service to enable the full Claude → Grok → OpenRouter chain.
 - [ ] Exponential backoff + retry on HTTP 429 before failing over — currently fails over immediately.
 - [ ] Provider rate limits and cost assessed for sustained production load (Claude synthesis is paid).
 

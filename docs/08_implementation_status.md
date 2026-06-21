@@ -34,6 +34,10 @@
 | **NEW** — KG Explore Page | **Done** | `/kg-explore` page; `/api/kg/graph` (D3 force graph, 152 nodes), `/api/kg/compare` (4 canned SQL vs SPARQL scenarios + custom), `/api/kg/scenarios` |
 | **NEW** — GraphRAG Pipeline | **Done** | In-process property graph (`graphrag.py`): 49,081 nodes · 64,342 edges · 28,078 BGE-embedded; vector seed → k-hop BFS → linearised subgraph; additive enrichment (zero numeric delta validated); graph built by `scripts/build_graph.py` |
 | **NEW** — Multi-model Synthesis Chain | **Done** | LLM priority chain: Claude (`anthropic`) → Grok (`xAI`) → OpenRouter → Ollama; failure at any stage silently falls to next; synthesis model configurable via `ASK_SYNTHESIS_MODEL` |
+| **NEW** — Voyage AI Embedding Provider | **Done** | `voyage_embeddings.py` routes to `voyageai.Client` when `EMBEDDING_PROVIDER=voyage`; required on Azure where torch/sentence-transformers are excluded from build |
+| **NEW** — Azure CI/CD Pipeline | **Done** | `azure-deploy.yml`: OIDC login → `requirements-azure.txt` swap → zip deploy → Oryx build → startup command enforcement; deploys to `coolattin-app.azurewebsites.net` (coolattin-rg2) |
+| **NEW** — Security Hardening | **Done** | `FLASK_ENV` defaults to production; `ADMIN_API_KEY` guard on admin endpoints; audit log on Ask; PDF download hardening; `flask-limiter` in requirements |
+| **NEW** — Parallel Map Loading + Instant Townland Dropdown | **Done** | Map loads GeoJSON + unified data in parallel (saves ~half download wait); Ask townland catalog pre-loaded client-side (no per-keystroke round-trip) |
 
 ---
 
@@ -299,6 +303,9 @@ The entity resolution pipeline, 140 confirmed links, and all SQLite tables are f
 
 ### 3. D6 (minor) — Explicit source table list in Ask UI
 The `source_tables` field from `query_provenance` is not yet surfaced as a visible label in the UI answer block.
+
+### 4. Set `GROK_API_KEY` in Azure production environment
+Grok is the second provider in the multi-model synthesis chain (Claude → Grok → OpenRouter → Ollama). Without the key, the chain silently falls to OpenRouter. Low risk — OpenRouter works fine — but enabling Grok completes the full synthesis chain as designed.
 
 ---
 

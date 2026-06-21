@@ -258,6 +258,135 @@ Baselines captured (stored as JSON in `backend/services/eval_results/`):
 
 ---
 
+# Handoff Notes — June 21 Azure Deployment & Security Sprint
+
+**Sprint period:** 21 June 2026  
+**Commits covered:** `aefd1c1`, `4cd49f1`, `4bdbeea`, `d2c93b6`, `594a4ee`, `f4a1ba0`, `3e7ebce`, `1131be0`, `0e4096b`, `1e6f2ac`, `e2189b3`, `755f6ad`
+
+---
+
+## 1. What Was Fixed / Built
+
+### 1.1 Analytics Page 500 + KG Explore Route (`aefd1c1`)
+
+The `/analytics` page was returning 500 because the route handler was passing undefined Jinja2 variables to the template. The template and JS were stubs that predated the analytics registry pattern.
+
+**Fix:**
+- `backend/routes/main.py`: call `discover_modules()` and `compute()` from the analytics registry; pass `datasets`, `result`, and `error` to the template
+- `frontend/templates/analytics.html`: rewritten as a proper dataset picker + KPI cards + Chart.js canvases template
+- `frontend/static/js/analytics.js`: replaced misplaced Jinja2 HTML block with Chart.js initialisation script that reads inline JSON config blocks
+- `backend/routes/main.py`: added `/kg-explore` as an alias for `/explore-knowledge` so both paths serve the KG explore page
+
+**Files changed:** `backend/routes/main.py`, `frontend/templates/analytics.html`, `frontend/static/js/analytics.js`
+
+### 1.2 Voyage AI SDK Support (`4cd49f1`)
+
+The `EMBEDDING_PROVIDER=voyage` path was calling Cohere's SDK internally rather than the official Voyage AI SDK.
+
+**Fix:**
+- `backend/services/voyage_embeddings.py`: added `voyageai.Client` initialisation from `VOYAGE_API_KEY`; `embed_texts()` now routes to `_embed_voyage()` when `provider=voyage` and `_embed_cohere()` when `provider=cohere`
+- `requirements.txt`: added `voyageai>=0.2`
+- Azure App Service settings updated with: `ANTHROPIC_API_KEY`, `GROK_API_KEY`, `ASK_USE_NEW_PIPELINE=true`, `ASK_SYNTHESIS_MODEL=claude`, `ASK_LLM_PROVIDER=auto`, `EMBEDDING_PROVIDER=voyage`, `VOYAGE_API_KEY`, `DATABASE_PATH` (fixed to `/home/site/wwwroot/coolattin.db`)
+
+**Files changed:** `backend/services/voyage_embeddings.py`, `requirements.txt`
+
+### 1.3 Azure SSE Fix — gthread Workers (`4bdbeea`)
+
+Two Azure-specific failures:
+1. `No final result received` on the Ask page — backend error events were silently swallowed by the `catch` block in `ask.js`
+2. SSE connections were deadlocking: a single gunicorn sync worker can serve only one long-lived SSE stream at a time, blocking all other requests
+
+**Fix:**
+- `frontend/static/js/ask.js`: separated `JSON.parse` from `onEvent` dispatch so backend error events surface to the user rather than being caught silently
+- `startup.txt`: switched to `--worker-class gthread --threads 4` (2 workers × 4 threads), allowing concurrent SSE streams without deadlock; uses `${PORT:-8000}` so Azure's injected `$PORT` is respected
+- `backend/services/ask_service.py`: wrapped both `_write_pdf_report` call-sites in `try/except` so PDF write failures do not crash the SSE generator; guarded `pdf_url` against `None` pdf_path
+
+**Files changed:** `backend/services/ask_service.py`, `frontend/static/js/ask.js`, `startup.txt`
+
+### 1.4 Procfile + Torch Removal (`d2c93b6`)
+
+Azure pip install was timing out or OOM-ing on `torch` + `sentence-transformers` (~2 GB).
+
+**Fix:**
+- `requirements.txt`: commented out `torch`, `sentence-transformers`, and `psycopg`; imports in `local_embeddings.py` are already lazy so no startup error results
+- `Procfile` added so Azure Oryx auto-detects the gunicorn startup command without requiring portal configuration
+
+**Files changed:** `Procfile`, `requirements.txt`
+
+### 1.5 Azure CI/CD Pipeline Stabilisation (`594a4ee`, `f4a1ba0`, `3e7ebce`, `1131be0`, `0e4096b`, `1e6f2ac`)
+
+Six successive commits stabilised the GitHub Actions → Azure deployment pipeline. Root cause sequence:
+
+| Commit | Problem | Fix |
+|---|---|---|
+| `3e7ebce` | No CI pipeline for new `coolattin-rg2` app | New `azure-deploy.yml` workflow; `requirements-azure.txt` (strips psycopg) |
+| `1131be0` | `webapps-deploy@v3` requires AAD service principal (unavailable on student account) | Switch to Kudu curl deploy with publish-profile credentials |
+| `0e4096b` | Publish-profile auth rejected; needed OIDC managed identity | Created `coolattin-gh-identity` in `coolattin-rg2`; OIDC federated credential for `pranjal-y4/coolattin-estate-explorer main`; `startup.sh` lazy pip install + `antenv/bin/python3 -m gunicorn`; `.webappignore` added |
+| `1e6f2ac` | Startup command reset by Oryx after each deploy | Add explicit `az webapp config set` step after each deploy to enforce the gunicorn command |
+| `f4a1ba0` | CI runner's system Python venv not transferable across OS; gunicorn missing on Azure | Pre-build `antenv` in CI; ship gunicorn with the artifact |
+| `594a4ee` | Azure never received the startup command override | Set `startup-command` in `webapps-deploy@v3` to write `appCommandLine` directly to App Service config |
+
+**Final working approach (current `azure-deploy.yml`):** OIDC login → copy `requirements-azure.txt` → create zip → `az webapp deploy --type zip` (Oryx builds venv on target) → `az webapp config set` to enforce startup command.
+
+**New files:** `requirements-azure.txt`, `Procfile`, `startup.sh`, `.webappignore`, `.github/workflows/azure-deploy.yml`
+
+### 1.6 Parallel Map Data Loading + Instant Ask Townland Dropdown (`e2189b3`)
+
+Two separate performance regressions on page load:
+1. Map page fetched `townlands.json` (6.2 MB) and `unified_data` (4.4 MB) sequentially, then fetched `townlands.json` a second time for the options dropdown
+2. Ask page was firing a network round-trip per keystroke in the townland search box
+
+**Fix:**
+- `frontend/static/js/main.js`: run `loadTownlandsGeo` and `loadUnifiedData` in `Promise.all` (parallel); skip re-downloading `townlands.json` in `loadOptions` when already cached
+- `backend/routes/ask.py`: new `GET /api/ask/townland-catalog` endpoint returning all Wicklow townlands with `name` + `civil_parish` for client-side filtering
+- `frontend/static/js/ask.js`: pre-load the catalog on page load; filter client-side on keystrokes; falls back to the API if the catalog is not yet ready
+
+**Files changed:** `backend/routes/ask.py`, `frontend/static/js/ask.js`, `frontend/static/js/main.js`
+
+### 1.7 Security Hardening (`755f6ad`)
+
+Pre-publish security audit identified several hardening gaps.
+
+**Fixes applied:**
+- `config.py`: `FLASK_ENV` now defaults to `production` (not `development`); `debug=False` unless explicitly set; `SECRET_KEY` logs an error if the placeholder value is present in production
+- `backend/routes/census.py`: `ADMIN_API_KEY` guard on `POST /api/census/refresh` and `POST /api/census/export/regenerate` — returns 403 when the key is unset or wrong (checked via `X-Admin-Key` header)
+- `backend/routes/ask.py`: audit log records client IP + question length on each Ask query for abuse detection
+- `backend/routes/ask.py`: PDF download rejects non-`.pdf` filenames; forces `application/pdf` mimetype
+- `requirements.txt`: `flask-limiter` promoted to a required dependency with minimum version pins
+
+**New env var:** `ADMIN_API_KEY` — set in production to protect admin endpoints.
+
+**Files changed:** `.env.example`, `app.py`, `backend/routes/ask.py`, `backend/routes/census.py`, `config.py`, `create_app.py`, `requirements.txt`
+
+---
+
+## 2. Outstanding Items (as of 2026-06-21)
+
+| Item | Priority | Notes |
+|---|---|---|
+| D8 — Load co: ontology repo with data | High | `scripts/rdf_uplift.py` + GraphDB data load; needed for RQ6 full comparison |
+| D3 — Dataset audit | Medium | 4 SQL queries against `coolattin.db`; just needs running and write-up |
+| D4 — Geospatial alignment audit | Medium | 4 SQL queries against `townland` table; read `reconciliation_gaps.csv` |
+| D10 — Free-form LLM eval | Medium | Run 10+ non-template questions; record SQL validity + repair rate |
+| D11 — User evaluation | Medium | 4–6 participants; task-based session |
+| D5 review UI | Low | Entity resolution candidate review page; data is already there |
+| Grok `XAI_API_KEY` / `GROK_API_KEY` | Low | Set in Azure App Service to enable the full Claude → Grok → OpenRouter chain |
+| D12 — Dissertation write-up | Required | Weeks 7–12 of plan |
+
+---
+
+## 3. Architecture Decisions (June 21)
+
+**Why use Voyage AI instead of BAAI/bge-large locally on Azure?** `torch` + `sentence-transformers` total ~2 GB and cause pip OOM or timeout during Azure Oryx builds. Voyage AI is a lightweight API client with the same 1024-dim output schema — no schema migration needed. The local BGE path remains available for development.
+
+**Why gthread workers for SSE?** Gunicorn's default `sync` worker can only handle one concurrent request per worker. A long-lived SSE stream blocks the worker for its entire duration. `gthread` workers use a thread pool per worker, so concurrent SSE connections (one per Ask query) don't deadlock each other.
+
+**Why enforce the startup command after every deploy?** `az webapp up` and some Oryx heuristics reset `appCommandLine` to a default on each deploy. The CI workflow's `az webapp config set` step at the end of each deploy pins the exact gunicorn command, overriding any auto-detected value.
+
+**Why `ADMIN_API_KEY` rather than role-based auth?** The refresh and export endpoints are infrequently used admin actions on a dissertation project with no user accounts. A shared secret header is the simplest mechanism that closes the unauthenticated POST vulnerability without adding a session/auth layer.
+
+---
+
 # Handoff Notes — June 2026 Performance & Stability Sprint
 
 **Sprint period:** 10–21 June 2026  

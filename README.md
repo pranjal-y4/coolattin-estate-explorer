@@ -4,7 +4,7 @@ An interactive web application for exploring historical records from the **Coola
 
 The application integrates tenancy, eviction, emigration, and census data from the [Virtual Record Treasury of Ireland (VRTI)](https://virtualtreasury.ie/) Knowledge Graph into a unified interface with an interactive map, analytics dashboards, and a natural-language Q&A system backed by an LLM.
 
-**Live deployment:** Azure App Service (Italy North) · **Academic freeze:** `v1.0-demo-freeze` (2026-06-10)
+**Live deployment:** `coolattin-app.azurewebsites.net` (Azure App Service, Italy North) · **Academic freeze:** `v1.0-demo-freeze` (2026-06-10)
 
 ---
 
@@ -222,8 +222,8 @@ See [`.env.example`](.env.example) for the full documented list. Key variables:
 | `OPENROUTER_API_KEY` | — | Required for cloud LLM |
 | `OPENROUTER_MODEL` | `openai/gpt-oss-20b:free` | OpenRouter model ID |
 | `ANTHROPIC_API_KEY` | — | Required for Claude synthesis (`ASK_SYNTHESIS_MODEL=claude`) |
-| `XAI_API_KEY` | — | Grok (xAI) API key — second in multi-model synthesis chain |
-| `ASK_SYNTHESIS_MODEL` | `openrouter` | Synthesis model: `claude` / `openrouter` / `ollama` |
+| `GROK_API_KEY` | — | Grok (xAI) API key — second in multi-model synthesis chain |
+| `ASK_SYNTHESIS_MODEL` | `claude` | Synthesis model: `claude` / `openrouter` / `ollama` |
 | `LLM_ALLOW_PAID` | `false` | Allow paid API calls (`true` required for Claude/Grok) |
 | `ASK_ALLOW_HEURISTIC_FALLBACK` | `0` | `0` = fail safely; `1` = allow heuristic SQL guessing |
 | `OLLAMA_MODEL` | — | Ollama model name |
@@ -231,6 +231,9 @@ See [`.env.example`](.env.example) for the full documented list. Key variables:
 | `ASK_USE_NEW_PIPELINE` | `true` | `true` = orchestrated 7-phase pipeline; `false` = legacy path |
 | `EMBEDDING_PROVIDER` | `local` | `local` (BAAI/bge-large-en-v1.5) / `cohere` / `voyage` |
 | `COHERE_API_KEY` | — | Required when `EMBEDDING_PROVIDER=cohere` |
+| `VOYAGE_API_KEY` | — | Required when `EMBEDDING_PROVIDER=voyage` (recommended on Azure) |
+| `VOYAGE_MODEL` | `voyage-3` | Voyage AI model name |
+| `ADMIN_API_KEY` | — | Protects admin endpoints (`POST /api/census/refresh`); set in production |
 | `DATABASE_URL` | — | PostgreSQL connection string; enables pgvector backend for Ask retrieval |
 | `GRAPHDB_ENABLED` | `true` | Query local GraphDB alongside SQLite and VRTI |
 | `GRAPHDB_SPARQL_ENDPOINT` | `http://localhost:7200/...` | GraphDB SPARQL endpoint |
@@ -322,79 +325,57 @@ This project includes [Claude Code](https://claude.ai/code) configuration in `.c
 
 ## Deploy to Azure App Service
 
-This app runs on **Azure App Service (Linux)**. The current architecture uses **SQLite** with WAL mode, so the safest production setup is one App Service instance with a persistent SQLite path.
+This app runs on **Azure App Service (Linux)** at `coolattin-app.azurewebsites.net` (resource group `coolattin-rg2`, Italy North). It uses **SQLite** with WAL mode — one App Service instance with a persistent `DATABASE_PATH`.
 
-### Files already prepared for Azure
+### CI/CD (push to main → auto-deploy)
 
-- `requirements.txt` includes `gunicorn`
-- `startup.txt` contains the Gunicorn startup command
-- `DATABASE_PATH` can be set through environment variables
-- `.github/workflows/` contains the CI/CD pipeline
+Every push to `main` triggers `.github/workflows/azure-deploy.yml`:
 
-### From scratch with Azure CLI
+1. Logs in to Azure via OIDC (managed identity `coolattin-gh-identity`, secrets `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID`)
+2. Replaces `requirements.txt` with `requirements-azure.txt` (strips `psycopg` and heavy ML packages not used on Azure)
+3. Zips the repo (excluding venv, docs, tests, source snapshots, eval results)
+4. Deploys via `az webapp deploy --type zip`; Azure Oryx builds the venv on the target machine
+5. Enforces the gunicorn startup command via `az webapp config set`
 
-1. Install Azure CLI and sign in:
+The startup command runs **2 workers × 4 gthread threads** on the `$PORT` that Azure assigns:
 
-```bash
-az login
-az account set --subscription "<your-subscription-name-or-id>"
+```
+gunicorn --bind=0.0.0.0:$PORT --timeout 600 --workers 2 --worker-class gthread --threads 4 app:app
 ```
 
-2. Choose names:
+### Files prepared for Azure
 
-```bash
-RESOURCE_GROUP="coolattin-rg"
-PLAN_NAME="coolattin-plan"
-APP_NAME="coolattin-archive-app"
-LOCATION="italynorth"
-RUNTIME="PYTHON:3.12"
-```
+| File | Purpose |
+|---|---|
+| `requirements-azure.txt` | Azure-safe deps (no `torch`, `sentence-transformers`, `psycopg`) |
+| `Procfile` | Oryx auto-detection fallback for gunicorn command |
+| `startup.sh` | Lazy `pip install` on first boot if antenv is absent; subsequent starts reuse antenv |
+| `.webappignore` | Excludes secrets, venv, docs, tests from `az webapp up` uploads |
+| `.github/workflows/azure-deploy.yml` | Active CI/CD pipeline (OIDC + Oryx zip deploy) |
+| `.github/workflows/main_coolattin-archive.yml` | Legacy workflow (superseded; left for reference) |
 
-3. Create the resource group, App Service plan, and web app:
+### Required Azure App Service settings
 
-```bash
-az group create --name "$RESOURCE_GROUP" --location "$LOCATION"
-
-az appservice plan create \
-  --name "$PLAN_NAME" \
-  --resource-group "$RESOURCE_GROUP" \
-  --location "$LOCATION" \
-  --sku B1 \
-  --is-linux
-
-az webapp create \
-  --resource-group "$RESOURCE_GROUP" \
-  --plan "$PLAN_NAME" \
-  --name "$APP_NAME" \
-  --runtime "$RUNTIME"
-```
-
-4. Configure the startup command:
-
-```bash
-az webapp config set \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$APP_NAME" \
-  --startup-file startup.txt
-```
-
-5. Configure required app settings:
+Set these in the Azure portal or via `az webapp config appsettings set`:
 
 ```bash
 az webapp config appsettings set \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$APP_NAME" \
+  --resource-group coolattin-rg2 \
+  --name coolattin-app \
   --settings \
-    SCM_DO_BUILD_DURING_DEPLOYMENT=1 \
+    SCM_DO_BUILD_DURING_DEPLOYMENT=true \
     FLASK_ENV=production \
     SECRET_KEY="<strong-random-secret>" \
-    ASK_LLM_PROVIDER=openrouter \
+    ASK_LLM_PROVIDER=auto \
     OPENROUTER_API_KEY="<your-openrouter-key>" \
     OPENROUTER_MODEL="openai/gpt-oss-20b:free" \
     ANTHROPIC_API_KEY="<your-anthropic-key>" \
     ASK_SYNTHESIS_MODEL=claude \
     LLM_ALLOW_PAID=true \
-    ASK_ALLOW_HEURISTIC_FALLBACK=0 \
+    EMBEDDING_PROVIDER=voyage \
+    VOYAGE_API_KEY="<your-voyage-key>" \
+    GROK_API_KEY="<your-grok-key>" \
+    ADMIN_API_KEY="<strong-admin-secret>" \
     GRAPHDB_ENABLED=true \
     GRAPHDB_SPARQL_ENDPOINT="http://51.120.71.162:7200/repositories/coolattin" \
     GRAPHDB_REQUEST_TIMEOUT=15 \
@@ -402,51 +383,22 @@ az webapp config appsettings set \
     GRAPHRAG_VECTOR_TOP_K=8 \
     GRAPHRAG_K_HOPS=2 \
     GRAPHRAG_MAX_NODES=120 \
-    DATABASE_PATH="/home/site/data/coolattin.db"
+    DATABASE_PATH="/home/site/wwwroot/coolattin.db"
 ```
 
-6. Turn on Always On:
-
-```bash
-az webapp config set \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$APP_NAME" \
-  --always-on true
-```
-
-7. Build and deploy:
-
-```bash
-zip -r coolattin-app.zip . -x "venv/*" ".venv/*" ".git/*" ".github/*" \
-  "__pycache__/*" "*.pyc" ".env.local" "coolattin-app.zip"
-
-az webapp deploy \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$APP_NAME" \
-  --src-path coolattin-app.zip
-```
-
-8. After first deployment, run the ingest job via SSH console and then build the graph:
-
-```bash
-python3 -m backend.jobs.full_ingest
-python3 scripts/build_graph.py
-```
+> **Note on embeddings:** `torch` and `sentence-transformers` (~2 GB) are excluded from the Azure build to avoid pip timeout/OOM. Set `EMBEDDING_PROVIDER=voyage` (or `cohere`) and supply the corresponding API key. The local BAAI/bge model is available only when running locally.
 
 ### Logs and troubleshooting
 
 ```bash
-az webapp log tail \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$APP_NAME"
+az webapp log tail --resource-group coolattin-rg2 --name coolattin-app
 ```
 
-If the app starts but dependencies are missing, confirm that:
-- `SCM_DO_BUILD_DURING_DEPLOYMENT=1` is set
-- `requirements.txt` includes every runtime dependency
-- `startup.txt` is configured as the startup file
-- `DATABASE_PATH` points to `/home/site/...` rather than the repo root
-- The BGE model cache directory has enough disk space (model: ~1.3 GB)
+Common failures:
+- **`gunicorn: command not found`** — the startup command was reset. The CI workflow re-enforces it on each deploy via `az webapp config set`.
+- **SSE `No final result received`** — usually a single-worker deadlock. The startup command must use `--worker-class gthread --threads 4` to allow concurrent SSE connections.
+- **Missing packages** — confirm `SCM_DO_BUILD_DURING_DEPLOYMENT=true` is set so Oryx builds from `requirements.txt` on the target machine.
+- **BGE model absent** — expected on Azure; set `EMBEDDING_PROVIDER=voyage` instead.
 
 ---
 
