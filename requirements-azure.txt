@@ -1,0 +1,15 @@
+flask
+flask-limiter
+gunicorn
+pandas
+rapidfuzz
+openpyxl
+requests
+rdflib
+shapely
+jellyfish
+numpy
+anthropic
+cohere>=5
+voyageai>=0.2
+networkx>=3.0

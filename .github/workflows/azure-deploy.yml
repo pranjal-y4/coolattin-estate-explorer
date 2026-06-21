@@ -1,0 +1,47 @@
+name: Deploy to Azure App Service
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare requirements for Azure
+        # psycopg not needed (using SQLite); sentence-transformers/torch too large
+        run: cp requirements-azure.txt requirements.txt
+
+      - name: Create deployment zip
+        run: |
+          zip -r deploy.zip . \
+            -x "*.git*" \
+            -x "venv/*" \
+            -x ".venv/*" \
+            -x "antenv/*" \
+            -x "__pycache__/*" \
+            -x "*.pyc" \
+            -x ".env.local" \
+            -x ".env" \
+            -x "*.db-wal" \
+            -x "*.db-shm" \
+            -x "*.db-wal.bak" \
+            -x "*.db.bak" \
+            -x "node_modules/*" \
+            -x "exports/*" \
+            -x ".claude/*" \
+            -x "eval_results/*" \
+            -x "*.zip"
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: 'coolattin-app'
+          slot-name: 'Production'
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: deploy.zip
