@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -13,38 +17,47 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Login to Azure (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: Prepare requirements for Azure
-        # psycopg not needed (using SQLite); sentence-transformers/torch too large
+        # psycopg not needed on Azure (using SQLite)
         run: cp requirements-azure.txt requirements.txt
 
       - name: Create deployment zip
         run: |
           zip -r deploy.zip . \
             -x "*.git*" \
-            -x "venv/*" \
-            -x ".venv/*" \
-            -x "antenv/*" \
-            -x "__pycache__/*" \
-            -x "*.pyc" \
-            -x ".env.local" \
-            -x ".env" \
-            -x "*.db-wal" \
-            -x "*.db-shm" \
-            -x "*.db-wal.bak" \
-            -x "*.db.bak" \
-            -x "node_modules/*" \
-            -x "exports/*" \
-            -x ".claude/*" \
-            -x "eval_results/*" \
-            -x "*.zip"
+            -x "venv/*" -x ".venv/*" -x "antenv/*" \
+            -x "__pycache__/*" -x "*.pyc" \
+            -x ".env.local" -x ".env" \
+            -x "*.db-wal" -x "*.db-shm" -x "*.db-wal.bak" -x "*.db.bak" \
+            -x "node_modules/*" -x "exports/*" -x ".claude/*" \
+            -x "eval_results/*" -x "*.zip" \
+            -x "_archive/*" -x "docs/*" -x "eval/*" \
+            -x "tests/*" -x "scripts/*" \
+            -x "extra_datasets/NMS_OpenData_20230823.csv" \
+            -x "data/entity_index.pkl" -x "data/source_snapshots/*" \
+            -x ".pytest_cache/*" -x "package-lock.json" \
+            -x "requirements-azure.txt"
 
-      - name: Deploy via Kudu ZipDeploy
+      - name: Deploy to Azure (triggers Oryx build)
         run: |
-          curl -X POST \
-            "https://coolattin-app.scm.azurewebsites.net/api/zipdeploy?isAsync=false" \
-            -u "${{ secrets.KUDU_USERNAME }}:${{ secrets.KUDU_PASSWORD }}" \
-            -H "Content-Type: application/zip" \
-            --data-binary @deploy.zip \
-            --max-time 300 \
-            --fail \
-            -v 2>&1 | tail -20
+          az webapp deploy \
+            --name coolattin-app \
+            --resource-group coolattin-rg2 \
+            --src-path deploy.zip \
+            --type zip \
+            --async true
+
+      - name: Verify app is responding
+        run: |
+          echo "Waiting 60s for site to restart..."
+          sleep 60
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 https://coolattin-app.azurewebsites.net/)
+          echo "HTTP status: $STATUS"
+          [ "$STATUS" = "200" ] || exit 1
