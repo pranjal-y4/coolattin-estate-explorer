@@ -45,19 +45,36 @@ jobs:
             -x ".pytest_cache/*" -x "package-lock.json" \
             -x "requirements-azure.txt"
 
-      - name: Deploy to Azure (triggers Oryx build)
+      - name: Deploy to Azure via zip (Oryx builds packages on Azure)
+        # Oryx on Azure reads requirements.txt and creates antenv automatically.
+        # SCM_DO_BUILD_DURING_DEPLOYMENT=true is set in app settings.
         run: |
           az webapp deploy \
             --name coolattin-app \
             --resource-group coolattin-rg2 \
             --src-path deploy.zip \
-            --type zip \
-            --async true
+            --type zip
+
+      - name: Enforce startup command
+        # Oryx resolves the gunicorn binary path from antenv automatically when
+        # the startup command is set to the bare 'gunicorn ...' form.
+        # This must run after each deploy so az webapp up cannot reset it to
+        # 'bash /home/site/wwwroot/startup.sh' via startup.sh auto-detection.
+        run: |
+          az webapp config set \
+            --name coolattin-app \
+            --resource-group coolattin-rg2 \
+            --startup-file "gunicorn --bind=0.0.0.0:\$PORT --timeout 600 --workers 2 --worker-class gthread --threads 4 --access-logfile '-' --error-logfile '-' app:app"
 
       - name: Verify app is responding
         run: |
-          echo "Waiting 60s for site to restart..."
-          sleep 60
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 https://coolattin-app.azurewebsites.net/)
-          echo "HTTP status: $STATUS"
-          [ "$STATUS" = "200" ] || exit 1
+          echo "Waiting 30s for site to settle..."
+          sleep 30
+          for i in 1 2 3 4 5; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://coolattin-app.azurewebsites.net/)
+            echo "Attempt $i: HTTP $STATUS"
+            [ "$STATUS" = "200" ] && exit 0
+            sleep 15
+          done
+          echo "App did not return 200 after 5 attempts"
+          exit 1
