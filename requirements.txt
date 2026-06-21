@@ -13,9 +13,10 @@ anthropic
 psycopg[binary]>=3.1
 cohere>=5
 voyageai>=0.2
-# Local embedding provider — CPU-only on macOS; on Linux:
-#   pip install torch --index-url https://download.pytorch.org/whl/cpu
-sentence-transformers
-torch
 # In-process property graph (GraphRAG substrate — replaces Neo4j)
 networkx>=3.0
+# Local embedding provider (BAAI/bge-large-en-v1.5) — only needed when
+# EMBEDDING_PROVIDER=local. Too large for Azure App Service (~2 GB).
+# Install locally with: pip install sentence-transformers torch
+# sentence-transformers
+# torch
