@@ -356,7 +356,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             .filter(t => t && t !== thisTownland);
           const uniqueNeighbours = [...new Set(mountainNeighbours)].slice(0, 5);
           value = uniqueNeighbours.length > 0
-            ? `Yes — shared with: ${uniqueNeighbours.join(", ")}`
+            ? `Yes, shared with: ${uniqueNeighbours.join(", ")}`
             : "Yes";
         } else {
           continue;
@@ -444,7 +444,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!group) return;
 
     const sourceLabel = sourceType === "workhouse" ? "Workhouse" : sourceType === "emigration" ? "Emigration" : "Source";
-    $("recordModalTitle").innerText = `${group.label} — ${sourceLabel}`;
+    $("recordModalTitle").innerText = `${group.label}: ${sourceLabel}`;
 
     let bodyHTML = "";
 
@@ -563,7 +563,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #cbd5e1;">
           <div style="font-size:12px;color:#4c1d95;font-weight:800;">Workhouse Records (${matches.length} fuzzy match${matches.length !== 1 ? "es" : ""})</div>
           <div style="font-size:11px;color:#78350f;background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;margin:4px 0 8px;line-height:1.5;">
-            <strong>Approximate matches only</strong> — these records were identified by name similarity (fuzzy matching) and cannot be guaranteed to refer to the same person. Confidence tiers indicate match quality. Always verify against the original source before drawing conclusions.
+            <strong>Approximate matches only.</strong> These records were identified by name similarity (fuzzy matching) and cannot be guaranteed to refer to the same person. Confidence tiers indicate match quality. Always verify against the original source before drawing conclusions.
           </div>
           <div style="margin-top:6px;">${rows}</div>
         </div>
@@ -599,7 +599,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #cbd5e1;">
         <div style="font-size:12px;color:#4c1d95;font-weight:800;">Workhouse Resolution (${total} linked or reviewable record${total !== 1 ? "s" : ""})</div>
         <div style="font-size:11px;color:#78350f;background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;margin:4px 0 8px;line-height:1.5;">
-          <strong>Review carefully</strong> — confirmed links have the strongest available evidence, while possible links are surfaced for manual checking rather than silently merged.
+          <strong>Review carefully.</strong> Confirmed links have the strongest available evidence, while possible links are surfaced for manual checking rather than silently merged.
         </div>
         ${bundle.identity_is_ambiguous ? `<div style="font-size:11px;color:#9a3412;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:6px 8px;margin:0 0 8px;">${bundle.identity_disambiguation_note || "Multiple plausible workhouse matches were found for this identity."}</div>` : ""}
         ${confirmed.length ? `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#15803d;margin:8px 0 4px;">Confirmed linked workhouse records</div>${confirmed.map((m) => renderCandidateCard(m, "#f0fdf4", "Confirmed")).join("")}` : ""}
@@ -703,7 +703,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         </div>
         <div style="font-size:10px;color:#6d28d9;background:#ede9fe;border-radius:5px;
                     padding:5px 8px;margin-bottom:8px;line-height:1.5;">
-          Algorithmically matched — percentages show match probability. Verify independently before drawing conclusions.
+          Algorithmically matched. Percentages show match probability. Verify independently before drawing conclusions.
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:stretch;">
           ${linked.map(m => _whMatchCard(m, true)).join("")}
@@ -858,8 +858,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     const personLabel = canonicalName(rec);
     const body = $("recordModalBody");
     $("recordModalTitle").innerText = allForPerson.length > 1
-      ? `${personLabel} — All Records (${allForPerson.length})`
-      : `${personLabel} — Record Details`;
+      ? `${personLabel}: All Records (${allForPerson.length})`
+      : `${personLabel}: Record Details`;
 
     body.innerHTML = "<div style='padding:20px;text-align:center;color:#64748b;'>Loading records…</div>";
     openModal(recordModal);
@@ -1265,7 +1265,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!val) { setSurnameError(""); return; }
       const tl = $("townlandSelect")?.value || "";
       if (!hasSurnameInContext(val, tl)) {
-        setSurnameError("Surname not found — type a name and select from the suggestions, or click Apply Filters.");
+        setSurnameError("Surname not found. Type a name and select from the suggestions, or click Apply Filters.");
         return;
       }
       setSurnameError("");
@@ -1306,7 +1306,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const sn = ($("surnameInput")?.value || "").trim();
       if (sn) {
         if (!hasSurnameInContext(sn, tl)) {
-          setSurnameError("Surname not found — type a name and select from the suggestions.");
+          setSurnameError("Surname not found. Type a name and select from the suggestions.");
           return;
         }
         setSurnameError("");
@@ -1358,7 +1358,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const mapEl = $("wicklowMap");
   if (!mapEl) return;
   if (typeof L === "undefined") {
-    mapEl.innerHTML = "<div style='display:flex;align-items:center;justify-content:center;height:100%;color:#64748b;font-size:13px;'>Map unavailable — check your internet connection and reload.</div>";
+    mapEl.innerHTML = "<div style='display:flex;align-items:center;justify-content:center;height:100%;color:#64748b;font-size:13px;'>Map unavailable. Check your internet connection and reload.</div>";
     return;
   }
   const map = L.map("wicklowMap", { minZoom: 8, maxZoom: 15 });
@@ -1440,17 +1440,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     if (homeHeritageState.mode === "heritage") {
       title.textContent = selectedTownlandName
-        ? `${displayTownlandLabel(selectedTownlandName)} — Historic Landscape`
-        : "County Wicklow — Historic Landscape";
+        ? `${displayTownlandLabel(selectedTownlandName)} : Historic Landscape`
+        : "County Wicklow : Historic Landscape";
       subtitle.textContent = selectedTownlandName
         ? "The same map is now showing archaeology, holy wells, monuments, and bright 2 km / 5 km distance rings. Click any marker for more detail."
         : "Select a townland, then use this same map to explore archaeology, holy wells, monuments, and the highlighted 2 km / 5 km rings.";
       return;
     }
 
-    title.textContent = "County Wicklow — Townlands & Families";
-    subtitle.textContent =
-      "Select a townland to view linked family records, then switch the same map into historic place mode when you want nearby archaeology, holy wells, and monuments.";
+    title.textContent = "County Wicklow: Townlands & Families";
+    subtitle.textContent = "";
   }
 
   function findTownlandFeatureByName(name) {

@@ -166,7 +166,7 @@ document.addEventListener("DOMContentLoaded", () => {
           : "";
         const checkmark = isAllSelected ? `<span style="margin-left:auto;color:#0f766e;font-weight:700;">✓</span>` : "";
         return `<div class="tl-option" data-idx="${i}" role="option" style="border-bottom:1px solid #e2e8f0;color:#0f766e;font-weight:600;${selectedStyle}">
-          <span class="tl-option-name">All Townlands</span><span class="tl-option-meta"> — estate-wide query (no location filter)</span>${checkmark}
+          <span class="tl-option-name">All Townlands</span><span class="tl-option-meta"> (estate-wide, no location filter)</span>${checkmark}
         </div>`;
       }
       const parish = s.civil_parish ? `<span class="tl-option-meta"> · ${escapeHtml(s.civil_parish)}</span>` : "";
@@ -401,8 +401,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     sections.push({
       label: "Filters Applied",
-      desc: "Conditions used to narrow the dataset. If results are empty, consider whether any of these filters may be too restrictive — for example, gender is not recorded for a significant portion of estate records.",
-      value: filterParts.length ? filterParts.join(" · ") : "No specific filters — estate-wide or unfiltered query.",
+      desc: "Conditions used to narrow the dataset. If results are empty, consider whether any of these filters may be too restrictive. For example, gender is not recorded for a significant portion of estate records.",
+      value: filterParts.length ? filterParts.join(" · ") : "No specific filters applied. Estate-wide or unfiltered query.",
     });
 
     // ── Geographic scope ──────────────────────────────────────────────────
@@ -412,13 +412,13 @@ document.addEventListener("DOMContentLoaded", () => {
       sections.push({
         label: "Geographic Scope",
         desc: "The townland or area identified from your question and used to filter records geographically. If the match type is fuzzy, the system selected the closest name by phonetic and string similarity.",
-        value: `${tr.name}${tr.civil_parish ? ", " + tr.civil_parish : ""}${tr.barony ? ", " + tr.barony : ""} — matched as ${tr.match_type || "unknown"}${pct}.`,
+        value: `${tr.name}${tr.civil_parish ? ", " + tr.civil_parish : ""}${tr.barony ? ", " + tr.barony : ""}, matched as ${tr.match_type || "unknown"}${pct}.`,
       });
     } else {
       sections.push({
         label: "Geographic Scope",
         desc: "Whether the query was limited to a specific townland or applied across the entire estate.",
-        value: "All townlands — no location filter applied. Results span the full Coolattin estate.",
+        value: "All townlands. No location filter applied. Results span the full Coolattin estate.",
       });
     }
 
@@ -435,14 +435,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // ── Query strategy ────────────────────────────────────────────────────
     const stratDescriptions = {
-      "semantic_layer_rule":        "Deterministic rule — the answer was computed directly from a pre-defined template with no language model involvement. This is the most reliable path.",
-      "verified_analysis":          "Verified template — a pre-approved query pattern was used and cross-checked for numeric consistency.",
-      "fallback_verified_analysis": "Verified template — a pre-approved query pattern was used and cross-checked for numeric consistency.",
-      "memory_direct_reuse":        "Approved memory reuse — this question was answered before and its SQL pattern was saved as approved. The language model was bypassed entirely for SQL generation.",
-      "semantic_layer_llm":         "Template-guided generation — the language model wrote SQL constrained by slot-filled parameters derived from your question.",
-      "emergency_fallback":         "Language model fallback — no template matched, so the model generated SQL directly from the question text. Results should be verified.",
-      "validated_sql_unavailable":  "Language model fallback — generated SQL could not be validated; raw LLM output was used.",
-      "llm_fallback":               "Language model fallback — no template matched, so the model generated SQL directly from the question text.",
+      "semantic_layer_rule":        "Deterministic rule. The answer was computed directly from a pre-defined template with no language model involvement. This is the most reliable path.",
+      "verified_analysis":          "Verified template. A pre-approved query pattern was used and cross-checked for numeric consistency.",
+      "fallback_verified_analysis": "Verified template. A pre-approved query pattern was used and cross-checked for numeric consistency.",
+      "memory_direct_reuse":        "Approved memory reuse. This question was answered before and its SQL pattern was saved as approved. The language model was bypassed entirely for SQL generation.",
+      "semantic_layer_llm":         "Template-guided generation. The language model wrote SQL constrained by slot-filled parameters derived from your question.",
+      "emergency_fallback":         "Language model fallback. No template matched, so the model generated SQL directly from the question text. Results should be verified.",
+      "validated_sql_unavailable":  "Language model fallback. Generated SQL could not be validated; raw LLM output was used.",
+      "llm_fallback":               "Language model fallback. No template matched, so the model generated SQL directly from the question text.",
     };
     if (provenance?.strategy) {
       sections.push({
@@ -747,17 +747,17 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>`;
 
       estateOverviewBodyEl.innerHTML = [
-        sep("County Wicklow — Geographic Structure"),
+        sep("County Wicklow: Geographic Structure"),
         geoCards,
         fullWidth("Baronies of County Wicklow", baroniesHtml),
         fullWidth("Largest Civil Parishes by Number of Townlands", topParishHtml),
         ...(censusCards.length ? [
-          sep("Population — Census Records"),
+          sep("Population: Census Records"),
           censusCards.join(""),
           fullWidth("Most Populated Townlands in 1841", topPopHtml),
           fullWidth("Most Populated Civil Parishes in 1841", topParishPopHtml),
         ] : []),
-        sep("Coolattin Estate — Historical Records"),
+        sep("Coolattin Estate: Historical Records"),
         estateCards,
         fullWidth("Most Common Surnames in Estate Records", surnamesHtml),
         fullWidth("Baronies by Estate Record Count", baroniesByRecordsHtml),
@@ -1110,7 +1110,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const rewrite = payload.llm_rephrased_answer || "";
         llmAnswerEl.innerHTML = rewrite
           ? markdownToHtml(rewrite)
-          : `<span style="color:#94a3b8;font-style:italic;">No LLM summary available — see database result below.</span>`;
+          : `<span style="color:#94a3b8;font-style:italic;">No summary available. See database result below.</span>`;
       }
       // Compact raw answer below table
       if (actualAnswerEl) {

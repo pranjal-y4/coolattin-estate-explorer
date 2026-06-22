@@ -4,7 +4,7 @@
   <div class="container">
     <h1 class="band-title" style="margin:0;" data-i18n="wicklowCensusExplorer">Wicklow Census Explorer</h1>
     <p class="band-sub" style="max-width:900px;" data-i18n="censusExplorerDesc">
-      Explore census population by townland across time. Click a townland polygon to open detailed counts,
+      Explore census population by townland across time. Click a townland to open detailed counts,
       then slide the year bar to inspect historical shifts.
     </p>
     <!-- Data source status badge — populated by census.js from API meta -->
@@ -111,24 +111,27 @@
     <aside class="panel" style="position:sticky;top:88px;">
       <div class="panel-title" data-i18n="townlandCensusDetail">Townland Census Detail</div>
       <div id="censusTownlandTitle" style="font-size:22px;font-weight:800;color:#0f172a;" data-i18n="selectTownland">Select a Townland</div>
-      <div id="censusTownlandMeta" style="font-size:13px;color:#64748b;margin-top:4px;margin-bottom:16px;" data-i18n="clickMapPolygonInspect">Click a map polygon to inspect yearly values.</div>
+      <div id="censusTownlandMeta" style="font-size:13px;color:#64748b;margin-top:4px;margin-bottom:16px;" data-i18n="clickMapPolygonInspect">Click a townland on the map to inspect yearly values.</div>
 
-      <!-- Gaelic name, description, placename theme -->
-      <div id="censusTownlandDetail"></div>
-
-      <!-- KPI cards: male, female, total, inhabited, uninhabited -->
+      <!-- 1. KPI cards: total, male, female, houses — shown first -->
       <div id="censusKpis" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;"></div>
 
-      <!-- Year timeline -->
+      <!-- 2. Year timeline — shown second -->
       <div style="margin-top:20px;">
         <div style="font-size:12px;font-weight:800;color:#475467;margin-bottom:8px;" data-i18n="timeline">Timeline</div>
-        <div id="censusTimeline" style="display:grid;gap:8px;max-height:350px;overflow:auto;padding-right:4px;"></div>
+        <div id="censusTimeline" style="display:grid;gap:8px;"></div>
       </div>
+
+      <!-- 3. KG enrichment: Gaelic name, location, coordinates, links -->
+      <div id="censusTownlandDetail"></div>
+
+      <!-- 4. Workhouse records — collapsible, shown last -->
+      <div id="censusWorkhouseSection"></div>
     </aside>
   </div>
 </section>
 
 <!-- map.js (loaded in base.html) provides initLayerSwitcher, switchLayer -->
 <!-- census.js calls initLayerSwitcher on DOMContentLoaded -->
-<script src="{{ url_for('static', filename='js/census.js') }}?v=8"></script>
+<script src="{{ url_for('static', filename='js/census.js') }}?v=10"></script>
 {% endblock %}

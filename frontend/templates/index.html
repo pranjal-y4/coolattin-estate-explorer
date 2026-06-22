@@ -3,12 +3,6 @@
 {% block content %}
 
 <section class="hero" id="home">
-  <!-- YouTube video background (plays from 2:26 to end, muted) -->
-  <div class="hero-video-bg">
-    <div id="yt-hero-bg"></div>
-  </div>
-  <div class="hero-video-overlay"></div>
-
   <!-- Centred text overlay only — no widgets -->
   <div class="hero-centre">
     <div class="hero-eyebrow">
@@ -20,7 +14,7 @@
     </h1>
     <p class="hero-subtitle" data-i18n="heroSubtitle">
       Explore a comprehensive genealogical archive spanning tenant histories, landholdings,
-      evictions, and assisted emigration records — brought together with modern geospatial
+      evictions, and assisted emigration records, brought together with modern geospatial
       alignment for meaningful exploration.
     </p>
     <div class="hero-actions">
@@ -40,19 +34,28 @@
   </div>
 </section>
 
-<!-- ── Photo strip (below the fold) ── -->
+<!-- ── Photo cards (below the fold) ── -->
 <section class="section section-below-hero">
   <div class="container" style="max-width:960px;">
-    <div class="photo-strip" style="margin-bottom:40px;">
-      <a class="photo" href="https://en.wikipedia.org/wiki/County_Wicklow" target="_blank" rel="noreferrer">
-        <img loading="lazy" src="{{ url_for('static', filename='images/wick1.jpg') }}" alt="Wicklow landscape" />
-      </a>
-      <a class="photo" href="https://en.wikipedia.org/wiki/Wicklow_Mountains" target="_blank" rel="noreferrer">
-        <img loading="lazy" src="{{ url_for('static', filename='images/wick2.jpg') }}" alt="Wicklow Mountains" />
-      </a>
-      <a class="photo" href="https://en.wikipedia.org/wiki/Glendalough" target="_blank" rel="noreferrer">
-        <img loading="lazy" src="{{ url_for('static', filename='images/wick1.jpg') }}" alt="Glendalough" />
-      </a>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:40px;">
+      <figure style="margin:0;border-radius:16px;overflow:hidden;border:1px solid var(--line);box-shadow:var(--shadow-soft);background:var(--surface);transition:transform 220ms var(--ease),box-shadow 220ms var(--ease);" onmouseover="this.style.transform='translateY(-4px)';this.style.boxShadow='var(--shadow-hover)'" onmouseout="this.style.transform='';this.style.boxShadow='var(--shadow-soft)'">
+        <div style="overflow:hidden;">
+          <img loading="lazy" src="{{ url_for('static', filename='images/wick1.jpg') }}" alt="County Wicklow countryside, the landscape where Coolattin Estate tenants lived and farmed" style="width:100%;height:200px;object-fit:cover;display:block;filter:sepia(0.12) saturate(0.9);transition:transform 350ms var(--ease);" onmouseover="this.style.transform='scale(1.04)'" onmouseout="this.style.transform=''" />
+        </div>
+        <figcaption style="padding:16px 18px 18px;">
+          <div style="font-family:var(--font-display);font-weight:600;font-size:17px;color:var(--ink);margin-bottom:5px;">County Wicklow</div>
+          <div style="font-size:13px;color:var(--muted);line-height:1.55;">The heartland of the Coolattin Estate — rolling farmland where tenant families worked the land across the Famine decades.</div>
+        </figcaption>
+      </figure>
+      <figure style="margin:0;border-radius:16px;overflow:hidden;border:1px solid var(--line);box-shadow:var(--shadow-soft);background:var(--surface);transition:transform 220ms var(--ease),box-shadow 220ms var(--ease);" onmouseover="this.style.transform='translateY(-4px)';this.style.boxShadow='var(--shadow-hover)'" onmouseout="this.style.transform='';this.style.boxShadow='var(--shadow-soft)'">
+        <div style="overflow:hidden;">
+          <img loading="lazy" src="{{ url_for('static', filename='images/wick2.jpg') }}" alt="Wicklow Mountains, the upland commons shared by estate townlands" style="width:100%;height:200px;object-fit:cover;display:block;filter:sepia(0.12) saturate(0.9);transition:transform 350ms var(--ease);" onmouseover="this.style.transform='scale(1.04)'" onmouseout="this.style.transform=''" />
+        </div>
+        <figcaption style="padding:16px 18px 18px;">
+          <div style="font-family:var(--font-display);font-weight:600;font-size:17px;color:var(--ink);margin-bottom:5px;">Wicklow Mountains</div>
+          <div style="font-size:13px;color:var(--muted);line-height:1.55;">Upland commons bordering the estate townlands — shared grazing grounds that shaped the lives of estate families for generations.</div>
+        </figcaption>
+      </figure>
     </div>
   </div>
 </section>
@@ -120,16 +123,34 @@
 </div>
 
 <!-- ===========================
+     KEY STRENGTH CALLOUT (above map)
+=========================== -->
+<section class="section" id="census-callout" style="padding-top:0; padding-bottom:24px;">
+  <div class="container">
+    <div class="panel" style="background: linear-gradient(135deg, #1a4a2e 0%, #234B3A 100%); border:none; display:flex; align-items:center; gap:28px; flex-wrap:wrap; padding:28px 32px;">
+      <div style="flex-shrink:0; width:52px; height:52px; background:rgba(255,255,255,0.12); border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:26px;">📊</div>
+      <div style="flex:1; min-width:220px;">
+        <div style="font-size:13px; font-weight:700; letter-spacing:0.12em; text-transform:uppercase; color:rgba(255,255,255,0.65); margin-bottom:6px;">Key Strength</div>
+        <div style="font-size:1.1rem; font-weight:600; color:#fff; margin-bottom:6px; font-family: var(--font-display);">Estate Records Linked to Official Census Data</div>
+        <div style="font-size:14px; color:rgba(255,255,255,0.80); line-height:1.6;">
+          Coolattin Lineage uniquely integrates Fitzwilliam estate papers (tenancy surveys, eviction records,
+          and emigration lists) with official Irish census returns from 1841 to 1891, enabling family-level
+          tracking across the Famine decades that no single archive provides alone.
+        </div>
+      </div>
+      <a class="btn" href="{{ url_for('main.census') }}" style="background:rgba(255,255,255,0.15); border:1px solid rgba(255,255,255,0.35); color:#fff; white-space:nowrap; flex-shrink:0; padding:12px 22px;">
+        Explore Census Data →
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ===========================
      MAP EXPLORER (UPDATED)
 =========================== -->
 <section class="band" id="explore">
   <div class="container band-head">
     <h2 class="band-title" data-i18n="mapExplorer">Map Explorer · County Wicklow</h2>
-    <p class="band-sub" data-i18n="mapExplorerSub">
-      Townland boundaries are drawn from <code>townlands.json</code>. Family pins come from linked records
-      (default: Tenancies). Select a townland and use <strong>Explore Historic Place</strong> to switch this same map
-      into archaeology, holy wells, and monuments mode.
-    </p>
   </div>
 
   <div class="container explore-layout">
@@ -160,23 +181,12 @@
         Unified dataset only. Select a townland to view tenants and families, then open full person-level records.
       </div>
 
-      <!-- Quick help -->
-      <div class="panel soft" style="margin-top:14px;">
-        <div class="panel-title" data-i18n="tip">Tip</div>
-        <div style="font-size:13px; color:#475467;" data-i18n="tipPinsPlacedTownland">
-          Pins are placed at townland centroids (computed from GeoJSON).
-          Click a pin to load the full linked story in the right panel.
-        </div>
-      </div>
     </aside>
 
     <!-- MAP + STORY + STATS -->
     <div class="panel map-panel">
-      <div class="panel-title" id="exploreMapPanelTitle" data-i18n="countyWicklowMap">County Wicklow — Townlands & Families</div>
-      <p id="exploreMapPanelSubtitle" class="explore-panel-note">
-        Select a townland to view linked family records, then switch the same map into historic place mode when you want
-        nearby archaeology, holy wells, and monuments.
-      </p>
+      <div class="panel-title" id="exploreMapPanelTitle" data-i18n="countyWicklowMap">County Wicklow: Townlands & Families</div>
+      <p id="exploreMapPanelSubtitle" class="explore-panel-note"></p>
 
       <!-- Map + Story -->
       <div style="display:grid; grid-template-columns: 3fr 1.2fr; gap:14px;">
@@ -186,10 +196,10 @@
           <div id="wicklow-map-layer-switcher" style="position:absolute;top:10px;right:10px;z-index:1000;"></div>
         </div>
 
-        <aside class="panel soft" style="height:540px; overflow:auto;">
-          <div class="panel-title" data-i18n="familyStory">Family Story</div>
+        <aside class="panel soft" style="min-height:200px;">
+          <div class="panel-title" data-i18n="familyStory">Data Explorer</div>
           <div id="detailsContent" style="font-size:14px; color:#475467;">
-            Click a townland polygon to view linked records, then use Explore Historic Place for the historic landscape on
+            Click a townland to view linked records, then use Explore Historic Place for the historic landscape on
             this same map.
           </div>
         </aside>
@@ -201,7 +211,7 @@
 <section class="section" id="records">
   <div class="container center-head">
     <h2 class="section-title" data-i18n="featuredFamilyRecords">Featured Family Records</h2>
-    <p class="section-sub" data-i18n="realFamiliesRealHistories">Real families, real histories — drawn from the original Fitzwilliam estate papers.</p>
+    <p class="section-sub" data-i18n="realFamiliesRealHistories">Real families, real histories drawn from the original Fitzwilliam estate papers.</p>
   </div>
 
   <div class="container cards-3">
@@ -210,7 +220,7 @@
         <div class="record-title">Byrne Family · Coolboy</div>
         <span class="tag blue">Tenancy · Eviction · Emigration</span>
       </div>
-      <p class="record-desc">The Byrnes of Coolboy are one of the most thoroughly documented families in the Fitzwilliam archive — 51 records spanning tenancy surveys, ejectment proceedings, and assisted emigration lists between 1845 and 1868.</p>
+      <p class="record-desc">The Byrnes of Coolboy are one of the most thoroughly documented families in the Fitzwilliam archive, with 51 records spanning tenancy surveys, ejectment proceedings, and assisted emigration lists between 1845 and 1868.</p>
       <div class="record-meta">
         <div><span>Townland:</span> Coolboy · Barony of Shillelagh</div>
         <div><span>Period:</span> 1845–1868 · 51 records</div>
@@ -224,7 +234,7 @@
         <div class="record-title">Fox Family · Coolboy</div>
         <span class="tag rose">Tenancy · Eviction · Emigration</span>
       </div>
-      <p class="record-desc">The Fox family of Coolboy appear across tenancy surveys, Ejectment Books recording arrears and Notices to Quit, and the assisted emigration lists — 43 records tracing displacement and departure during the post-Famine clearances of 1845–1852.</p>
+      <p class="record-desc">The Fox family of Coolboy appear across tenancy surveys, Ejectment Books recording arrears and Notices to Quit, and the assisted emigration lists, covering 43 records tracing displacement and departure during the post-Famine clearances of 1845–1852.</p>
       <div class="record-meta">
         <div><span>Townland:</span> Coolboy · Barony of Shillelagh</div>
         <div><span>Period:</span> 1845–1852 · 43 records</div>
@@ -304,50 +314,5 @@ function exploreOnMap(townland, surname) {
     </details>
   </div>
 </section>
-
-<!-- YouTube IFrame API for hero background video -->
-<script>
-(function () {
-  var tag = document.createElement('script');
-  tag.src = 'https://www.youtube.com/iframe_api';
-  document.head.appendChild(tag);
-
-  var START_TIME = 146; // 2:26
-
-  window.onYouTubeIframeAPIReady = function () {
-    new YT.Player('yt-hero-bg', {
-      videoId: '9oWChmnZHaY',
-      playerVars: {
-        autoplay: 1,
-        mute: 1,
-        start: START_TIME,
-        controls: 0,
-        disablekb: 1,
-        fs: 0,
-        modestbranding: 1,
-        rel: 0,
-        showinfo: 0,
-        iv_load_policy: 3,
-        playsinline: 1,
-        loop: 0,
-        origin: window.location.origin
-      },
-      events: {
-        onReady: function (e) {
-          e.target.mute();
-          e.target.playVideo();
-        },
-        onStateChange: function (e) {
-          // Loop back to 2:26 when video ends
-          if (e.data === YT.PlayerState.ENDED) {
-            e.target.seekTo(START_TIME, true);
-            e.target.playVideo();
-          }
-        }
-      }
-    });
-  };
-})();
-</script>
 
 {% endblock %}

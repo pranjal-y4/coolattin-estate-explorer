@@ -25,6 +25,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     selectedTownland: null,
     townlandDetails: null,
     workhouseData: null,
+    unifiedSummary: null,
     recordsByTownlandYear: {},
     summaryByYear: {},
     geoLayer: null,
@@ -212,12 +213,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       const nm = String(feature?.properties?.TL_ENGLISH || "").trim();
       layer.on("click", async () => {
         state.selectedTownland = nm;
-        const [details, workhouseData] = await Promise.all([
+        const [details, workhouseData, unifiedRecs] = await Promise.all([
           fetchTownlandDetails(nm),
           fetchWorkhouseByTownland(nm),
+          fetchUnifiedSummary(nm),
         ]);
         state.townlandDetails = details;
         state.workhouseData = workhouseData;
+        state.unifiedSummary = unifiedRecs;
         recolorMap();
         renderTownlandPanel(nm);
       });
@@ -305,6 +308,23 @@ document.addEventListener("DOMContentLoaded", async () => {
     return null;
   }
 
+  async function fetchUnifiedSummary(townlandName) {
+    try {
+      const res = await fetch(`/api/unified/records?townland=${encodeURIComponent(townlandName)}`);
+      if (!res.ok) return null;
+      const recs = await res.json();
+      if (!Array.isArray(recs) || recs.length === 0) return null;
+      return {
+        total: recs.length,
+        tenancy:   recs.filter(r => r.has_tenancy_record).length,
+        eviction:  recs.filter(r => r.has_eviction_record).length,
+        emigration: recs.filter(r => r.has_emigration_record).length,
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
   async function fetchWorkhouseByTownland(townlandName) {
     try {
       const res = await fetch(`/api/unified/workhouse-by-townland?townland=${encodeURIComponent(townlandName)}`);
@@ -342,32 +362,47 @@ document.addEventListener("DOMContentLoaded", async () => {
         <div style="font-size:10px;color:#7c3aed;">Source: ${r.source_table || "workhouse register"}</div>
       </div>`;
 
-    let html = `
-      <div style="margin-top:14px;padding:12px 14px;background:#faf5ff;border:1px solid #d8b4fe;border-radius:10px;">
-        <div style="font-size:11px;color:#4c1d95;font-weight:800;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">🏥 Workhouse Records</div>`;
+    const summaryParts = [
+      linked.length ? `${linked.length} linked to estate records` : "",
+      unlinked.length ? `${unlinked.length} unmatched` : "",
+    ].filter(Boolean).join(", ");
 
+    let innerHtml = "";
     if (linked.length) {
-      html += `
+      innerHtml += `
         <div style="font-size:11px;font-weight:700;color:#5b21b6;margin-bottom:6px;">Linked to estate records (${linked.length})</div>
         <div style="font-size:11px;color:#7c2d12;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:6px 8px;margin-bottom:8px;line-height:1.5;">
           These workhouse records have been algorithmically matched to estate records in this townland.
-          <strong>Always verify that these refer to the same individual</strong> before drawing conclusions —
+          <strong>Always verify that these refer to the same individual</strong> before drawing conclusions.
           common names and shared places can produce false matches.
         </div>
         ${linked.map(renderLinkedCard).join("")}`;
     }
-
     if (unlinked.length) {
-      html += `
-        <div style="font-size:11px;font-weight:700;color:#5b21b6;margin-top:${linked.length ? "10px" : "0"};margin-bottom:6px;">Unlinked mentions (${unlinked.length})</div>
+      innerHtml += `
+        <div style="font-size:11px;font-weight:700;color:#5b21b6;margin-top:${linked.length ? "10px" : "0"};margin-bottom:6px;">Unmatched mentions (${unlinked.length})</div>
         <div style="font-size:11px;color:#475569;margin-bottom:6px;">
           Workhouse records mentioning this area, not yet matched to a specific estate record.
         </div>
         ${unlinked.map(renderUnlinkedCard).join("")}`;
     }
 
-    html += `</div>`;
-    return html;
+    const whId = "wh-" + Math.random().toString(36).slice(2);
+    return `
+      <div style="margin-top:14px;">
+        <button type="button"
+          onclick="var c=document.getElementById('${whId}');var isOpen=c.style.display!=='none';c.style.display=isOpen?'none':'block';this.querySelector('.wh-arrow').textContent=isOpen?'▸':'▾';this.querySelector('.wh-hint').textContent=isOpen?'Click to expand':'Click to collapse';"
+          style="width:100%;cursor:pointer;padding:10px 14px;background:#faf5ff;border:1px solid #d8b4fe;border-radius:10px;font-size:12px;font-weight:700;color:#4c1d95;display:flex;align-items:center;justify-content:space-between;text-align:left;">
+          <span>🏥 Workhouse Records: ${summaryParts}</span>
+          <span style="display:flex;align-items:center;gap:6px;">
+            <span class="wh-hint" style="font-size:10px;font-weight:400;color:#7c3aed;">Click to expand</span>
+            <span class="wh-arrow" style="font-size:13px;color:#7c3aed;">▸</span>
+          </span>
+        </button>
+        <div id="${whId}" style="display:none;padding:12px 14px;background:#faf5ff;border:1px solid #d8b4fe;border-top:none;border-radius:0 0 10px 10px;">
+          ${innerHtml}
+        </div>
+      </div>`;
   }
 
   function renderTownlandPanel(townland) {
@@ -379,12 +414,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     const detailContainer = $("censusTownlandDetail");
     const t = window.t || (k => k);
 
+    const workhouseContainer = $("censusWorkhouseSection");
     if (!townland) {
       if (title) title.textContent = t("selectTownland") || "Select a Townland";
-      if (meta) meta.textContent = t("clickMapPolygonInspect") || "Click a map polygon to inspect yearly values.";
+      if (meta) meta.textContent = t("clickMapPolygonInspect") || "Click a townland on the map to inspect yearly values.";
       if (kpis) kpis.innerHTML = "";
       if (timeline) timeline.innerHTML = "";
       if (detailContainer) detailContainer.innerHTML = "";
+      if (workhouseContainer) workhouseContainer.innerHTML = "";
+      state.unifiedSummary = null;
       if (picContainer) picContainer.style.display = "none";
       return;
     }
@@ -538,6 +576,27 @@ document.addEventListener("DOMContentLoaded", async () => {
         </div>`;
       }
 
+      // ── Estate records summary ───────────────────────────────────────────
+      const us = state.unifiedSummary;
+      if (us && us.total > 0) {
+        const exploreUrl = `/?townland=${encodeURIComponent(townland)}`;
+        const badges = [
+          us.tenancy   ? `<span style="background:#dbeafe;color:#1e40af;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">Tenancy: ${us.tenancy}</span>` : "",
+          us.eviction  ? `<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">Eviction: ${us.eviction}</span>` : "",
+          us.emigration? `<span style="background:#d1fae5;color:#065f46;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">Emigration: ${us.emigration}</span>` : "",
+        ].filter(Boolean);
+        html += `
+        <div style="margin-bottom:12px;padding:10px 14px;background:#f0f9ff;border-radius:10px;border:1px solid #bae6fd;">
+          <div style="font-size:10px;color:#0c4a6e;font-weight:800;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">📋 Estate Records</div>
+          <div style="font-size:22px;font-weight:800;color:#0369a1;margin-bottom:6px;">${us.total} <span style="font-size:13px;font-weight:500;color:#0c4a6e;">records</span></div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;">${badges.join("")}</div>
+          <a href="${exploreUrl}"
+             style="display:inline-flex;align-items:center;gap:5px;padding:6px 12px;background:#0369a1;border-radius:8px;color:#fff;font-size:12px;font-weight:600;text-decoration:none;">
+            Explore on Map →
+          </a>
+        </div>`;
+      }
+
       // ── External links ──────────────────────────────────────────────────
       if (d.links && d.links.length) {
         const logainm    = d.links.find(l => l.includes("logainm.ie"));
@@ -584,25 +643,42 @@ document.addEventListener("DOMContentLoaded", async () => {
         </div>`;
       }
 
-      // Add workhouse records section
-      const whSection = renderWorkhouseSection(state.workhouseData);
-      detailContainer.innerHTML = html + whSection;
+      detailContainer.innerHTML = html;
+    }
+
+    // Workhouse records — rendered into separate container below KG detail
+    if (workhouseContainer) {
+      workhouseContainer.innerHTML = renderWorkhouseSection(state.workhouseData);
     }
 
     // KPI cards for selected year (or nearest available year for estate-survey townlands)
     if (kpis) {
-      const approxNote = kpiIsApprox
-        ? `<div style="grid-column:1/-1;padding:6px 10px;background:#fef9c3;border:1px solid #fde68a;border-radius:6px;font-size:11px;color:#78350f;margin-bottom:4px;">
-            No census data for ${state.year} — showing nearest available year (${kpiYear}).
-            This townland's population was recorded in the estate survey (${SURVEY_YEARS.filter(y => getBestRecord(townland, y)).join(", ")}).
-           </div>`
-        : "";
+      const kpiIsEstate = bestRec && bestRec.source === "json";
+
+      let approxNote = "";
+      if (kpiIsApprox && kpiIsEstate) {
+        approxNote = `<div style="grid-column:1/-1;padding:8px 10px;background:#fef9c3;border:1px solid #fde68a;border-radius:6px;font-size:11px;color:#78350f;margin-bottom:6px;line-height:1.5;">
+          <strong>No official census data for ${state.year}.</strong> Showing estate survey data from <strong>${kpiYear}</strong>.
+          Male/female breakdown and house counts were not recorded in the estate surveys; only total population is available.
+        </div>`;
+      } else if (!kpiIsApprox && kpiIsEstate) {
+        approxNote = `<div style="grid-column:1/-1;padding:8px 10px;background:#fef9c3;border:1px solid #fde68a;border-radius:6px;font-size:11px;color:#78350f;margin-bottom:6px;line-height:1.5;">
+          <strong>Official census data is not available for this townland.</strong>
+          The figures below come from the Coolattin estate survey (total population only).
+          Male, female, and house counts were not recorded in these estate records.
+        </div>`;
+      } else if (kpiIsApprox) {
+        approxNote = `<div style="grid-column:1/-1;padding:6px 10px;background:#fef9c3;border:1px solid #fde68a;border-radius:6px;font-size:11px;color:#78350f;margin-bottom:4px;">
+          No data for ${state.year}. Showing nearest available year: ${kpiYear}.
+        </div>`;
+      }
+
       kpis.innerHTML = approxNote + [
         kpiCard(t("totalPopulation") || "Total Population", valueOrDash(bestRec?.total)),
-        kpiCard(t("male") || "Male", valueOrDash(bestRec?.male)),
-        kpiCard(t("female") || "Female", valueOrDash(bestRec?.female)),
-        kpiCard(t("inhabitedHouses") || "Inhabited", valueOrDash(bestRec?.inhabited)),
-        kpiCard(t("uninhabitedHouses") || "Uninhabited", valueOrDash(bestRec?.uninhabited)),
+        kpiCard(t("male") || "Male", kpiIsEstate ? "—" : valueOrDash(bestRec?.male)),
+        kpiCard(t("female") || "Female", kpiIsEstate ? "—" : valueOrDash(bestRec?.female)),
+        kpiCard(t("inhabitedHouses") || "Inhabited Houses", kpiIsEstate ? "—" : valueOrDash(bestRec?.inhabited)),
+        kpiCard(t("uninhabitedHouses") || "Uninhabited", kpiIsEstate ? "—" : valueOrDash(bestRec?.uninhabited)),
         kpiCard(t("year") || "Year", kpiIsApprox ? `~${kpiYear}` : String(state.year)),
       ].join("");
     }
@@ -638,7 +714,7 @@ document.addEventListener("DOMContentLoaded", async () => {
                 eviction records from the Coolattin estate are present:
                 <strong>${totalClearances} total clearances</strong> (1847–1856).
               </div>
-              <div style="margin-top:6px;font-size:11px;color:#92400e;">By year — ${breakdown}</div>
+              <div style="margin-top:6px;font-size:11px;color:#92400e;">By year: ${breakdown}</div>
               <div style="margin-top:6px;font-size:11px;color:#92400e;">
                 To explore individuals, use the <strong>Map Explorer</strong> on the home page and select <em>${townland}</em>.
               </div>
@@ -652,7 +728,7 @@ document.addEventListener("DOMContentLoaded", async () => {
               No population figures were found for <strong>${townland}</strong> in the estate surveys (1827–1868)
               or the standard census returns (1841–1891).
               ${townland === "NEWTOWN"
-                ? "This estate polygon is named <em>Newtown</em>; population data in the CSV seed is recorded under electoral-division variants (e.g. <em>Newtown ED Tinahely</em>) which cannot be matched to this single polygon."
+                ? "This townland is named <em>Newtown</em>; population data in the records is stored under electoral-division variants (e.g. <em>Newtown ED Tinahely</em>) which cannot be matched to this entry."
                 : "The townland may have been too small, uninhabited, or merged with a neighbouring area in the original records."}
             </div>
             ${clearanceNote}
@@ -660,24 +736,31 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
 
-      // Build a unified table for ALL years with data
-      const hasMixed = allYearsWithData.some(y => SURVEY_YEARS.includes(y))
-                    && allYearsWithData.some(y => CENSUS_YEARS.includes(y));
+      // Determine data source mix using actual record source field
+      const hasCensusData = allYearsWithData.some(y => {
+        const r = state.recordsByTownlandYear[key(canonicalName, y)] || getRecord(townland, y);
+        return r && (r.source === "csv_seed" || r.source === "kg");
+      });
+      const hasEstateData = allYearsWithData.some(y => {
+        const r = state.recordsByTownlandYear[key(canonicalName, y)] || getRecord(townland, y);
+        return r && r.source === "json";
+      });
+      const hasMixed = hasCensusData && hasEstateData;
 
       let html = "";
 
-      if (hasMixed) {
+      if (!hasCensusData) {
+        html += `
+          <div style="font-size:12px;color:#78350f;margin-bottom:10px;padding:10px 12px;background:#fef9c3;border-radius:8px;border:1px solid #fde68a;line-height:1.6;">
+            <strong>Official census data (1841–1891) is not available for this townland.</strong><br>
+            The table below shows records from the <strong>Coolattin estate survey</strong> only.
+            These figures record total population. Male/female breakdown and house counts were not captured in estate surveys.
+          </div>`;
+      } else if (hasMixed) {
         html += `
           <div style="font-size:11px;color:#475569;margin-bottom:8px;padding:6px 10px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;">
-            This townland has both <strong>estate survey</strong> totals (1827–1868, total only) and
-            <strong>standard census</strong> records (1841–1891, with male/female).
-          </div>`;
-      } else if (allYearsWithData.every(y => SURVEY_YEARS.includes(y))) {
-        html += `
-          <div style="font-size:11px;color:#475569;margin-bottom:8px;padding:6px 10px;background:#fefce8;border-radius:6px;border:1px solid #fde68a;">
-            Population data for this townland comes from the <strong>Coolattin estate survey</strong> (1827–1868).
-            These records show total population only — male/female breakdown was not captured.
-            Standard census returns (1841–1891) are not available for this townland.
+            This townland has both <strong>official census records</strong> (1841–1891, full breakdown) and
+            <strong>Coolattin estate survey</strong> entries (1827–1868, total population only).
           </div>`;
       }
 
@@ -697,17 +780,20 @@ document.addEventListener("DOMContentLoaded", async () => {
             ${allYearsWithData.map(y => {
               const r = state.recordsByTownlandYear[key(canonicalName, y)]
                      || getRecord(townland, y);
-              const active  = y === state.year || y === kpiYear;
-              const isSurvey = SURVEY_YEARS.includes(y);
-              const rowBg   = active ? "#eff6ff" : "transparent";
-              const srcLabel = isSurvey ? "Estate survey" : "Census";
-              const srcColor = isSurvey ? "#78350f" : "#1d4ed8";
-              return `<tr style="background:${rowBg};cursor:pointer;" data-year="${y}">
+              const active    = y === state.year || y === kpiYear;
+              const isSurvey  = r && r.source === "json";
+              const rowBg     = active ? "#eff6ff" : "transparent";
+              const srcLabel  = isSurvey ? "Estate Survey" : "Official Census";
+              const srcColor  = isSurvey ? "#78350f" : "#1d4ed8";
+              const maleVal   = isSurvey ? "—" : valueOrDash(r?.male);
+              const femaleVal = isSurvey ? "—" : valueOrDash(r?.female);
+              const housesVal = isSurvey ? "—" : valueOrDash(r?.inhabited);
+              return `<tr style="background:${rowBg};cursor:pointer;${isSurvey ? "opacity:0.85;" : ""}" data-year="${y}">
                 <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;font-weight:${active ? "800" : "600"};color:${active ? "#1d4ed8" : "#374151"};">${y}</td>
                 <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;text-align:right;font-weight:${active ? "700" : "400"};">${valueOrDash(r?.total)}</td>
-                <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;text-align:right;">${valueOrDash(r?.male)}</td>
-                <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;text-align:right;">${valueOrDash(r?.female)}</td>
-                <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;text-align:right;">${valueOrDash(r?.inhabited)}</td>
+                <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;text-align:right;color:${isSurvey ? "#94a3b8" : "inherit"};">${maleVal}</td>
+                <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;text-align:right;color:${isSurvey ? "#94a3b8" : "inherit"};">${femaleVal}</td>
+                <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;text-align:right;color:${isSurvey ? "#94a3b8" : "inherit"};">${housesVal}</td>
                 <td style="padding:7px 8px;border-bottom:1px solid #f1f5f9;text-align:right;font-size:10px;color:${srcColor};">${srcLabel}</td>
               </tr>`;
             }).join("")}
@@ -777,7 +863,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!state.satelliteMap) initSatelliteMap();
 
     const svgDesc = $("censusTownlandSvgDesc");
-    if (svgDesc) svgDesc.textContent = `${townlandName} — historic townland, County Wicklow.`;
+    if (svgDesc) svgDesc.textContent = `${townlandName}, historic townland in County Wicklow.`;
 
     if (state.satelliteOverlay) {
       state.satelliteMap.removeLayer(state.satelliteOverlay);

@@ -143,7 +143,7 @@
       <div style="display:grid;grid-template-columns:1fr auto;gap:12px;margin-top:12px;align-items:end;">
         <div>
           <label for="askTownlandHint" style="display:block;font-size:12px;font-weight:700;color:#475467;margin-bottom:6px;">
-            Townland context <span style="font-weight:400;color:#94a3b8;">(optional — County Wicklow townlands · leave blank for estate-wide)</span>
+            Townland context <span style="font-weight:400;color:#94a3b8;">(optional; leave blank for estate-wide)</span>
           </label>
           <div id="askTownlandWrap">
             <input id="askTownlandHint" type="text" placeholder="Type a townland name, or select All Townlands…"
@@ -255,8 +255,8 @@
 
         <!-- Estate overview panel (shown only for All-Townlands estate-wide queries) -->
         <div id="askEstateOverview" style="display:none;margin-bottom:14px;padding:14px 16px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:12px;">
-          <div style="font-size:13px;font-weight:700;color:#1e3a8a;margin-bottom:4px;">County Wicklow &amp; Coolattin Estate — Overview</div>
-          <div style="font-size:12px;color:#3b82f6;margin-bottom:10px;">No townland filter applied — showing estate-wide and county-level statistics from the database.</div>
+          <div style="font-size:13px;font-weight:700;color:#1e3a8a;margin-bottom:4px;">County Wicklow &amp; Coolattin Estate Overview</div>
+          <div style="font-size:12px;color:#3b82f6;margin-bottom:10px;">No townland filter applied. Showing estate-wide and county-level statistics from the database.</div>
           <div id="askEstateOverviewBody" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;"></div>
         </div>
       </div>
@@ -273,7 +273,7 @@
         <div id="askKgResultBlock" style="display:none;">
           <div style="font-size:11px;font-weight:700;color:#6b21a8;margin-bottom:4px;display:flex;align-items:center;gap:6px;">
             <span style="background:#6b21a8;color:#fff;padding:2px 7px;border-radius:4px;font-family:monospace;font-size:10px;">KG</span>
-            VRTI Knowledge Graph — Structured Records
+            VRTI Knowledge Graph: Structured Records
             <span id="askKgRowCount" style="color:#94a3b8;font-weight:400;font-size:10px;"></span>
           </div>
           <div style="overflow:auto;border:1px solid #ede9fe;border-radius:10px;max-height:260px;">
@@ -283,7 +283,7 @@
 
         <!-- KG geographic townland detail cards -->
         <div id="askKgBlock" style="display:none;margin-top:10px;">
-          <div style="font-size:11px;font-weight:700;color:#6b21a8;margin-bottom:4px;">Knowledge Graph — Geographic Context</div>
+          <div style="font-size:11px;font-weight:700;color:#6b21a8;margin-bottom:4px;">Knowledge Graph: Geographic Context</div>
           <div id="askKgContent" style="display:grid;gap:6px;"></div>
         </div>
       </div>
@@ -313,7 +313,7 @@
         <div style="margin-bottom:10px;">
           <div style="padding:6px 10px;background:#0f172a;border-radius:8px 8px 0 0;display:flex;align-items:center;gap:8px;">
             <span style="font-size:10px;font-weight:700;background:#22c55e;color:#0f172a;padding:2px 6px;border-radius:4px;font-family:monospace;">SQL</span>
-            <span style="font-size:11px;color:#94a3b8;font-weight:600;">SQLite — Estate Records Database</span>
+            <span style="font-size:11px;color:#94a3b8;font-weight:600;">SQLite: Estate Records Database</span>
             <span id="askCopySql" style="margin-left:auto;font-size:10px;color:#64748b;cursor:pointer;padding:2px 6px;border-radius:4px;border:1px solid #334155;" onclick="navigator.clipboard.writeText(document.getElementById('askSqliteQuery').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)})">Copy</span>
           </div>
           <pre id="askSqliteQuery" style="margin:0;padding:12px;background:#1e293b;color:#e2e8f0;overflow:auto;font-size:11px;line-height:1.6;max-height:220px;white-space:pre-wrap;border-radius:0 0 8px 8px;"></pre>
@@ -379,10 +379,10 @@
           <div class="ask-section-label" style="margin:0;color:#374151;">Rate this answer</div>
         </div>
         <p style="font-size:12px;color:#6b7280;margin:0 0 10px;line-height:1.6;">
-          Your feedback trains the system. A <strong>thumbs up</strong> saves the SQL query as an approved pattern — future similar questions will reuse it instantly without an LLM call, making answers faster and more consistent.
+          Your feedback trains the system. A <strong>thumbs up</strong> saves the SQL query as an approved pattern. Future similar questions will reuse it instantly without an LLM call, making answers faster and more consistent.
           A <strong>thumbs down</strong> flags the query for review so the pattern is never reused.
         </p>
-        <input id="askFeedbackNote" type="text" placeholder="Optional note — what was right or wrong about this answer?"
+        <input id="askFeedbackNote" type="text" placeholder="Optional note: what was right or wrong about this answer?"
           style="width:100%;padding:9px 12px;border:1px solid #d8d2c8;border-radius:10px;background:#fff;color:#0f172a;font-size:12px;box-sizing:border-box;" />
         <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
           <button id="askFeedbackUp"   class="btn btn-soft" type="button">👍 Looks correct</button>
