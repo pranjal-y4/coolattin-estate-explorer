@@ -3377,18 +3377,38 @@ def _orchestrated_pipeline_stream(
             "row_count": len(rows),
             "sql_used": safe_sql,
         }
-        # Pre-compute per-column totals for numeric columns so the synthesis LLM can
-        # mention aggregated totals without triggering the numeric-consistency gate.
-        # The gate only allows numbers that appear in the input; without pre-computed
-        # totals the LLM sums rows itself and produces a number not in allowed_numbers.
+        # Pre-compute per-column totals and derived values for numeric columns so
+        # the synthesis LLM can mention aggregated totals and computed changes without
+        # triggering the numeric-consistency gate.  The gate only allows numbers that
+        # appear in the input; without pre-computed values the LLM computes differences
+        # (e.g. 405-158=247) that are not literally present in the rows.
         if rows and len(rows) > 1:
             _col_totals: dict[str, Any] = {}
+            _col_derived: dict[str, Any] = {}
             for _col in (columns or []):
                 _vals = [r[_col] for r in rows[:20] if isinstance(r.get(_col), (int, float))]
                 if len(_vals) == len(rows[:20]) and _vals:
                     _col_totals[_col] = int(sum(_vals)) if all(isinstance(v, int) for v in _vals) else sum(_vals)
+                if len(_vals) >= 2:
+                    _ints = [int(v) for v in _vals]
+                    # All pairwise absolute differences so the gate permits change values
+                    # the LLM computes between any two years/rows (e.g. 405-158=247).
+                    _all_diffs = sorted({
+                        abs(_ints[i] - _ints[j])
+                        for i in range(len(_ints))
+                        for j in range(i + 1, len(_ints))
+                    })
+                    _col_derived[_col] = {
+                        "min": min(_ints),
+                        "max": max(_ints),
+                        "range": max(_ints) - min(_ints),
+                        "first_to_last_change": abs(_ints[0] - _ints[-1]),
+                        "pairwise_diffs": _all_diffs,
+                    }
             if _col_totals:
                 _sql_result_for_synthesis["column_totals"] = _col_totals
+            if _col_derived:
+                _sql_result_for_synthesis["derived_values"] = _col_derived
         # When query returns nothing, add diagnostics so LLM can explain WHY
         if len(rows) == 0 and safe_sql:
             try:
