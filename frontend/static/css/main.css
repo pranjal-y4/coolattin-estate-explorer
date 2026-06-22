@@ -334,52 +334,38 @@ img { display: block; }
   display: flex;
   align-items: center;
   justify-content: center;
-  /* Deep forest base — Irish flag green left, ember orange right */
-  background: linear-gradient(
-    145deg,
-    #061c0e 0%,
-    #0d3d1f 18%,
-    #1a4a2a 38%,
-    #12200f 55%,
-    #2d1408 72%,
-    #180c04 88%,
-    #0a0804 100%
-  );
+  background-color: #0d2b18;
+  background-image: url("/static/images/wick2.jpg");
+  background-size: cover;
+  background-position: center 40%;
+  background-repeat: no-repeat;
 }
 
-/* Subtle colour wash across the full hero using Irish flag tones */
+/* Dark overlay so text stays legible over the photo */
 .hero::before {
   content: "";
   position: absolute;
   inset: 0;
   z-index: 1;
-  background: radial-gradient(
-    ellipse 80% 60% at 20% 50%,
-    rgba(22, 155, 98, 0.18) 0%,
-    transparent 65%
-  ),
-  radial-gradient(
-    ellipse 70% 55% at 82% 50%,
-    rgba(255, 136, 62, 0.14) 0%,
-    transparent 60%
+  background: linear-gradient(
+    180deg,
+    rgba(6, 18, 10, 0.55) 0%,
+    rgba(6, 18, 10, 0.42) 50%,
+    rgba(6, 18, 10, 0.65) 100%
   );
   pointer-events: none;
 }
 
-/* Faded Irish tricolor — soft washes, no hard edges */
+/* Subtle green vignette edges */
 .hero::after {
   content: "";
   position: absolute;
   inset: 0;
   z-index: 2;
-  background: linear-gradient(
-    90deg,
-    rgba(22, 155, 68, 0.18) 0%,
-    rgba(22, 155, 68, 0.10) 22%,
-    rgba(255, 255, 255, 0.03) 40%,
-    rgba(255, 255, 255, 0.03) 60%,
-    rgba(255, 136, 0, 0.10) 78%,
-    rgba(255, 136, 0, 0.16) 100%
+  background: radial-gradient(
+    ellipse 110% 110% at 50% 50%,
+    transparent 55%,
+    rgba(4, 14, 8, 0.55) 100%
   );
   pointer-events: none;
 }
