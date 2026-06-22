@@ -412,37 +412,66 @@ img { display: block; }
 
 .hero-actions {
   display: flex;
-  gap: 14px;
+  gap: 16px;
   justify-content: center;
   flex-wrap: wrap;
+  animation: heroActionsIn 0.7s cubic-bezier(0.22,1,0.36,1) both;
+  animation-delay: 0.35s;
+}
+@keyframes heroActionsIn {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .hero-btn-primary {
-  background: var(--brass);
-  border-color: var(--brass);
+  background: linear-gradient(135deg, #c9a464 0%, var(--brass) 50%, #9e7c46 100%);
+  border-color: transparent;
   color: #fff;
-  font-size: 0.95rem;
-  padding: 14px 28px;
-  box-shadow: 0 4px 20px rgba(176,141,87,0.35);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  padding: 17px 36px;
+  box-shadow:
+    0 6px 28px rgba(176,141,87,0.55),
+    inset 0 1px 0 rgba(255,255,255,0.22);
+  animation: heroBtnGlow 3.2s ease-in-out infinite;
 }
 .hero-btn-primary:hover {
-  background: #9a7a48;
-  transform: translateY(-2px);
-  box-shadow: 0 6px 24px rgba(176,141,87,0.45);
+  background: linear-gradient(135deg, #d4af70 0%, #b09050 100%);
+  transform: translateY(-3px) scale(1.02);
+  box-shadow: 0 12px 40px rgba(176,141,87,0.65);
+  animation-play-state: paused;
+}
+@keyframes heroBtnGlow {
+  0%, 100% {
+    box-shadow: 0 6px 28px rgba(176,141,87,0.55), inset 0 1px 0 rgba(255,255,255,0.22);
+  }
+  50% {
+    box-shadow: 0 8px 36px rgba(176,141,87,0.75), 0 0 0 6px rgba(176,141,87,0.18), inset 0 1px 0 rgba(255,255,255,0.22);
+  }
 }
 
 .hero-btn-ghost {
-  background: rgba(255,255,255,0.10);
-  border: 1px solid rgba(255,255,255,0.38);
+  background: rgba(255,255,255,0.14);
+  border: 1.5px solid rgba(255,255,255,0.60);
   color: #fff;
-  font-size: 0.95rem;
-  padding: 13px 28px;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  font-size: 1.05rem;
+  font-weight: 600;
+  padding: 16px 36px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.25);
+  text-shadow: 0 1px 6px rgba(0,0,0,0.3);
 }
 .hero-btn-ghost:hover {
-  background: rgba(255,255,255,0.18);
-  border-color: rgba(255,255,255,0.65);
+  background: rgba(255,255,255,0.24);
+  border-color: rgba(255,255,255,0.85);
+  transform: translateY(-3px) scale(1.02);
+  box-shadow: 0 10px 32px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.30);
+}
+
+.hero-actions .icon {
+  font-size: 17px;
 }
 
 /* Scroll hint arrow at bottom of hero */
