@@ -253,7 +253,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function createRecordCard(rec) {
     const normalized = { ...rec };
-    const chiefTenantName = `${rec.chief_tenant_forename || ""} ${rec.chief_tenant_surname || ""}`.trim();
+    const chiefTenantName = [rec.chief_tenant_forename, rec.chief_tenant_surname]
+      .map(s => (s || "").replace(/\s*\[\?[^\]]*\]/g, "").replace(/\[([^\]]+)\]/g, (_, m) => m.toLowerCase()).trim())
+      .filter(p => p && p !== "-")
+      .join(" ");
     const underTenantName = `${rec.under_tenant_forename || ""} ${rec.under_tenant_surname || ""}`.trim();
     if (chiefTenantName) normalized.chief_tenant = chiefTenantName;
     if (underTenantName) normalized.under_tenant = underTenantName;
@@ -753,9 +756,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       const surname = (rec.surname || "").trim();
       const forename = (rec.forename || "").trim();
-      const personName = canonicalName(rec);
+      const personName = canonicalName(rec).replace(/^-\s+/, "").replace(/\s*\[\?[^\]]*\]/g, "").trim();
 
-      const chiefName = `${rec.chief_tenant_forename || ""} ${rec.chief_tenant_surname || ""}`.trim();
+      const chiefName = [rec.chief_tenant_forename, rec.chief_tenant_surname]
+        .map(s => (s || "").replace(/\s*\[\?[^\]]*\]/g, "").replace(/\[([^\]]+)\]/g, (_, m) => m.toLowerCase()).trim())
+        .filter(p => p && p !== "-")
+        .join(" ");
       const underName = `${rec.under_tenant_forename || ""} ${rec.under_tenant_surname || ""}`.trim();
       const role = (rec.role || "").toLowerCase();
 
