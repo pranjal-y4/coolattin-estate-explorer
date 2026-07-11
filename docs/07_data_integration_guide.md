@@ -234,7 +234,7 @@ One row per townland × year (1847–1856). Records the number of evictions/clea
 ---
 
 ### `unified_record` — 13,707 rows
-One row per person-record. The primary people table. All 83 Ask page SQL templates query this table.
+One row per person-record. The primary people table. All 81 Ask page SQL templates query this table.
 
 Key columns for querying:
 
@@ -371,13 +371,13 @@ The resolved townland name (`townland_norm`) is injected into all subsequent SQL
 Before intent classification, four lanes are checked in priority order:
 
 Fast Lane 1 — Rule-based slot-fill (semantic_layer.try_rule_based_fill)
-  → Match question keywords against 22 metric keyword sets
+  → Match question keywords against 14 metric keyword sets
   → Confidence scoring: starts 1.0, penalised for competing metrics / no filters
   → If confidence ≥ 0.80 → compile SQL directly (0 LLM calls, < 5 ms)
 
 Fast Lane 2 — Verified template
   → _try_verified_analysis(question, townland_norm, analysis)
-  → Score 83 QUESTION_TEMPLATES by required_keywords + optional_keywords
+  → Score 81 QUESTION_TEMPLATES by required_keywords + optional_keywords
   → If match in VERIFIED_ANALYSIS_TEMPLATE_IDS → SQL, confidence = 1.0
 
 Fast Lane 3 — Direct memory reuse
@@ -435,7 +435,7 @@ FALLBACK     → _generate_sql() via LLM (OpenRouter → Ollama fallback)
 
 ANALYTICAL lane (semantic_layer.py):
   → rule-fill (confidence ≥ 0.80, 0 LLM) OR LLM slot-fill (confidence ≥ 0.70)
-  → compile_sql(slot_fill): assembles SQL from 22-metric registry
+  → compile_sql(slot_fill): assembles SQL from 14-metric registry
   → compile_sparql(slot_fill): generates SPARQL equivalent for GraphDB (RQ6)
 
 RELATIONAL lane (subgraph_engine.py):
@@ -572,6 +572,6 @@ User types question
 
 4. **The home page performs no SQL queries after initial load.** All filtering, counting, and grouping of people records happens in the browser against the fully-loaded JSON payload.
 
-5. **The Ask page only ever queries SQLite.** The 83 templates and the LLM fallback all produce SQL that runs against `coolattin.db`. The live VRTI KG is only called in Stage 6 for enrichment context, not for answering the question.
+5. **The Ask page only ever queries SQLite.** The 81 templates and the LLM fallback all produce SQL that runs against `coolattin.db`. The live VRTI KG is only called in Stage 6 for enrichment context, not for answering the question.
 
 6. **Townland normalisation is the glue.** Every join across tables relies on the same normalisation rule: `UPPER(name)` with whitespace collapsed and brackets/punctuation stripped. `townland_service.normalize_townland_name()` is the single authority for this.

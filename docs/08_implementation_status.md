@@ -26,7 +26,7 @@
 | D13 — Demo Freeze Package | **Done** | Git tag `v1.0-demo-freeze` created 2026-06-10; evaluation results pinned; canonical config documented in `docs/11_demo_freeze.md` |
 | **NEW** — Orchestrated Ask Pipeline | **Done** | `_orchestrated_pipeline_stream()` in ask_service.py; 4 fast lanes + intent routing + 3 ANALYTICAL/RELATIONAL/COMPARATIVE dispatch lanes; enabled by default (`ASK_USE_NEW_PIPELINE=true`) |
 | **NEW** — Intent Router | **Done** | `intent_router.py`; ANALYTICAL/RELATIONAL/COMPARATIVE/FALLBACK; Core Rule 1 heritage/sensemaking override; exact keyword sets per class |
-| **NEW** — Semantic Layer | **Done** | `semantic_layer.py`; 22-metric registry; rule-based slot-fill (confidence ≥ 0.80, 0 LLM); LLM slot-fill (confidence ≥ 0.70); deterministic SQL compiler; SPARQL compiler for RQ6 |
+| **NEW** — Semantic Layer | **Done** | `semantic_layer.py`; 14-metric registry; rule-based slot-fill (confidence ≥ 0.80, 0 LLM); LLM slot-fill (confidence ≥ 0.70); deterministic SQL compiler; SPARQL compiler for RQ6 |
 | **NEW** — Subgraph Engine | **Done** | `subgraph_engine.py`; VRTI multi-hop SPARQL + GraphDB k=2 neighbourhood; qualitative context only (counts always from SQL) |
 | **NEW** — Identity Resolution | **Done** | `identity_resolver.py`; three-layer Mention/Person/Factoid model; Jaro-Winkler + Metaphone phonetic blocking + geo/temporal scoring |
 | **NEW** — Hybrid Embedding Retrieval | **Done** | `embedding_index.py`; TF-IDF unigram+bigram cosine + RRF; fast-lane threshold 0.68; pgvector optional backend |
@@ -64,7 +64,7 @@ The seven RQs (RQ1–RQ7) are written in the tracking plan. The system provides 
 - RQ1 (data cleaning, geospatial alignment): code exists, audit figures not collected
 - RQ2 (KG linkage): VRTI integration works, coverage figures not formally measured
 - RQ3 (workhouse linkage): name matching exists, place-first method not yet upgraded
-- RQ4 (NL-to-SQL pipeline): 83 templates + LLM fallback fully implemented
+- RQ4 (NL-to-SQL pipeline): 81 templates + LLM fallback fully implemented
 - RQ5 (explainable AI): SQL display, provenance, coverage notes all exist in the UI
 - RQ6 (SQL vs SPARQL comparison): SQL side exists; RDF/SPARQL prototype not built
 - RQ7 (graphical summaries): chart layer works for 7 template types

@@ -295,7 +295,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       "chief_tenant_forename",
       "chief_tenant_surname",
       "under_tenant_forename",
-      "under_tenant_surname"
+      "under_tenant_surname",
+      "possible_workhouse_matches",
+      "linked_workhouse_records",
+      "please_check_records",
+      "supporting_evidence",
+      "conflicting_evidence",
+      "identity_is_ambiguous",
+      "identity_disambiguation_note"
     ]);
 
     const alwaysShowKeys = new Set([

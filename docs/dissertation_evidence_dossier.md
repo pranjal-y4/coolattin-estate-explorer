@@ -78,7 +78,7 @@ The seven RQs are defined in `docs/08_implementation_status.md` and the tracking
 
 **CS Contributions:**
 1. **Reproducible multi-source data warehouse** — five source types unified into SQLite; idempotent `ensure_schema()` in `extensions.py:477 lines`; fuzzy place-name normalisation via `rapidfuzz`
-2. **Deterministic-first NL→SQL pipeline** — 83 verified SQL templates; LLM invoked only when templates miss; honest-refusal path confirmed at 100% on tuned vocabulary (`eval_results/evaluation_pack.md` D9d)
+2. **Deterministic-first NL→SQL pipeline** — 81 verified SQL templates; LLM invoked only when templates miss; honest-refusal path confirmed at 100% on tuned vocabulary (`eval_results/evaluation_pack.md` D9d)
 3. **In-process GraphRAG with iron-rule guarantee** — `backend/services/graphrag.py`; D3 acceptance gate: numeric delta = 0/9 (100%); graph layer *never* modifies counts returned by SQLite
 4. **Authority-ID failure-class finding** — 4/150 (2.7%) `kg_uri` entries point to wrong homonym VRTI entities; `vrti_id` field correct in all 4 cases; root cause: name-only URI construction without geographic disambiguation (`eval_results/authority_id_consistency.md`)
 5. **ER-on-sparse-records finding** — F1@CONFIRMED = 0.27 not due to algorithm defect but because 48% of workhouse records carry zero metadata beyond a name (`eval_results/er_diagnosis.md`)
@@ -115,7 +115,7 @@ The seven RQs are defined in `docs/08_implementation_status.md` and the tracking
 
 **CONCEPTS TO COVER:** Semantic parsing, encoder-decoder architectures, cross-domain transfer, benchmark datasets.
 
-**System component motivating this:** `backend/services/semantic_layer.py` (slot-fill compiler): 22-metric registry, `SlotFill` dataclass, `try_rule_based_fill()` (0 LLM, confidence ≥ 0.80), LLM slot-fill (confidence ≥ 0.70), `compile_sql()` deterministic compiler. 83 verified SQL templates remain as Fast Lane 2 in `embedding_index.py`. LLM free-form SQL generation is FALLBACK lane only (never used for ANALYTICAL).
+**System component motivating this:** `backend/services/semantic_layer.py` (slot-fill compiler): 14-metric registry, `SlotFill` dataclass, `try_rule_based_fill()` (0 LLM, confidence ≥ 0.80), LLM slot-fill (confidence ≥ 0.70), `compile_sql()` deterministic compiler. 81 verified SQL templates (`QUESTION_TEMPLATES`) are defined in `ask_service.py` and used in Fast Lane 2. LLM free-form SQL generation is FALLBACK lane only (never used for ANALYTICAL).
 
 **[MISSING EVIDENCE: literature]** — Suggested search terms: "Spider NL-to-SQL benchmark cross-domain", "WikiSQL dataset neural semantic parsing", "IGSQL context-dependent text-to-SQL", "few-shot NL-to-SQL GPT", "schema linking NL-to-SQL"
 
@@ -1212,7 +1212,7 @@ The complete tables are: `ask_query_feedback`, `ask_query_memory`, `census_recor
 | Cross-metric intersection | widow + emigra | → None (LLM fallback) |
 | Score threshold | < 2 | → None (LLM fallback) |
 
-**[MISSING EVIDENCE]** — Appendix B should document both (a) the 22-metric semantic layer registry from `semantic_layer.py` (metric name, required dimensions, filters, output SQL pattern) and (b) the 83 verified SQL templates from `embedding_index.py` used in Fast Lane 2. To extract: `grep -n "metric\|SlotFill\|compile_sql\|QUESTION_TEMPLATES\|template_id" backend/services/semantic_layer.py backend/services/embedding_index.py | head -300`.
+**[MISSING EVIDENCE]** — Appendix B should document both (a) the 14-metric semantic layer registry from `semantic_layer.py` (metric name, required dimensions, filters, output SQL pattern) and (b) the 81 verified SQL templates from `ask_service.py` used in Fast Lane 2. To extract: `grep -n "metric\|SlotFill\|compile_sql\|QUESTION_TEMPLATES\|template_id" backend/services/semantic_layer.py backend/services/ask_service.py | head -300`.
 
 ---
 
@@ -1314,7 +1314,7 @@ One consolidated table of every [MISSING EVIDENCE] item, ordered by dissertation
 | G4 | Screenshots E1–E12 (full screenshot capture checklist) | Appendix E; Ch.4 figures; Ch.3 architecture | 60 min | Human-only (requires browser) |
 | G5 | Gold set category breakdown (count of questions per category from `eval/gold.csv`) | Ch.6 §6.3 | 10 min | Codeable: `python3 -c "import csv; ..."` |
 | G6 | Complete unified_record DDL (truncated in DB output) | Appendix A | 5 min | Codeable: `SELECT sql FROM sqlite_master WHERE name='unified_record'` |
-| G7 | Full 83-template library with required_keywords and SQL patterns | Appendix B | 45 min | Codeable: grep + format from `ask_service.py` |
+| G7 | Full 81-template library with required_keywords and SQL patterns | Appendix B | 45 min | Codeable: grep + format from `ask_service.py` |
 | G8 | Source-to-database traceability sample (20 emigration rows CSV → unified_record) | Ch.3 §3.3; D4 §4.4 | 60 min | Codeable + manual verification |
 | G9 | Verbatim RQ text as formal research question sentences | Ch.1 §1.3 | 30 min | Human-only (candidate must write) |
 | G10 | All literature references / citations (NL-to-SQL benchmarks, DH systems, ER methods, Irish history) | Ch.2 all subsections | 8–15 hours | Human-only (must source real papers) |

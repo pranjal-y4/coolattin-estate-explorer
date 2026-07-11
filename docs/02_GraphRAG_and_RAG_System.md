@@ -204,7 +204,7 @@ Default when nothing above matched.
 ```python
 @dataclass
 class SlotFill:
-    metric: str                  # key into METRIC_REGISTRY (22 metrics)
+    metric: str                  # key into METRIC_REGISTRY (14 metrics)
     dimensions: list[str]        # GROUP BY columns
     filters: dict[str, Any]      # WHERE conditions
     group_mode: str              # "aggregate"|"trend"|"grouped"|"detail"
@@ -214,7 +214,7 @@ class SlotFill:
     source: str = "rule"         # "rule" | "llm"
 ```
 
-### Metric registry (22 metrics)
+### Metric registry (14 metrics)
 
 Each metric entry defines:
 - `aggregate` — SQL expression (`COUNT(DISTINCT record_id)`, `SUM()`, `AVG()`)
@@ -280,7 +280,7 @@ Runs ANALYTICAL (semantic layer → SQL) and RELATIONAL (subgraph engine → SPA
 ## FALLBACK Lane
 
 When no fast lane fires and intent is FALLBACK:
-1. `_try_verified_analysis()` — scores 83 question templates by keyword
+1. `_try_verified_analysis()` — scores 81 question templates by keyword
 2. `_phase4_retrieve()` — embedding retrieval (TF-IDF + RRF)
 3. `_find_similar_approved_queries()` — approved memory lookup
 4. `_generate_sql()` — LLM free-form SQL with annotated schema + approved examples

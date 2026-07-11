@@ -16,7 +16,9 @@
       "Bash(git add *)",
       "Bash(find . -type f *)",
       "Bash(grep -r * --include=*.py *)",
-      "Bash(ls *)"
+      "Bash(ls *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
     ],
     "deny": [
       "Bash(git push --force *)",

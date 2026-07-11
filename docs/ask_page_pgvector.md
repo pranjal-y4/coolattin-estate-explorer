@@ -135,12 +135,9 @@ The new Ask pipeline emits SSE progress stages that make the retrieval path
 visible:
 
 - `classifying_intent`
-- `retrieving_vectors`
-- `retrieving_sparse`
-- `fusing_results`
+- `embedding_retrieval`
 - `querying_fusion`
-- `synthesising_answer`
-- `done`
+- `synthesizing_answer`
 
 ## Fallback behavior
 

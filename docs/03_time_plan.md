@@ -139,7 +139,7 @@
 
 - [ ] Write Implementation chapter (~2,000 words):
   - Data ingestion and normalisation in detail (ingest pipeline, fuzzy matching, derived fields)
-  - Template library design: how the 83 verified SQL templates were constructed and validated
+  - Template library design: how the 81 verified SQL templates were constructed and validated
   - LLM integration: prompt design, schema injection, query memory, repair loop
   - VRTI SPARQL enrichment integration
   - PDF export implementation (hand-written PDF 1.4)
@@ -184,7 +184,7 @@
 - [ ] Compile full reference list (aim for 30–50 references; include NL-to-SQL benchmarks, DH linked data papers, Irish historical sources)
 - [ ] Assemble appendices:
   - A: Database schema (full DDL)
-  - B: The 83 verified SQL template library (or a representative sample)
+  - B: The 81 verified SQL template library (or a representative sample)
   - C: Full competency question evaluation table
   - D: Sample PDF export output
 

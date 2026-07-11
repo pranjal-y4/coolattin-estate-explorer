@@ -83,11 +83,14 @@ Coolattin-app/
 │   └── static/
 │       ├── css/main.css
 │       ├── js/             # One JS file per page (ask.js, census.js, …)
-│       ├── data/           # Static GeoJSON, CSV, and seed data served by Flask
+│       ├── data/           # Static GeoJSON, CSV, Excel, and seed data served by Flask
+│       │                   # (unified_processed.csv, workhouse_data_final.xlsx,
+│       │                   #  unified_census.csv, townlands.json, *.geojson)
 │       └── images/
 │
 ├── data/
-│   ├── seed/               # Canonical reference data checked into git
+│   ├── seed/               # Non-CSV reference data: community_summaries.json,
+│   │                       # townland_aliases.json, coolattin.ttl (RDF uplift)
 │   └── source_snapshots/   # Local copies of external API responses (gitignored)
 │
 ├── scripts/                # One-off data processing scripts
@@ -128,59 +131,64 @@ The database (`coolattin.db`) is created and migrated automatically on first run
 
 ## LLM / Ask pipeline
 
-The Ask page (`/ask`) runs an orchestrated pipeline (`ASK_USE_NEW_PIPELINE=true` by default). Entry point: `_orchestrated_pipeline_stream()` in `ask_service.py`.
+The Ask page (`/ask`) has two pipelines controlled by `ASK_USE_NEW_PIPELINE` (default `true`).
+Public entry point: `answer_question_stream()` → delegates based on the flag.
 
-### Pipeline phases
+### Default pipeline (`ASK_USE_NEW_PIPELINE=true`) — `_orchestrated_pipeline_stream()`
 
-| Phase | File | What it does |
+Runs in this exact order. No intent routing; `intent_route` is always `"direct"`.
+
+| Step | Code location | What it does |
 |---|---|---|
-| Phase 1 | `identity_resolver.py` | Entity resolution — resolves townland + person identity once; `sql_id` + `kg_uri` shared by all downstream lanes |
-| Phase 2 | `semantic_layer.py` | Slot-fill compiler — maps analytical questions to deterministic SQL/SPARQL; three sub-layers: rule-based fill → LLM slot-fill → deterministic compiler |
-| Phase 3 | `subgraph_engine.py` | KG traversal — multi-hop VRTI SPARQL + GraphDB queries for relational/hierarchy/heritage questions |
-| Phase 4 | `embedding_index.py` | Hybrid retrieval — TF-IDF unigram+bigram cosine + keyword overlap → RRF over templates and approved memory |
-| Phase 5 | `intent_router.py` | Intent classification → ANALYTICAL / RELATIONAL / COMPARATIVE / FALLBACK |
-| Phase 6 | `ask_service.py` | Fusion & reconciliation — cross-source discrepancy detection between SQL + KG results |
-| Phase 7 | `ask_service.py` | Multi-model synthesis — LLM rewrites aggregated data into provenance-annotated answer |
+| Phase 1 | `identity_resolver.py` | Entity resolution once: fuzzy townland match + optional person identity; `sql_id` + `kg_uri` shared downstream |
+| SQL | `ask_service._generate_sql()` | Direct LLM SQL generation — no fast lanes, no memory reuse, no semantic layer |
+| GraphRAG | `graphrag.retrieve_subgraph()` | Only if townland resolved: load in-process NetworkX graph → exact townland seed → k-hop BFS → prune → linearise community summaries + place hierarchy + triples |
+| Townland summary | inline SQL in `ask_service` | 5 hardcoded queries: emigration / eviction / tenancy / census / workhouse counts for synthesis context |
+| Stage 2 | `_sanitize_and_validate_sql()` | Read-only SQL safety guard |
+| Stage 3 | `_execute_with_recovery()` | SQLite execution; auto-repairs failed SQL via LLM |
+| Stage 4 | `_kg_context()` | VRTI SPARQL — townland/parish metadata enrichment |
+| GraphRAG injection | `ask_service` | Appends GraphRAG linearized block to `kg_context["subgraph_linearized"]` |
+| Phase 6 | `_fuse_lanes()` | Cross-source discrepancy detection between SQL + KG |
+| Phase 7 | `_synthesize_answer()` | LLM cascade: Claude (Anthropic API) → Grok (xAI) → OpenRouter/Ollama; numeric hallucination gate |
 
-### Intent classification flow (Phase 5)
+**Not active in the default pipeline:** semantic layer (Phase 2), embedding index (Phase 4), intent router (Phase 5), subgraph engine (Phase 3), GraphDB SPARQL (Stage 4.5 — dead because `intent_route` is always `"direct"`).
 
-Before `classify_intent` is ever called, **four fast lanes** can short-circuit routing entirely:
+### Legacy pipeline (`ASK_USE_NEW_PIPELINE=false`) — inline in `answer_question_stream()`
 
-1. **Semantic layer rule-based fill** — `try_rule_based_fill()` confidence ≥ 0.80 → deterministic SQL, no LLM, no routing.
-2. **Verified analysis** — question matches a pre-validated hard-coded SQL template.
-3. **Direct memory reuse** — approved thumbs-up query (high token-sort-ratio + cosine ≥ 0.55) → reuse cached SQL.
-4. **Phase 4 template fast lane** — TF-IDF/RRF cosine ≥ 0.68 on embedded templates → use template SQL directly.
+Runs when the env var is explicitly set to false. Has four fast lanes that short-circuit before any LLM call, then intent-based routing.
 
-If no fast lane fires, `classify_intent(question, analysis, slot_fill)` runs with this **priority order** (first match wins):
+**Fast lanes (checked in order, first hit wins):**
 
-**1. COMPARATIVE** — any comparative keyword present:
-> `compare`, `compared to`, `compared with`, `versus`, `vs`, `difference between`, `contrast`, `relative to`, `how does`, `how did`, `better than`, `worse than`, `more than`, `less than`, `higher than`, `lower than`, `against`
+1. **Semantic layer rule-based fill** — `semantic_layer.try_rule_based_fill()` confidence ≥ 0.80 → deterministic SQL, 0 LLM calls.
+2. **Phase 4 template fast lane** — `embedding_index` TF-IDF/RRF cosine ≥ 0.68 → use embedded template SQL directly.
+3. **Verified analysis** — question matches a pre-validated hard-coded SQL template.
+4. **Direct memory reuse** — approved thumbs-up query (token-sort-ratio + cosine ≥ 0.55) → reuse cached SQL from `ask_query_memory`.
 
-**2. RELATIONAL** — geography intent from `_analyse_question`, OR any keyword from these groups:
+**If no fast lane fires → `intent_router.classify_intent()` (priority order):**
+
+**1. COMPARATIVE** — any comparative keyword: `compare`, `versus`, `vs`, `difference between`, `contrast`, `relative to`, `how does`, `how did`, `better/worse/more/less/higher/lower than`, `against`
+
+**2. RELATIONAL** — geography intent OR keywords from:
 - *Relational*: `related to`, `connected to`, `link between`, `in the same parish`, `same barony`, `part of`, `neighbouring`, `adjacent to`, `bordering`, `relationship between`, `linked to`
 - *Hierarchy*: `which parish`, `what parish`, `civil parish`, `in the barony`, `townlands in`, `where is`, `where does`, `located in`, `situated in`, `falls within`
 - *Heritage*: `heritage`, `archaeological`, `monument`, `ring fort`, `holy well`, `history of`, `tell me about`, `describe`, `historically`, `fortification`, `earthwork`
 - *Sensemaking*: `overview`, `about the estate`, `about coolattin`, `describe the estate`, `what kind of`, `background`, `summary of`, `general context`
-- **Exception** (Core Rule 1 override): if *only* heritage/sensemaking keywords triggered (no relational/hierarchy/geography signal) AND `output_mode` is `count`/`aggregate` AND any analytical keyword is present → falls through to **ANALYTICAL** instead.
+- **Exception**: if *only* heritage/sensemaking keywords triggered AND `output_mode` is `count`/`aggregate` AND any analytical keyword → routes to **ANALYTICAL** instead.
 
-**3. ANALYTICAL** — any of:
-- `primary_intent` in `{population, eviction, emigration, tenancy}`
-- `output_mode` in `{count, aggregate, trend}`
-- Any analytical keyword: `how many`, `how much`, `total`, `count of`, `number of`, `average`, `mean`, `proportion`, `percent`, `percentage`, `per year`, `by year`, `trend`, `over time`, `distribution`, `breakdown`, `most`, `least`, `highest`, `lowest`, `maximum`, `minimum`, `sum of`, `rate`, `ratio`
-- `slot_fill is not None` (semantic layer found any candidate)
+**3. ANALYTICAL** — `primary_intent` in `{population, eviction, emigration, tenancy}`, OR `output_mode` in `{count, aggregate, trend}`, OR any of: `how many`, `how much`, `total`, `count of`, `number of`, `average`, `mean`, `proportion`, `percent`, `per year`, `by year`, `trend`, `over time`, `distribution`, `breakdown`, `most`, `least`, `highest`, `lowest`, `maximum`, `minimum`, `sum of`, `rate`, `ratio`, OR `slot_fill is not None`.
 
-**4. FALLBACK** — default when nothing above matched.
+**4. FALLBACK** — default.
 
-### Dispatch per route
+**Dispatch per route (legacy pipeline only):**
 
 | Route | What runs |
 |---|---|
-| **ANALYTICAL** | Phase 2 semantic_layer: rule-based slot-fill (0 LLM) → LLM slot-fill if confidence < 0.80 → deterministic SQL compiler. Never free-form LLM SQL. |
-| **RELATIONAL / HERITAGE** | Phase 3 subgraph (VRTI SPARQL + GraphDB) for qualitative context, then FALLBACK SQL lane for any numeric counts (counts always come from SQL, never the KG). |
-| **COMPARATIVE** | ANALYTICAL SQL + RELATIONAL subgraph in parallel. Phase 6 reconciliation handles cross-source discrepancies. |
-| **FALLBACK** | Old pipeline: verified_analysis → Phase 4 embedding template → approved memory → LLM free-form SQL generation. |
+| **ANALYTICAL** | Phase 2 semantic_layer LLM slot-fill → deterministic SQL compiler. Never free-form LLM SQL. |
+| **RELATIONAL / HERITAGE** | Phase 3 `subgraph_engine` (VRTI SPARQL + GraphDB) for qualitative context; SQL handles all counts. |
+| **COMPARATIVE** | ANALYTICAL SQL + RELATIONAL subgraph; Phase 6 fuses discrepancies. |
+| **FALLBACK** | LLM free-form SQL via `_generate_sql()`. |
 
-All lanes then continue through safety check → SQLite execution → VRTI → GraphDB → Phase 6 fusion → Phase 7 LLM rewrite → SSE result.
+All routes then: safety check → SQLite execution → VRTI → Phase 3 subgraph (if relational/comparative) → Phase 6 fusion → Phase 7 LLM synthesis.
 
 SSE streaming: each phase yields `{type, stage, status, detail, duration_ms}` events. Do not buffer.
 PDF generation is hand-written (no reportlab/fpdf dependency), written to `exports/ask/`.
@@ -197,17 +205,23 @@ All tables created/migrated by `extensions.py::ensure_schema()`:
 
 | Table | Purpose |
 |---|---|
-| `townland` | Canonical townland reference — enriched from VRTI KG + estate GeoJSON |
+| `townland` | Canonical townland reference — `entity_id` UUID + `name` (not UNIQUE) + `qualifier` |
+| `townland_xref` | Maps `(source, source_record_id)` → `entity_id`; multi-source cross-reference |
+| `field_provenance` | Field-level survivorship: which source won each field value and why |
 | `census_record` | Population per townland × year (1841–1891 from KG, 1827–1868 from estate) |
 | `clearances_record` | Estate evictions per townland × year (1847–1856) |
 | `refresh_state` | Dataset freshness tracking |
+| `unified_record` | 13,707 estate person records (runtime-seeded from `unified_processed.csv`) |
+| `heritage_feature` | NMS heritage monuments (runtime-seeded from GeoJSON files) |
 | `ask_query_memory` | Approved question→SQL pairs (thumbs-up feedback; reused by retrieval) |
 | `ask_query_feedback` | All feedback submissions (up + down) for review |
-| `match_review` | Human-review queue for entity resolution candidates |
-| `source_mentions` | One row per name occurrence in a source record (workhouse ER) |
-| `entity_resolution_candidates` | Scored candidate links: mention → unified_record (workhouse ER) |
+| `match_review` | Uncertain townland-pair review queue (ingest-time reconciliation review) |
+| `source_mentions` | One row per name occurrence in a source record (workhouse ER); uses `source_table`/`normalised_name`/`phonetic_forename`/`phonetic_surname` columns |
+| `entity_resolution_candidates` | Scored candidate links: `label` column (not `band`), `evidence_json`/`conflicts_json` |
 | `workhouse_unified_links` | Final accepted workhouse→estate record links |
 | `entity_resolution_decisions` | Human review decisions on candidates |
+| `graph_nodes` | 49,081 GraphRAG nodes: `props` (JSON), `embedding` (BLOB), `community` columns |
+| `graph_edges` | 64,308 directed edges: composite PK `(src, dst, rel_type)`, `props` (JSON) |
 
 ## Code conventions
 

@@ -2769,34 +2769,34 @@ def _orchestrated_pipeline_stream(
     force_llm: bool,
 ) -> Generator[str, None, None]:
     """
-    New routed pipeline — activated by ASK_USE_NEW_PIPELINE=true.
+    Default pipeline — active when ASK_USE_NEW_PIPELINE=true (the default).
 
-    Orchestrator flow (per STEP 2 spec):
-      1. Phase 1 — entity_resolver (via _resolve_townland_context) runs ONCE; the
-         resolved sql_id + kg_uri are shared by every downstream lane.
-      2. Phase 5 — classify_intent → ANALYTICAL / RELATIONAL / COMPARATIVE / FALLBACK.
-      3. Dispatch:
-           ANALYTICAL  → Phase 2 semantic_layer: rule-based slot-fill first (0 LLM calls),
-                         then LLM slot-fill if confidence < threshold.  SQL comes from
-                         the deterministic compiler — never from free-form LLM generation.
-           RELATIONAL  → Phase 3 subgraph retrieval for qualitative context, then
-           /HERITAGE      FALLBACK SQL generation for any counts (Core Rule 1: counts
-                         always come from SQL, never from the subgraph).
-           COMPARATIVE → ANALYTICAL SQL + RELATIONAL subgraph side-by-side.
-                         Full reconciliation is Phase 6 (TODO marker in provenance).
-           FALLBACK    → old pipeline (verified_analysis → phase4_embedding →
-                         approved_memory → LLM free-form SQL).
-      4. ANY lane error → graceful fallback to old pipeline SQL generation.
-      5. Stages 2-end — safety check, DB execution, VRTI, GraphDB, fusion, rewrite, PDF,
-         final result SSE — identical to the old pipeline; call the same helpers.
+    Actual execution order (what this function really does):
+      1. Phase 1  — entity resolution via _resolve_townland_context (townland fuzzy
+                    match + optional person identity); sql_id + kg_uri shared downstream.
+      2. SQL      — direct LLM SQL generation via _generate_sql(); no intent routing,
+                    no semantic-layer fast lanes, no memory reuse in this path.
+                    intent_route is set to "direct" and never changes.
+      3. GraphRAG — if canonical_townland resolved: load in-process NetworkX graph,
+                    seed from exact townland node → k-hop BFS → prune → linearise.
+                    Result injected into kg_context["subgraph_linearized"] later.
+      4. Townland summary — 5 hardcoded SQL queries (emigration/eviction/tenancy/
+                    census/workhouse counts) for synthesis context.
+      5. Stage 2  — SQL safety validation (_sanitize_and_validate_sql).
+      6. Stage 3  — SQLite execution (_execute_with_recovery; repairs on failure).
+      7. Stage 4  — VRTI SPARQL (_kg_context); townland/parish metadata enrichment.
+      8. Phase 3 context injection — _phase3_result is always None here (subgraph
+                    engine is NOT called in this pipeline); no-op.
+      9. GraphRAG injection — appends GraphRAG linearized block to kg_context.
+     10. Stage 4.5 — GraphDB SPARQL: DEAD in this pipeline because intent_route is
+                    always "direct", never "relational"/"comparative".
+     11. Phase 6  — fusion & reconciliation (_fuse_lanes).
+     12. Phase 7  — multi-model LLM synthesis (Claude → Grok → OpenRouter/Ollama cascade).
 
-    New SSE stages vs old pipeline:
-      classifying_intent — routing decision (always emitted)
-      slot_filling       — LLM slot-fill attempt (ANALYTICAL lane only)
-
-    New provenance fields in result payload:
-      query_provenance.route   — intent_route label
-      query_provenance.lane    — which dispatch path executed
+    NOTE: The semantic layer (Phase 2), embedding index (Phase 4), intent router
+    (Phase 5), and subgraph engine (Phase 3) are all inactive in this pipeline.
+    They exist only in the legacy pipeline (answer_question_stream when
+    ASK_USE_NEW_PIPELINE=false).
     """
     # ── Setup ─────────────────────────────────────────────────────────────────
     try:
@@ -3659,8 +3659,9 @@ def answer_question_stream(
         return
 
     # ── Feature flag: routed architecture ─────────────────────────────────────
-    # When ASK_USE_NEW_PIPELINE=true, delegate to the new orchestrator.
-    # When false (default), run the existing pipeline unchanged below.
+    # When ASK_USE_NEW_PIPELINE=true (default), delegate to the new orchestrator.
+    # When false, run the legacy pipeline below (semantic layer, fast lanes,
+    # intent router, subgraph engine — none of which run in the new pipeline).
     if ASK_USE_NEW_PIPELINE:
         yield from _orchestrated_pipeline_stream(clean_q, townland_hint, include_sql, force_llm)
         return

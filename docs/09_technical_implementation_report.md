@@ -1,1589 +1,1364 @@
 # Coolattin Estate Records Explorer — Full Technical Implementation Report
 
-**Project:** Masters Dissertation  
+**Project:** Masters Dissertation — MSc Computer Science (Interactive Digital Media)  
 **Application:** Coolattin Estate Records Explorer  
-**Version:** Current (as of June 2026)  
-**Author:** Pranjal  
-**Stack:** Python 3.12 · Flask · SQLite · GraphDB · SPARQL · LLM (OpenRouter / Ollama) · D3.js · Leaflet.js  
+**Institution:** Trinity College Dublin  
+**Candidate:** Pranjal Yadav  
+**Version:** July 2026 (`v1.0-demo-freeze` tagged 2026-06-10)  
+**Deployment:** Azure App Service — Italy North (`coolattin-app.azurewebsites.net`)
 
 ---
 
 ## Table of Contents
 
-1. [Project Overview](#1-project-overview)
+1. [Project Overview and Historical Context](#1-project-overview-and-historical-context)
 2. [System Architecture](#2-system-architecture)
 3. [Technology Stack](#3-technology-stack)
-4. [Database Design](#4-database-design)
-5. [Application Factory & Configuration](#5-application-factory--configuration)
+4. [Database Design — All 17 Tables](#4-database-design--all-17-tables)
+5. [Application Factory and Configuration](#5-application-factory-and-configuration)
 6. [Data Ingestion Pipeline](#6-data-ingestion-pipeline)
-7. [Feature: Unified Estate Records Search](#7-feature-unified-estate-records-search)
-8. [Feature: Interactive Map](#8-feature-interactive-map)
-9. [Feature: Census Explorer](#9-feature-census-explorer)
+7. [Feature: Interactive Map](#7-feature-interactive-map)
+8. [Feature: Census Explorer](#8-feature-census-explorer)
+9. [Feature: Unified Estate Records Search](#9-feature-unified-estate-records-search)
 10. [Feature: Analytics Dashboard](#10-feature-analytics-dashboard)
-11. [Feature: Historic Landscape / Heritage Layer](#11-feature-historic-landscape--heritage-layer)
-12. [Feature: Natural-Language Ask (LLM Q&A)](#12-feature-natural-language-ask-llm-qa)
-13. [Feature: Knowledge Graph Visualiser](#13-feature-knowledge-graph-visualiser)
-14. [Feature: GraphDB SPARQL Integration](#14-feature-graphdb-sparql-integration)
-15. [Feature: PDF Export](#15-feature-pdf-export)
-16. [Feature: Excel Export](#16-feature-excel-export)
-17. [Feature: Workhouse Matching](#17-feature-workhouse-matching)
-17b. [Feature: Workhouse Entity Resolution (June 2026)](#17b-feature-workhouse-entity-resolution)
-18. [Feature: Internationalisation (English / Irish)](#18-feature-internationalisation-english--irish)
-19. [API Reference](#19-api-reference)
-20. [Frontend Architecture](#20-frontend-architecture)
-21. [Security & Data Integrity](#21-security--data-integrity)
-22. [Performance Design](#22-performance-design)
-23. [RDF / Knowledge Graph Uplift Script](#23-rdf--knowledge-graph-uplift-script)
-24. [Deployment & Operations](#24-deployment--operations)
-25. [Codebase Metrics](#25-codebase-metrics)
-26. [June 2026 Sprint — Orchestrated Pipeline and Identity Resolution](#26-june-2026-sprint)
+11. [Feature: Heritage Landscape Layer](#11-feature-heritage-landscape-layer)
+12. [Feature: Natural-Language Ask — Seven-Phase LLM Pipeline](#12-feature-natural-language-ask--seven-phase-llm-pipeline)
+13. [Feature: In-Process GraphRAG Engine](#13-feature-in-process-graphrag-engine)
+14. [Feature: Multi-Model LLM Synthesis Chain](#14-feature-multi-model-llm-synthesis-chain)
+15. [Feature: KG Explore — SQL vs SPARQL Comparison](#15-feature-kg-explore--sql-vs-sparql-comparison)
+16. [Feature: Workhouse Entity Resolution](#16-feature-workhouse-entity-resolution)
+17. [Feature: PDF Export](#17-feature-pdf-export)
+18. [Feature: Excel Export](#18-feature-excel-export)
+19. [Feature: Internationalisation (English / Irish)](#19-feature-internationalisation-english--irish)
+20. [API Reference — All Endpoints](#20-api-reference--all-endpoints)
+21. [Frontend Architecture](#21-frontend-architecture)
+22. [Security Architecture](#22-security-architecture)
+23. [Performance Design and Caching](#23-performance-design-and-caching)
+24. [Deployment and CI/CD](#24-deployment-and-cicd)
+25. [Evaluation Results](#25-evaluation-results)
+26. [Codebase Metrics](#26-codebase-metrics)
 
 ---
 
-## 1. Project Overview
+## 1. Project Overview and Historical Context
 
-The **Coolattin Estate Records Explorer** is a full-stack web application built as the centrepiece of a Masters Dissertation in Digital Humanities / Information Technology. It provides a unified, searchable interface over historical records from the **Coolattin Estate**, County Wicklow, Ireland, covering the mid-nineteenth century — one of the most significant periods in Irish history, encompassing the Great Famine (1845–1852), mass emigration, and large-scale estate clearances.
+The **Coolattin Estate Records Explorer** is a full-stack web application that makes nineteenth-century Irish archival records searchable, visualisable, and queryable in natural language. It was built as a Masters Dissertation artefact at Trinity College Dublin, under the supervision of Dr Ciarán Wallace (VRTI) and Prof Declan O'Sullivan (CS).
 
 ### Historical Context
 
-The Coolattin Estate was the County Wicklow seat of the Fitzwilliam family. In the decade following the Famine, the estate oversaw:
+The Coolattin Estate was the County Wicklow seat of the Fitzwilliam family. In the Famine decade and its aftermath, the estate is documented as having overseen:
 
-- **6,016 emigrations** (sponsored passage, mainly to Canada) between 1847 and 1856
-- **4,108 eviction records** spanning the estate's recorded history
-- **5,247 tenancy records** documenting landholding relationships
-- Clearances data across **122 townlands** from 1847 to 1856
-- Population decline visible through census records from **1827 to 1891**
+- **6,016 emigrations** (sponsored passage to Canada and elsewhere) between 1847 and 1856
+- **7,763 clearance records** across 122 townlands from 1847 to 1856
+- **~5,000 tenancy records** documenting landholding relationships
+- Population data from **1827 to 1891** across 152 townlands
+- Individual-level workhouse pauper register entries from the same period
 
-The application makes these records accessible through multiple interfaces — direct search, map visualisation, analytics, natural-language questions answered by an LLM, and a knowledge graph explorer — enabling both genealogical research and academic historical analysis.
+The unified dataset (`unified_processed.csv`, 13,707 rows) integrates emigration, eviction, and tenancy ledgers into a single searchable table.
 
-### Core Objectives
+### Dissertation Objectives and Research Questions
 
-| Objective | Implementation |
-|-----------|---------------|
-| Full-text search over 13,707 estate records | Unified Records Search (SQL + pandas) |
-| Spatial visualisation of records | Leaflet.js interactive map with GeoJSON |
-| Population trend analysis | Census explorer + analytics dashboard |
-| Natural-language Q&A | 7-phase orchestrated LLM pipeline (OpenRouter / Ollama / local BGE) |
-| Knowledge graph representation | GraphDB + D3.js force-directed graph |
-| SQL vs SPARQL comparison | semantic_layer.py compiles both from same SlotFill; GraphDB integration live |
-| Workhouse record linkage | Dedicated ER pipeline with phonetic blocking, fuzzy scoring, confidence bands |
-| Person disambiguation | Three-layer identity model (Mention/Person/Factoid) in identity_resolver.py |
-| Reproducible academic artefact | SQLite, deterministic ingest, no-ORM |
+| RQ | Question | Implementation |
+|---|---|---|
+| RQ1 | Data cleaning and geospatial alignment | Townland normalisation, VRTI enrichment, reconciliation gaps audit |
+| RQ2 | KG linkage coverage | VRTI SPARQL pull into `townland` table; `kg_uri` field coverage |
+| RQ3 | Workhouse record linkage | Dedicated ER pipeline: 7-signal scoring, 140 confirmed links |
+| RQ4 | NL-to-SQL pipeline accuracy | 7-phase orchestrated pipeline; 75-question evaluation; 100% aggregation correctness |
+| RQ5 | Explainable AI | SQL display, route provenance, query strategy labels, streaming stages |
+| RQ6 | SQL vs SPARQL comparison | `semantic_layer.compile_sparql()` + GraphDB + KG explore page |
+| RQ7 | Graphical summaries | 7 Chart.js templates + D3 force graph + KG compare timeline |
+
+### Core Technical Constraints (Dissertation)
+
+All technical choices were made under these constraints:
+- **Reproducible** — anyone can clone the repo and get the same results
+- **Transparent** — every claim is traceable to a known data source
+- **Self-contained** — no hard dependencies on running external services at exam time
+- **Stable** — `v1.0-demo-freeze` git tag pins the evaluation state
 
 ---
 
 ## 2. System Architecture
 
-### High-Level Architecture
+### 2.1 Architectural Principles
+
+The system uses a strict three-layer separation throughout:
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  Browser (Vanilla JS · Leaflet.js · D3.js · Chart.js)            │
-└────────────────────────┬─────────────────────────────────────────┘
-                         │  HTTP / SSE
-┌────────────────────────▼─────────────────────────────────────────┐
-│  Flask Application  (Python 3.12 · Application Factory Pattern)  │
-│                                                                  │
-│  Routes Layer   ──── Services Layer ──── Repository Layer        │
-│  (Blueprints)        (Business Logic)    (SQL Queries)           │
-│                            │                     │               │
-│                    ┌───────┼──────────┐           │               │
-│                    │       │          │           ▼               │
-│               LLM Svc  KG Svc   Census Svc    SQLite DB          │
-└────────────────────┬───────┴────┬─────────────────────────────────┘
-                     │            │
-          ┌──────────▼──┐  ┌──────▼──────────┐
-          │  OpenRouter  │  │  GraphDB 10.x   │
-          │  (primary)   │  │  SPARQL endpoint│
-          │  Ollama      │  │  143,123 triples│
-          │  (fallback)  │  └─────────────────┘
-          └─────────────┘         │
-                                  │ also
-                          ┌───────▼──────────┐
-                          │  VRTI SPARQL     │
-                          │  (external KG)   │
-                          └──────────────────┘
+Routes (backend/routes/)      ← thin HTTP adapters; no logic
+   └── Services (backend/services/)  ← all business logic
+         └── Repositories (backend/repositories/)  ← all SQL
+               └── SQLite (coolattin.db)
 ```
 
-### Layered Architecture
+Additionally: no ORM, no raw SQL outside repositories, `extensions.py` as the sole DB singleton, `config.py` as the sole source of truth for tunable values.
 
-The application follows a strict three-layer separation:
-
-1. **Route layer** (`backend/routes/*.py`) — thin Flask blueprints. Each blueprint handles one URL prefix. Routes parse request parameters, call a service function, and return JSON or render a template. No business logic lives here.
-
-2. **Service layer** (`backend/services/*.py`) — all business logic. Services orchestrate repository calls, external API calls, caching decisions, and data transformation. The most complex service (`ask_service.py`) is 6,651 lines and implements the full LLM Q&A pipeline.
-
-3. **Repository layer** (`backend/repositories/*.py`) — all SQL. Each repository module exposes typed functions that execute parameterised queries against SQLite. No raw SQL appears in services or routes.
-
-The `extensions.py` singleton provides `get_db_conn()` to the repository layer; every SQLite connection in the entire application passes through this single point, ensuring consistent PRAGMA settings and thread safety.
-
-### Request Flow (typical page load)
+### 2.2 High-Level Component Diagram
 
 ```
-Browser GET /ask
-  → main.py:ask() renders ask.html
-  → Browser loads ask.js (cached 24h)
+┌──────────────────────────────────────────────────────────────────────┐
+│  BROWSER  (Vanilla JS · Leaflet.js · D3.js · Chart.js · SSE)         │
+└──────────────────────────┬───────────────────────────────────────────┘
+                           │ HTTP / SSE / EventSource
+┌──────────────────────────▼───────────────────────────────────────────┐
+│  FLASK APPLICATION  (Python 3.12 · Gunicorn · Application Factory)   │
+│                                                                      │
+│  8 Blueprints: main · ask · census · unified · map · townlands ·     │
+│                exports · kg_explore                                  │
+│                                                                      │
+│  Services: ask_service(10K loc) · semantic_layer · intent_router ·   │
+│            subgraph_engine · graphrag · embedding_index ·            │
+│            identity_resolver · workhouse_entity_resolution · ...     │
+└──────────────────────────┬───────────────────────────────────────────┘
+                           │
+         ┌─────────────────┼──────────────────────┐
+         ▼                 ▼                      ▼
+┌─────────────────┐  ┌──────────────┐  ┌──────────────────────────┐
+│  coolattin.db   │  │  VRTI SPARQL │  │  LLM Synthesis Chain     │
+│  SQLite 3 / WAL │  │  (live, 1h   │  │  [1] Claude (Anthropic)  │
+│  17 tables      │  │   TTL cache) │  │  [2] Grok (xAI)          │
+│  ~65 MB         │  └──────────────┘  │  [3] OpenRouter          │
+└─────────────────┘                    │  [4] Ollama (local)      │
+         │                             └──────────────────────────┘
+         │ graph_nodes / graph_edges
+         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  In-Process GraphRAG (graphrag.py)                              │
+│  NetworkX MultiDiGraph: 49,081 nodes · 64,308 edges             │
+│  BGE-large-en-v1.5 embeddings: 28,078 nodes × 1024 dim         │
+│  vector seed → k-hop BFS → linearised subgraph enrichment       │
+└─────────────────────────────────────────────────────────────────┘
+         │
+         ▼ (D8 comparison prototype)
+┌─────────────────────────────────────────────────────────────────┐
+│  Local GraphDB  (co: ontology, http://localhost:7200)           │
+│  SPARQL comparison: same SlotFill → SQL AND SPARQL simultaneously│
+└─────────────────────────────────────────────────────────────────┘
+```
 
-User submits question
-  → POST /api/ask/query
-  → ask.py:query_endpoint()
-  → ask_service.answer_question_stream()
-  → yields SSE events:
-      initializing → loading_context → running_template_match
-      → townland_resolution → [contacting_llm] → querying_database
-      → querying_vrti_graph → [querying_graphdb] → preparing_output
-      → complete
-  → ask.js consumes stream, updates UI progressively
+### 2.3 Request Flow — Ask Page
+
+```
+Browser  POST /api/ask/query
+  ↓
+ask.py::query_endpoint()
+  → answer_question_stream(question, townland_hint, show_sql)
+  → _orchestrated_pipeline_stream()    [ASK_USE_NEW_PIPELINE=true]
+        │
+        ├─ Pre-flight  (~5 ms, sync)
+        │    _resolve_townland_context()  → townland_norm, sql_id, kg_uri
+        │    _analyse_question()          → intent, output_mode, year, ...
+        │    _question_data_coverage_warnings()
+        │
+        ├─ Four Fast Lanes  (no LLM if any lane fires)
+        │    Lane 1: rule-based slot-fill     (semantic_layer.try_rule_based_fill)
+        │    Lane 2: verified template        (_try_verified_analysis, 81 templates)
+        │    Lane 3: direct memory reuse      (_find_similar_approved_queries)
+        │    Lane 4: embedding template       (embedding_index._phase4_retrieve)
+        │
+        ├─ Phase 1: Identity resolution       (identity_resolver.py)
+        ├─ Phase 2: Semantic layer            (semantic_layer.py)
+        ├─ Phase 3: Subgraph engine           (subgraph_engine.py + graphrag.py)
+        ├─ Phase 4: Hybrid embedding          (embedding_index.py)
+        ├─ Phase 5: Intent classification     (intent_router.py)
+        ├─ Phase 6: Fusion                    (ask_service.py)
+        └─ Phase 7: LLM synthesis             (ask_service.py)
+
+Each phase yields SSE event → browser renders progressively
+Final SSE event type="result" → full answer JSON payload
 ```
 
 ---
 
 ## 3. Technology Stack
 
-### Backend
+### 3.1 Backend
 
-| Component | Technology | Version | Purpose |
-|-----------|-----------|---------|---------|
-| Language | Python | 3.12 | Primary backend language |
-| Web framework | Flask | 3.x | HTTP routing, SSE, Jinja2 templating |
-| Database | SQLite (raw sqlite3) | 3.x | Local persistence; no ORM |
-| HTTP client | requests | 2.x | SPARQL + LLM API calls |
-| Data processing | pandas | 2.x | Unified records CSV; workhouse matching |
-| Excel export | openpyxl | 3.x | Census data Excel export |
-| RDF processing | rdflib | 7.x | In-process SPARQL against TTL file |
-| RDF database | GraphDB | 10.x | 143,123-triple SPARQL endpoint |
-| LLM (primary) | OpenRouter | API | Cloud LLM (gpt-oss-20b:free + 13 fallbacks) |
-| LLM (fallback) | Ollama | — | Local LLM (configurable model) |
+| Component | Technology | Purpose |
+|---|---|---|
+| Language | Python 3.12 | All backend code |
+| Web framework | Flask 3.x | HTTP routing, Jinja2 templates, SSE |
+| WSGI server | Gunicorn (gthread, 4 workers) | Production server |
+| Database | SQLite 3 via raw `sqlite3` | Local persistence (no ORM) |
+| HTTP client | `requests` | SPARQL + LLM API calls |
+| Data processing | `pandas` | CSV loading, workhouse data |
+| Fuzzy matching | `rapidfuzz` | Townland name matching, ER scoring |
+| Phonetics | `jellyfish` | Metaphone encoding for ER blocking |
+| Graph engine | `networkx` | In-process GraphRAG property graph |
+| Dense embeddings (local) | `sentence-transformers` + BAAI/bge-large-en-v1.5 | 1024-dim node embeddings (dev only) |
+| Dense embeddings (cloud) | `voyageai` (voyage-large-2) | 1024-dim embeddings (Azure production) |
+| Dense embeddings (alt) | `cohere` (embed-english-v3.0) | 1024-dim embeddings (alternative) |
+| Numpy | `numpy` | Matrix operations for cosine ANN |
+| Rate limiting | `flask-limiter` | Ask endpoint abuse prevention |
+| Excel export | `openpyxl` | Census data Excel download |
+| GeoJSON | stdlib `json` | Townland boundary serving |
+| PDF export | Hand-written PDF 1.4 | No library dependency |
 
-### Frontend
+### 3.2 Frontend
 
-| Component | Technology | Version | Purpose |
-|-----------|-----------|---------|---------|
-| Language | Vanilla JavaScript | ES2020 | All interactive logic; no framework |
-| Mapping | Leaflet.js | 1.9 | Interactive map with GeoJSON overlays |
-| Graph viz | D3.js | 7 | Force-directed knowledge graph |
-| Charting | Chart.js | 4.x | Analytics bar/line/doughnut charts |
-| Templating | Jinja2 | 3.x | Server-side HTML rendering |
-| Styling | Custom CSS | — | Single `main.css` (no framework) |
+| Component | Technology | Purpose |
+|---|---|---|
+| Language | Vanilla JavaScript (ES2020) | All interactive logic — no framework |
+| Mapping | Leaflet.js 1.9 | Choropleth map, polygon rendering |
+| Graph viz | D3.js 7 | Force-directed KG visualisation |
+| Charting | Chart.js 4.x | Analytics bar/line/doughnut charts |
+| Templating | Jinja2 3.x | Server-side HTML rendering |
+| Streaming | `EventSource` API | SSE consumer for Ask pipeline |
+| Styling | Custom CSS (main.css) | No CSS framework |
+| Markdown | marked.min.js | LLM answer Markdown rendering |
 
-### External Services
+### 3.3 External Services
 
-| Service | Role | Protocol |
-|---------|------|----------|
-| VRTI (Virtual Record Treasury of Ireland) | Townland metadata + census KG | SPARQL over HTTPS |
-| OpenRouter | LLM SQL generation + rewriting | REST (OpenAI-compatible) |
-| Ollama | Local LLM fallback | REST |
-| GraphDB (local) | Coolattin RDF graph queries | SPARQL + REST |
+| Service | Role | Protocol | Fallback |
+|---|---|---|---|
+| VRTI Virtuoso | Townland metadata + census KG | SPARQL/HTTPS | In-DB cache + seed CSV |
+| Claude (Anthropic) | LLM synthesis (first priority) | REST | Next in chain |
+| Grok (xAI) | LLM synthesis (second priority) | REST | Next in chain |
+| OpenRouter | LLM synthesis (third priority) | REST (OpenAI compat) | Next in chain |
+| Ollama | LLM synthesis (local fallback) | REST | raw actual_answer |
+| Voyage AI | Dense embeddings (Azure prod) | REST | local BGE (dev) |
+| Cohere | Dense embeddings (alternative) | REST | local BGE |
+| GraphDB (local) | co: ontology SPARQL (D8) | SPARQL/HTTP | Skip (optional) |
+
+### 3.4 Why These Choices
+
+| Decision | Reason |
+|---|---|
+| SQLite over PostgreSQL | Zero setup; single file; examinable directly |
+| Raw SQL over ORM | Every query is auditable; no magic |
+| Vanilla JS over React | 8 pages; no build step needed; readable by anyone |
+| Hand-written PDF | No external dependency that can rot |
+| LLM last, not first | Historical data demands accuracy; deterministic paths first |
+| Multi-provider LLM chain | Academic demos must work offline (Ollama) and in the cloud |
 
 ---
 
-## 4. Database Design
+## 4. Database Design — All 17 Tables
 
-### Schema Overview
+All tables created and migrated by `extensions.py::ensure_schema()`. The database uses WAL mode (`PRAGMA journal_mode=WAL`) and `PRAGMA foreign_keys=ON`. The singleton connection is accessed only via `get_db_conn()` from `extensions.py`.
 
-The SQLite database (`coolattin.db`) contains four tables, all created and migrated idempotently by `extensions.py::ensure_schema()`. No ORM is used; the design was intentional for transparency and academic reproducibility.
+### 4.1 Core Reference Tables
 
-### Table: `townland`
-
-The canonical townland reference table. Populated from two sources: the estate GeoJSON file (primary) and the VRTI Knowledge Graph (enrichment).
+#### `townland`
+152 rows — one per Coolattin Estate townland. The canonical reference for all townland-related queries. `entity_id` is a UUID surrogate used by cross-reference and provenance tables; `name` holds the canonical UPPERCASE English form and has no UNIQUE constraint to allow same-named townlands in different baronies to coexist.
 
 ```sql
 CREATE TABLE townland (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    name              TEXT NOT NULL UNIQUE,
-    name_gaelic       TEXT,
-    barony            TEXT,
-    civil_parish      TEXT,
-    electoral_division TEXT,
-    placename_theme   TEXT,
-    description       TEXT,
-    td_id             TEXT,   -- Estate internal ID
-    guid              TEXT,   -- Global unique identifier
-    area_sqm          REAL,   -- Area in square metres
-    kg_uri            TEXT,   -- VRTI Knowledge Graph URI
-    wkt_geometry      TEXT,   -- WKT boundary polygon
-    centroid_lat      REAL,
-    centroid_lon      REAL,
-    county            TEXT,
-    osm_id            TEXT,   -- OpenStreetMap ID
-    osi_id            TEXT,   -- Ordnance Survey Ireland ID
-    vrti_id           TEXT,   -- VRTI internal ID
-    images_json       TEXT,   -- JSON array of image URLs
-    links_json        TEXT,   -- JSON array of external links
-    source            TEXT,
-    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_id           TEXT,                   -- UUID surrogate key
+    name                TEXT NOT NULL,          -- canonical UPPERCASE English name
+    qualifier           TEXT,                   -- locational qualifier: UPPER/LOWER/etc.
+    logainm_id          TEXT,                   -- logainm.ie place identifier
+    name_gaelic         TEXT,
+    barony              TEXT,
+    civil_parish        TEXT,
+    electoral_division  TEXT,
+    placename_theme     TEXT,
+    description         TEXT,
+    td_id               TEXT,
+    guid                TEXT,
+    area_sqm            REAL,
+    kg_uri              TEXT,
+    wkt_geometry        TEXT,
+    centroid_lat        REAL,
+    centroid_lon        REAL,
+    county              TEXT,
+    osm_id              TEXT,
+    osi_id              TEXT,
+    vrti_id             TEXT,
+    images_json         TEXT DEFAULT '[]',
+    links_json          TEXT DEFAULT '[]',
+    geometry_flag       TEXT,
+    source              TEXT DEFAULT 'json',
+    created_at          TEXT DEFAULT (datetime('now')),
+    updated_at          TEXT DEFAULT (datetime('now'))
+)
 ```
 
-**Statistics:** 4,225 townlands (all Wicklow; 152 with full estate data + GeoJSON boundaries).
+#### `townland_xref`
+Cross-reference table. Maps `(source, source_record_id)` pairs to the canonical `entity_id`.
 
-**Indexes:** `civil_parish`, `barony`, `county`, `kg_uri`
+```sql
+CREATE TABLE townland_xref (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_id        TEXT NOT NULL,
+    source           TEXT NOT NULL,          -- 'geojson' | 'kg' | 'reference' | 'manual'
+    source_record_id TEXT NOT NULL,          -- TD_ID, kg_uri, townlands.ie URL, etc.
+    confidence       REAL,
+    match_method     TEXT,
+    created_at       TEXT DEFAULT (datetime('now')),
+    UNIQUE(source, source_record_id)
+)
+```
 
-### Table: `census_record`
-
-Population data per townland per year. Sources: VRTI KG (1841–1891 standard census years) and estate surveys (1827, 1839, 1848, 1850, 1860, 1868).
+#### `census_record`
+Population data per townland × year. Estate surveys (1827–1868) and national censuses (1841–1891).
 
 ```sql
 CREATE TABLE census_record (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    townland_id     INTEGER NOT NULL REFERENCES townland(id),
-    year            INTEGER NOT NULL,
-    male            INTEGER,
-    female          INTEGER,
-    total           INTEGER,
-    inhabited       INTEGER,   -- Inhabited houses
-    uninhabited     INTEGER,   -- Uninhabited houses
-    source          TEXT,
-    kg_uri          TEXT,
-    last_synced_at  DATETIME,
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(townland_id, year)
-);
+    id                  INTEGER PRIMARY KEY,
+    townland_id         INTEGER REFERENCES townland(id),
+    year                INTEGER NOT NULL,
+    total_population    INTEGER,
+    males               INTEGER,   -- national census years only
+    females             INTEGER,   -- national census years only
+    inhabited_houses    INTEGER,
+    uninhabited_houses  INTEGER,
+    source              TEXT   -- 'vrti' | 'estate_survey' | 'seed_csv'
+)
 ```
 
-**Statistics:** 8,033 records across 12 years (1827, 1839, 1841, 1848, 1850, 1851, 1860, 1861, 1868, 1871, 1881, 1891).
-
-**Indexes:** `year`, `(townland_id, year)`
-
-### Table: `clearances_record`
-
-Estate eviction clearance data per townland per year, sourced from the estate GeoJSON file covering the Famine clearances period.
+#### `clearances_record`
+Estate evictions per townland × year (1847–1856).
 
 ```sql
 CREATE TABLE clearances_record (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    townland_id INTEGER NOT NULL REFERENCES townland(id),
+    id          INTEGER PRIMARY KEY,
+    townland_id INTEGER REFERENCES townland(id),
     year        INTEGER NOT NULL,
-    count       INTEGER,   -- Number of households/persons cleared
-    source      TEXT,
-    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(townland_id, year)
-);
+    count       INTEGER NOT NULL
+)
 ```
 
-**Statistics:** 1,211 records across 10 years (1847–1856), covering 122 townlands.
-
-**Indexes:** `year`, `(townland_id, year)`
-
-### Table: `refresh_state`
-
-Tracks data freshness for cache invalidation decisions. Each dataset (census, townlands) has one row.
+#### `refresh_state`
+Dataset freshness tracking. One row per dataset.
 
 ```sql
 CREATE TABLE refresh_state (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    dataset_key     TEXT NOT NULL UNIQUE,
-    last_synced_at  DATETIME,
-    source          TEXT,
-    query_hash      TEXT,
-    record_count    INTEGER,
-    export_file     TEXT
-);
+    dataset         TEXT PRIMARY KEY,
+    last_refreshed  TEXT,     -- ISO timestamp
+    record_count    INTEGER
+)
 ```
 
-### Table: `ask_query_memory` (runtime-created)
-
-Stores approved query feedback for LLM reuse. Created dynamically by `ask_service.py`.
+#### `field_provenance`
+Field-level source tracking. Records which source contributed each field value.
 
 ```sql
-CREATE TABLE IF NOT EXISTS ask_query_memory (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    question         TEXT NOT NULL,
-    sql_text         TEXT,
-    result_summary   TEXT,
-    confidence_score REAL,
-    approved         INTEGER DEFAULT 0,
-    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+CREATE TABLE field_provenance (
+    id          INTEGER PRIMARY KEY,
+    table_name  TEXT NOT NULL,
+    row_id      INTEGER NOT NULL,
+    field_name  TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    confidence  REAL,
+    recorded_at TEXT
+)
 ```
 
-### Table: `unified_record` (runtime-seeded)
+### 4.2 Runtime-Seeded Tables
 
-A denormalised view of all 13,707 estate records sourced from `unified_processed.csv`. Created at startup by `ask_service._ensure_unified_table_seeded()` as a temporary table for SQL Q&A queries.
+Populated on first Ask request (or first page load requiring them).
 
-Key columns include: `record_id`, `forename`, `surname`, `canonical_name`, `townland`, `townland_norm`, `parish`, `year`, `occupation`, `has_emigration_record` (0/1), `has_eviction_record` (0/1), `has_tenancy_record` (0/1), `acres`, `holding_acres`, `family_size_estimate`, `rent_owed`, `chief_tenant_surname`, `under_tenant_surname`, `is_widow`, `is_canada_destination`, and ~50 additional fields.
+#### `unified_record`
+13,707 individual estate person records. Seeded from `unified_processed.csv` by `_ensure_unified_table_seeded()`.
 
-### Performance Pragmas
+Key columns: `record_id` (TEXT, UNIQUE), `canonical_name`, `forename`, `surname`, `townland_norm`, `year`, `age`, `gender`, `ship_name`, `destination`, `has_emigration_record` (INT 0/1), `has_eviction_record` (INT 0/1), `has_tenancy_record` (INT 0/1), `is_widow` (INT 0/1), `is_canada_destination` (INT 0/1), `children_count`, `family_size_estimate`, `holding_acres`, `family_key`.
 
-Every connection from `get_db_conn()` applies these SQLite PRAGMA settings for maximum read performance:
+#### `heritage_feature`
+NMS archaeological/heritage monument data. Seeded from GeoJSON files.
 
-```sql
-PRAGMA journal_mode=WAL;          -- Write-Ahead Logging (concurrent reads + writes)
-PRAGMA synchronous=NORMAL;        -- Balanced durability with WAL
-PRAGMA cache_size=-65536;         -- 64 MB page cache
-PRAGMA temp_store=2;              -- In-memory temp tables
-PRAGMA mmap_size=268435456;       -- 256 MB memory-mapped I/O
-PRAGMA foreign_keys=ON;           -- Referential integrity
-```
+Key columns: `id`, `name`, `feature_type` (`holy_well` / `monument` / `asi`), `lat`, `lon`, `description`, `townland_norm`.
+
+### 4.3 Ask Pipeline Tables
+
+#### `ask_query_memory`
+Approved question→SQL pairs from thumbs-up feedback. Powers Fast Lanes 3 and 4.
+
+| Column | Description |
+|---|---|
+| `id` | Surrogate PK |
+| `question` | Original user question |
+| `sql` | Approved SQL query |
+| `question_norm` | Normalised question for matching |
+| `tags` | JSON array of topic tags |
+| `created_at` | ISO timestamp |
+
+#### `ask_query_feedback`
+All feedback submissions (both thumbs-up and thumbs-down) for audit.
+
+| Column | Description |
+|---|---|
+| `question` | Original question |
+| `sql` | Executed SQL |
+| `feedback` | `positive` / `negative` |
+| `session_id` | Browser session identifier |
+| `created_at` | ISO timestamp |
+
+### 4.4 Entity Resolution Tables
+
+#### `source_mentions`
+One row per name occurrence in a source record (workhouse ER). Each workhouse row becomes one mention.
+
+| Column | Description |
+|---|---|
+| `source_table` | Dataset name (`workhouse`) |
+| `source_record_id` | Row identifier in the source (UNIQUE) |
+| `raw_name` | Name as it appears in the source |
+| `normalised_name` | Full normalised name (uppercase, abbreviations expanded) |
+| `forename` | Parsed forename |
+| `surname` | Parsed surname |
+| `phonetic_forename` | Metaphone encoding of forename |
+| `phonetic_surname` | Metaphone encoding of surname |
+| `raw_place` | Place name as it appears in the source |
+| `normalised_place` | Normalised place name |
+| `canonical_townland_id` | FK → `townland.id` |
+| `event_year` | Year of the event |
+| `age` | Age at time of event |
+| `inferred_birth_year` | Derived from event_year − age |
+| `occupation` | Occupation if recorded |
+| `household_fields` | Additional household context |
+| `source_payload_json` | Full source record as JSON |
+
+#### `entity_resolution_candidates`
+Scored candidate links. Up to 25 per mention.
+
+| Column | Description |
+|---|---|
+| `mention_id` | FK → `source_mentions.id` |
+| `candidate_source_table` | Target table (`unified_record`) |
+| `candidate_record_id` | Target record identifier |
+| `candidate_name` | Name of the candidate record |
+| `candidate_place` | Place of the candidate record |
+| `candidate_year` | Year of the candidate record |
+| `score` | Composite score (0.0–1.0) |
+| `label` | `CONFIRMED_MATCH` / `POSSIBLE_MATCH` / `WEAK_CANDIDATE` / `NO_MATCH` |
+| `evidence_json` | Signals that support the match |
+| `conflicts_json` | Signals where evidence contradicts |
+| `missing_evidence_json` | Signals that could not be evaluated |
+| `review_required` | 1 if flagged for human review |
+
+#### `workhouse_unified_links`
+Final accepted workhouse→estate record links (140 CONFIRMED_MATCH).
+
+#### `entity_resolution_decisions`
+Full audit trail of human review decisions.
+
+#### `match_review`
+Uncertain townland-pair review queue. Holds pairs of townland rows with similar names that the ingest pipeline could not automatically reconcile, pending a human reviewer decision. CRUD in `match_review_repository.py`.
+
+### 4.5 GraphRAG Tables
+
+Built by `scripts/build_graph.py`. Loaded at runtime into a NetworkX process-lifetime graph.
+
+#### `graph_nodes` (49,081 rows)
+
+| Column | Description |
+|---|---|
+| `node_id` | TEXT PK — unique node identifier |
+| `label` | Node type: `Person` / `Townland` / `Event` / `Ship` |
+| `name` | Display name of the node |
+| `props` | JSON blob of node properties |
+| `community` | Community/cluster label from graph partitioning |
+| `embedding` | BLOB — 1024-dim BGE-large float32 embedding (28,078 nodes have this) |
+
+#### `graph_edges` (64,308 rows)
+
+Primary key is composite `(src, dst, rel_type)` — no separate integer `id` column.
+
+| Column | Description |
+|---|---|
+| `src` | FK → `graph_nodes.node_id` |
+| `dst` | FK → `graph_nodes.node_id` |
+| `rel_type` | `EMIGRATED_FROM` / `LIVES_IN` / `EVICTED_FROM` / `SAME_AS` / `BELONGS_TO` |
+| `props` | JSON blob of edge properties |
 
 ---
 
-## 5. Application Factory & Configuration
+## 5. Application Factory and Configuration
 
-### Application Factory (`create_app.py`)
-
-The Flask application is instantiated through the factory pattern. `create_app()` is the only function that registers blueprints, ensuring testability and environment-specific configuration.
+### 5.1 Bootstrap Sequence
 
 ```python
-def create_app(config_class=None):
-    app = Flask(__name__, template_folder="frontend/templates",
-                static_folder="frontend/static")
-    config_class = config_class or ActiveConfig
-    app.config.from_object(config_class)
+# app.py
+from create_app import create_app
+app = create_app()
+app.run(host="0.0.0.0", port=5001, debug=True)
 
-    init_db(config_class.DATABASE_PATH)
-    ensure_schema()
-
-    # Blueprint registration
-    app.register_blueprint(main_bp)
-    app.register_blueprint(census_bp,   url_prefix="/api/census")
-    app.register_blueprint(unified_bp,  url_prefix="/api/unified")
-    app.register_blueprint(map_bp,      url_prefix="/api/map")
-    app.register_blueprint(townlands_bp,url_prefix="/api/townlands")
-    app.register_blueprint(exports_bp,  url_prefix="/api/exports")
-    app.register_blueprint(ask_bp,      url_prefix="/api/ask")
-    app.register_blueprint(kg_explore_bp, url_prefix="/api/kg")
-    _register_legacy_routes(app)
+# create_app.py
+def create_app() -> Flask:
+    app = Flask(...)
+    app.config.from_object(ActiveConfig)    # from config.py
+    init_db(app)                            # ensure_schema() → all 17 tables
+    init_limiter(app)                       # flask-limiter
+    register_blueprints(app)               # 8 blueprints
     return app
 ```
 
-### Configuration Hierarchy (`config.py`)
+### 5.2 Configuration Hierarchy
 
 ```
-Config (base)
-├── DevelopmentConfig   (DEBUG=True, CENSUS_STALE_AFTER_DAYS=7)
-└── ProductionConfig    (DEBUG=False, CENSUS_STALE_AFTER_DAYS=1)
+config.py::Config         ← base defaults
+  ↑ DevelopmentConfig     ← DEBUG=True, LOG_LEVEL=DEBUG
+  ↑ ProductionConfig      ← DEBUG=False, CENSUS_STALE=1 day
+
+ActiveConfig = ProductionConfig   (when FLASK_ENV != "development")
 ```
 
-`ActiveConfig` is resolved at import time from `FLASK_ENV` and consumed by all modules via `from config import ActiveConfig`. All tunable values live here — no scattered constants.
+All tunable values in `Config`. Environment variables override defaults. The `FLASK_ENV` defaults to production when unset — Azure deployments are safe without explicit configuration.
 
-Key configuration values:
+### 5.3 DB Singleton (`extensions.py`)
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `SECRET_KEY` | `dev-secret-…` | Flask session security |
-| `DATABASE_PATH` | `project_root/coolattin.db` | SQLite file path |
-| `VRTI_SPARQL_ENDPOINT` | VRTI production URL | External KG queries |
-| `VRTI_REQUEST_TIMEOUT` | 30s | SPARQL query timeout |
-| `GRAPHDB_SPARQL_ENDPOINT` | `localhost:7200/…/coolattin` | Local GraphDB |
-| `GRAPHDB_ENABLED` | `true` | Enable/disable GraphDB |
-| `GRAPHDB_REQUEST_TIMEOUT` | 15s | GraphDB query timeout |
-| `CENSUS_STALE_AFTER_DAYS` | 7 (dev) / 1 (prod) | Cache TTL |
-| `EXPORTS_DIR` | `project_root/exports/` | PDF + Excel output |
-| `SEND_FILE_MAX_AGE_DEFAULT` | 86400 (24h) | Browser cache for static assets |
+```python
+from extensions import get_db_conn
 
-LLM configuration (environment variables only):
+conn = get_db_conn()    # WAL mode, foreign_keys=ON, Row factory
+```
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `ASK_LLM_PROVIDER` | `auto` | `auto` \| `openrouter` \| `ollama` |
-| `OPENROUTER_API_KEY` | (required) | API authentication |
-| `OPENROUTER_MODEL` | `openai/gpt-oss-20b:free` | Primary model |
-| `OLLAMA_BASE_URL` | `localhost:11434` | Local Ollama server |
-| `OLLAMA_MODEL` | configurable | Local model name |
+`ensure_schema()` is idempotent — runs on every startup, creates missing tables, adds missing columns via `ALTER TABLE`, never drops data.
 
 ---
 
 ## 6. Data Ingestion Pipeline
 
-### Overview
+### 6.1 How Ingest Works
 
-Data flows from three primary sources into the SQLite database through dedicated ingest jobs:
+Ingest is batch and one-shot — not at request time. The application serves from the local SQLite database; the VRTI endpoint is queried only during ingest (and for per-question live enrichment on the Ask page, which is cached).
 
 ```
-Estate GeoJSON  ──────┐
-                       ├──→  full_ingest.py  ──→  SQLite (townland, census, clearances)
-VRTI KG (SPARQL) ─────┘
-
-unified_processed.csv  ──→  ask_service.py  ──→  SQLite (unified_record, temp)
-
-scripts/rdf_uplift.py  ──→  data/coolattin_sample.ttl  ──→  GraphDB (143,123 triples)
+Trigger: POST /api/census/refresh  (or /ingest slash command)
+  → refresh_service.trigger_refresh()
+  → full_ingest.run()
+       ├─ townlands_ingest.run()  → reads townlands.json + VRTI SPARQL → townland table
+       └─ census_ingest.run()    → VRTI SPARQL → census_record table
 ```
 
-### Full Ingest (`backend/jobs/full_ingest.py`)
+### 6.2 Townland Name Normalisation
 
-`run_full_ingest()` is the primary data pipeline. It runs on first startup and can be re-triggered manually.
+The central data integration challenge. Spelling variants across sources:
+- `"Ballinacor"`, `"Ballinacor North"`, `"BALLINACOR"` → canonical `"BALLINACOR NORTH"`
+- `"Aghowle Lower"`, `"Aghowle"`, `"AGHOWLE"` → canonical `"AGHOWLE LOWER"`
 
-**Stage 1 — GeoJSON processing:**
-Reads `frontend/static/data/townlands.json` (estate-specific GeoJSON with 152 townlands). For each feature, it extracts:
-- Canonical name + Irish name
-- Estate TD_ID and GUID
-- Area in square metres
-- Population surveys for years: 1827, 1839, 1848, 1850, 1860, 1868
-- Per-year clearances counts for 1847–1856
+`townland_service.normalize_townland_name()` applies:
+1. Uppercase
+2. Strip punctuation and diacritics
+3. Lookup in `townland_aliases.json` (manually curated alias map)
+4. Fuzzy match fallback (token_set_ratio ≥ 80 via rapidfuzz)
 
-**Stage 2 — VRTI KG enrichment:**
-For each townland identified in Stage 1, the ingest calls `vrti_sparql.fetch_townlands()` and `vrti_sparql.fetch_census_records()`. The SPARQL queries retrieve:
-- WKT boundary geometry (polygon) + centroid coordinates
-- Civil parish, barony, county hierarchy
-- External identifiers: OSM ID, OSI ID, VRTI ID
-- Image URLs and external links
-- Standard census data: 1841, 1851, 1861, 1871, 1881, 1891 (male, female, inhabited/uninhabited houses)
+Unresolved cases are written to `data/source_snapshots/reconciliation_gaps.csv`.
 
-**Stage 3 — Persistence:**
-All data is upserted into `townland`, `census_record`, and `clearances_record` tables via the repository layer. The `refresh_state` table is updated with timestamp and record count.
+### 6.3 DB-First, KG-Second Pattern
 
-**Output stats (current):**
-- 152 estate townlands processed from GeoJSON
-- 4,225 townlands in reference table (from VRTI)
-- 8,033 census records (12 years × 1,319 townlands)
-- 1,211 clearances records (10 years × 122 townlands)
+```
+Request comes in
+    ↓
+Is data in local DB? → Yes, is it fresh? → Yes → Serve from DB (< 1 ms)
+                                          → No  → Serve from DB + refresh in background
+                      → No → Call VRTI KG → Save to DB → Serve result
+                                          (if VRTI is down → serve from seed CSV)
+```
 
-### Census Ingest (`backend/jobs/census_ingest.py`)
-
-`run_census_ingest(year=None)` performs incremental updates. If `year` is specified, only that year's data is re-fetched from VRTI; otherwise all years are refreshed.
-
-### Unified Record Seeding
-
-The 13,707 unified estate records (stored in `unified_processed.csv`) are loaded into a SQLite temporary table at Ask page startup by `ask_service._ensure_unified_table_seeded()`. This is not a persistent table — it is created fresh each server start from the CSV, which is checked into the git repository as the canonical data source.
+A direct VRTI SPARQL call takes 500 ms–2 s. A local SQLite query takes < 1 ms. Users get a fast, consistent experience regardless of VRTI's availability.
 
 ---
 
-## 7. Feature: Unified Estate Records Search
+## 7. Feature: Interactive Map
 
-### Route
-`GET /` (home page) + `GET /api/unified/records`
+**Page:** `/`  
+**Frontend:** `main.js`, `map.js`  
+**Data:** `GET /api/townlands/geojson` + `GET /api/map/layers`
 
-### What It Does
-The primary search interface over all 13,707 unified estate records. Users can filter by surname, forename, townland, year, and estate. Results include all metadata: family composition, land holdings, emigration/eviction/tenancy flags, relationships, occupations, and original source references.
+The landing page is a **choropleth map** rendered by Leaflet.js. Each of the 152 Coolattin Estate townlands is drawn as a GeoJSON polygon, with colour intensity representing the selected data layer.
 
-### Implementation
+### Data Layers
+- Population (estate survey years: 1827, 1839, 1848, 1850, 1860, 1868)
+- Evictions/clearances per year (1847–1856)
+- Emigration count per townland (from `unified_record`)
 
-**`backend/services/unified_service.py`**
+### Performance Optimisation
+GeoJSON and unified data are loaded in **parallel** on page load (`Promise.all`), cutting the initial load wait roughly in half. The townland catalog for the Ask page dropdown is also pre-loaded on page load — no per-keystroke round-trips.
 
-The CSV is loaded once per process into a pandas DataFrame (`_UNIFIED_CACHE`). Subsequent requests are served entirely from memory, making search sub-millisecond.
+### Click Interaction
+Clicking a townland polygon opens a sidebar showing:
+- Townland name (English + Irish)
+- Civil parish and barony
+- Population data for selected year
+- VRTI external links (logainm.ie, townlands.ie)
+
+---
+
+## 8. Feature: Census Explorer
+
+**Page:** `/census`  
+**Frontend:** `census.js`  
+**Data:** `GET /api/census/townlands`, `GET /api/census/townland/<name>`
+
+A year slider moves from 1827 to 1891. The choropleth updates as population rises and falls across the estate's 152 townlands.
+
+### Dual-Source Challenge
+
+Estate surveys (1827, 1839, 1848, 1850, 1860, 1868) record **total population only** — no male/female breakdown, no house counts. National censuses (1841, 1851, 1861, 1871, 1881, 1891) record **males, females, inhabited houses, uninhabited houses** separately.
+
+Both source types are stored in `census_record`. The `source` column distinguishes them. The census page handles both formats:
+- For estate survey years: renders total bar only
+- For national census years: renders male/female split + house count
+
+### Data Sources for Census
+- **1827–1868 estate surveys:** from `townlands.json` GeoJSON properties (`T_POP_1827`, etc.)
+- **1841–1891 national censuses:** from VRTI SPARQL (pulled during ingest, stored in `census_record`)
+- **Fallback:** `unified_census.csv` seed (165 townlands × 6 national census years)
+
+---
+
+## 9. Feature: Unified Estate Records Search
+
+**Page:** Accessible via the Ask page and unified API  
+**API:** `GET /api/unified/records`, `GET /api/unified/person/<id>`  
+**Service:** `unified_service.py`
+
+Full-text search over the 13,707 estate person records. Supports filtering by:
+- Free-text name search (across `canonical_name`, `forename`, `surname`)
+- Townland filter
+- Record type (`has_emigration_record`, `has_eviction_record`, `has_tenancy_record`)
+- Year range
+
+### Person Detail Enrichment
+
+`GET /api/unified/person/<id>` returns a single record enriched with:
+- Workhouse entity resolution results from `workhouse_unified_links`
+- Identity disambiguation from `identity_resolver.py`
+- Related family members (same `family_key`)
+- VRTI townland metadata
+
+The response includes `linked_workhouse_records`, `possible_workhouse_matches`, `please_check_records`, `identity_is_ambiguous`, and `supporting_evidence` / `conflicting_evidence` arrays.
+
+---
+
+## 10. Feature: Analytics Dashboard
+
+**Page:** `/analytics`  
+**Frontend:** `analytics.js`  
+**Route:** `GET /analytics?d=<module_slug>` (server-rendered; no separate JSON API)
+
+### Pluggable Module Architecture
+
+Each analytics view is a self-contained module implementing the `AnalyticsModule` protocol from `analytics/base.py`:
 
 ```python
-def search_records(surname=None, forename=None, townland=None,
-                   year=None, estate=None, limit=200):
-    df = get_unified()          # cached pandas DataFrame
-    mask = pd.Series([True] * len(df))
-    if surname:
-        mask &= df["surname"].str.upper().str.contains(surname.upper())
-    if townland:
-        mask &= df["townland_norm"].str.contains(normalize(townland), na=False)
-    # ... additional filters ...
-    return df[mask].head(limit).to_dict("records")
+class AnalyticsModule(Protocol):
+    name: str
+    slug: str
+    description: str
+    def get_kpis(self) -> list[KPI]: ...
+    def get_charts(self) -> list[Chart]: ...
 ```
 
-**Frontend (`frontend/static/js/main.js`)**
+Adding a new analytics view = creating one new file in `analytics/`. Nothing else changes. The `analytics/registry.py` auto-discovers all modules in the directory.
 
-The search form submits to `/api/unified/records`. Results render in a paginated table. Each row is clickable to open a detail modal showing all 60+ fields, including:
-- Family key (groups household members)
-- Workhouse match confidence (fuzzy-matched from workhouse register)
-- Primary event type badge (Emigration / Eviction / Tenancy)
+### Registered Modules
 
-**Record Type Distribution:**
-| Event Type | Records | Notes |
-|------------|---------|-------|
-| Emigration | 6,016 | Fitzwilliam-sponsored, mainly to Quebec/Toronto |
-| Eviction | 4,108 | Court sessions and estate clearances |
-| Tenancy | 5,247 | Landholding relationships |
-| Total | 13,707 | Some records have multiple flags |
+| Module | Slug | Dataset |
+|---|---|---|
+| Emigrations | `emigrations` | `unified_record` (emigration rows) |
+| Evictions | `evictions` | `clearances_record` |
+| Tenancies | `tenancies` | `unified_record` (tenancy rows) |
+| Unified Dataset | `unified` | All of `unified_record` |
+| Workhouse Links | `workhouse` | `workhouse_unified_links` |
+| Townland Geography | `townland_geo` | `townland` + `census_record` |
+
+### Chart Rendering
+
+Charts use Chart.js rendered via `analytics.js`. KPI cards show with trend indicators. Each module defines its own chart types (`bar`, `line`, `doughnut`).
 
 ---
 
-## 8. Feature: Interactive Map
+## 11. Feature: Heritage Landscape Layer
 
-### Route
-`GET /census` (census page includes map)  
-`GET /api/map/layers` — basemap tile layer definitions  
-`GET /api/centroids` — townland centroid coordinates  
+**Page:** `/heritage`  
+**Frontend:** `heritage.js`  
+**Data:** `frontend/static/data/*.geojson` (served as static files)
 
-### What It Does
-A Leaflet.js interactive map displaying townland boundaries from the estate GeoJSON, with colour-coded choropleth overlays showing census population, eviction intensity, or emigration rates. Users can click a townland to see a detail panel with all census years and clearances data.
+An overlay of archaeological monuments and holy wells from the **National Monuments Service** open data, rendered on a Wicklow base map via Leaflet.js.
 
-### Implementation
+### Data Sources (all static GeoJSON)
+- `holywells_wicklow.geojson` — holy wells in County Wicklow
+- `monuments_wicklow.geojson` — national monuments
+- `asi_wicklow.geojson` — Architectural Survey of Ireland (ASI)
 
-**`backend/services/map_service.py`**
-
-`get_layer_config()` returns four basemap options:
-1. **Standard** — OpenStreetMap tiles
-2. **Satellite** — Esri World Imagery
-3. **Terrain** — OpenTopoMap
-4. **Historic OSM** — historical.openstreetmap.org (optional)
-
-`build_centroids()` reads the `townland` table and returns `{name: [lat, lon]}` — used to place clickable markers on the map.
-
-**`frontend/static/data/townlands.json`**
-
-The estate GeoJSON file (152 townland polygons) is served as a static file with a 24-hour browser cache. The file includes all boundary coordinates plus the per-year population surveys and clearances data embedded as feature properties.
-
-**Leaflet.js Layer Control**
-
-The frontend uses Leaflet's native layer control to switch between basemaps and toggle overlays (estate boundaries, historical sites). Boundary fill colour is computed client-side from census population or clearances data embedded in GeoJSON properties.
+### Features
+- Filter panel by monument type (holy well / monument / earthwork / fort)
+- Click to open detail popup (name, type, description, grid reference)
+- Toggle layers on/off independently
 
 ---
 
-## 9. Feature: Census Explorer
+## 12. Feature: Natural-Language Ask — Seven-Phase LLM Pipeline
 
-### Routes
+**Page:** `/ask`  
+**Frontend:** `ask.js` (SSE consumer)  
+**Entry point:** `POST /api/ask/query` → `ask_service.py::_orchestrated_pipeline_stream()`
+
+The Ask page is the system's most technically sophisticated component — 10,192 lines of Python implementing a seven-phase orchestrated pipeline. The pipeline is designed so that the **LLM never generates numbers** — all aggregates come from deterministic SQL, and the LLM rewrites the result for readability.
+
+### 12.1 Pipeline Philosophy
+
+| Principle | Implementation |
+|---|---|
+| Deterministic first | 4 fast lanes before any LLM call |
+| LLM for structure, not facts | Slot-fill JSON → compiler → SQL (never LLM SQL in ANALYTICAL path) |
+| Transparent | Every stage emits an SSE event; SQL is shown to the user |
+| Graceful degradation | VRTI down? Skip enrichment. LLM down? Return raw SQL result |
+| Provenance-annotated | `query_provenance.strategy` tells user exactly how the answer was produced |
+
+### 12.2 Pre-Flight (< 5 ms, no LLM)
+
 ```
-GET  /census                    → census.html
-GET  /api/census/               → paginated census records
-GET  /api/census/townland?name= → full history for one townland
-GET  /api/census/summary        → aggregate stats by year
-POST /api/census/refresh        → force KG re-ingestion
-GET  /api/census/export/latest  → latest export info
-POST /api/census/export/regenerate → regenerate Excel
-```
+_resolve_townland_context(question, townland_hint)
+  → Tokenise question, remove stopwords
+  → Exact → fuzzy (token_set_ratio ≥ 80) → hint override
+  → Result: {name, sql_id, kg_uri, warning}
 
-### What It Does
-The census explorer shows population data for Coolattin Estate townlands across twelve survey years (1827–1891). Users can filter by year, townland, or barony, and see the population trajectory — the dramatic decline from pre-Famine to post-Famine years is directly visible in the data.
+_analyse_question(question)
+  → year regex, surname regex, radius regex
+  → keyword matching against 14 metric sets (METRIC_REGISTRY)
+  → Result: {primary_intent, output_mode, scope, year, surname, ...}
 
-### DB-First / KG-Second Caching Strategy
-
-This is the canonical implementation of the application's caching pattern:
-
-```
-Request arrives
-    │
-    ▼
-Check refresh_state table:
-    │   is last_synced_at within TTL?
-    │
-    ├─ YES (fresh) ──→ query census_record table ──→ return {cache_status: "hit"}
-    │
-    ├─ YES (stale) ──→ return DB data + queue background refresh
-    │                           {cache_status: "stale_refresh"}
-    │
-    └─ NO (miss)  ──→ query VRTI SPARQL ──→ persist to DB
-                     ──→ generate Excel ──→ return fresh data
-                           {cache_status: "miss", source: "kg_refresh"}
+_question_data_coverage_warnings(question)
+  → Result: [] or ["Census data begins at 1841", ...]
 ```
 
-The TTL is 7 days in development and 1 day in production, configurable via `CENSUS_STALE_AFTER_DAYS`.
+### 12.3 Four Fast Lanes
 
-**Response Envelope:**
+First match short-circuits all downstream phases. These lanes answer ~100% of standard analytical questions with zero LLM SQL calls (confirmed by the 75-question evaluation).
+
+| Lane | Mechanism | Confidence threshold | LLM? |
+|---|---|---|---|
+| Lane 1 | Rule-based slot-fill (14 metrics) | ≥ 0.80 | 0 |
+| Lane 2 | Verified template (81 pre-written SQL; 15 in VERIFIED_ANALYSIS_TEMPLATE_IDS) | 1.0 | 0 |
+| Lane 3 | Direct memory reuse (thumbs-up approved) | token_sort_ratio + cosine ≥ 0.55 | 0 |
+| Lane 4 | Embedding template (TF-IDF + RRF) | cosine ≥ 0.68 | 0 |
+
+### 12.4 Intent Classification (Phase 5)
+
+If no fast lane fires, `intent_router.classify_intent()` classifies the question:
+
+| Intent | Key signals | Route |
+|---|---|---|
+| COMPARATIVE | "compare", "versus", "vs", "difference between", "higher than" | Both SQL + subgraph in parallel |
+| RELATIONAL | "which parish", "in the barony", "heritage", "history of", "about the estate" | Subgraph engine + GraphRAG |
+| ANALYTICAL | `primary_intent`, `output_mode=count/aggregate`, analytical keywords | Semantic layer → deterministic SQL |
+| FALLBACK | Default | LLM free-form SQL generation |
+
+**Core Rule 1 override:** heritage/sensemaking keywords alone + count/aggregate output → classified as ANALYTICAL, not RELATIONAL.
+
+### 12.5 SQL Safety Guardrail
+
+Every SQL query (from any source) passes through:
+```python
+FORBIDDEN_SQL = re.compile(
+    r'\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|ATTACH|DETACH|'
+    r'PRAGMA|REINDEX|VACUUM|TRUNCATE|REPLACE)\b', re.IGNORECASE
+)
+# Also: must start with SELECT or WITH
+```
+LLM-generated SQL that fails this check raises `ValueError` and the error is returned to the user.
+
+### 12.6 Feedback Loop
+
+Every Ask answer has thumbs-up / thumbs-down buttons. A thumbs-up saves the question→SQL pair to `ask_query_memory`. Future similar questions hit Fast Lane 3 (direct memory reuse) or Fast Lane 4 (embedding retrieval). Over time, the validated query library grows without any manual curation.
+
+### 12.7 SSE Streaming
+
+Each pipeline stage emits a progress event. The user sees the pipeline working in real time:
+```json
+{"type": "progress", "stage": "classifying_intent", "status": "completed", "detail": "ANALYTICAL", "duration_ms": 12}
+```
+The final event has `"type": "result"` with the complete answer payload (see §20 for full schema).
+
+---
+
+## 13. Feature: In-Process GraphRAG Engine
+
+**Module:** `backend/services/graphrag.py` (573 lines)  
+**Tables:** `graph_nodes` (49,081), `graph_edges` (64,308)  
+**Build script:** `scripts/build_graph.py`
+
+The GraphRAG engine provides subgraph enrichment for RELATIONAL and COMPARATIVE questions. It runs entirely in-process — no external graph server required. The graph is stored in SQLite and loaded into a NetworkX `MultiDiGraph` at startup.
+
+### 13.1 Graph Construction
+
+`scripts/build_graph.py`:
+1. Reads all tables from `coolattin.db`
+2. Creates nodes: `Person` (unique people), `Townland` (152), `Event` (emigrations, evictions), `Ship`
+3. Creates edges: `EMIGRATED_FROM`, `LIVES_IN`, `EVICTED_FROM`, `SAME_AS`, `BELONGS_TO`
+4. Embeds node "passports" (name + type + key properties as prose) using BAAI/bge-large-en-v1.5 → 1024-dim float32
+5. Writes to `graph_nodes` (49,081 rows) and `graph_edges` (64,308 rows)
+
+28,078 nodes have BGE passport embeddings (those with sufficient text content).
+
+### 13.2 Vector Seed
+
+```python
+graphrag.vector_seed(question, top_k=8)
+  → Embed question → cosine ANN over 28,078 passport vectors
+  → Returns: top-k node_ids as BFS starting points
+```
+
+On Azure (where `sentence-transformers` is excluded from the build), `voyage_embeddings.py` provides equivalent 1024-dim embeddings via the Voyage AI API.
+
+### 13.3 Subgraph Retrieval
+
+```python
+graphrag.retrieve_subgraph(question, intent, entity_hints, k_hops=2)
+  1. vector_seed(question, top_k=8) → seed nodes
+  2. Add nodes from entity_hints (resolved townland/person IDs)
+  3. BFS from each seed, k=2 hops, following all edge types
+  4. Prune to GRAPHRAG_MAX_NODES=120 by PageRank score
+  5. Linearise: convert subgraph to compact triple table
+  6. Attach community summary blurb (data/seed/community_summaries.json — JSON keyed by townland name)
+  7. Return: GraphRAGResult{nodes, edges, linearized_text, provenance_path}
+```
+
+Provenance path logged in the SSE result: `"vector_seed(8) → k-hop BFS → 47 triples"`.
+
+### 13.4 Key Design Rules
+
+- GraphRAG enrichment is **additive only** — SQL aggregates are never modified
+- If the graph is empty or unavailable, the pipeline answers from SQL only (no failure)
+- The linearised subgraph is passed to the LLM to *read* context — not to answer count questions
+
+### 13.5 Evaluation
+
+9 R-series + multi-hop cases tested:
+- Numeric delta = 0 for all 9 cases (acceptance gate passed — SQL counts unchanged)
+- Avg provenance usefulness: 4.4/5 auto-scored
+- p90 latency overhead (ON − OFF): +46 ms (warm BGE)
+
+---
+
+## 14. Feature: Multi-Model LLM Synthesis Chain
+
+Every Ask response ends with an LLM rewrite of the SQL result into readable prose. A four-provider chain ensures the pipeline works with or without paid API keys, and offline.
+
+### 14.1 Provider Chain
+
+```
+[1] Claude (Anthropic)   claude-3-5-haiku-20241022
+    Key: ANTHROPIC_API_KEY
+    Guard: LLM_ALLOW_PAID=true (default true)
+
+[2] Grok (xAI)           grok-3-mini-beta
+    Key: GROK_API_KEY
+    Guard: LLM_ALLOW_PAID=true
+
+[3] OpenRouter           openai/gpt-oss-20b:free (configurable)
+    Key: OPENROUTER_API_KEY
+    Timeout: connect 10 s, request 80 s
+
+[4] Ollama local         auto-detected model
+    URL: http://localhost:11434
+    No key required — fully offline
+```
+
+Each provider is tried in order. Failure at any point triggers the next silently. If the entire chain fails, the raw SQL result is returned with a note.
+
+### 14.2 What the LLM Receives
+
+The synthesis prompt contains:
+- System persona: "digital historian specialising in 19th century Irish social history"
+- Instruction: answer only from the provided data, cite sources, do not introduce numbers not in the data
+- First 20 rows of SQL result in compact format
+- VRTI context (parish, barony, county, centroid)
+- GraphRAG linearised subgraph (if RELATIONAL or COMPARATIVE)
+- Original user question
+
+### 14.3 Answer Validation
+
+Before the LLM answer is included in the SSE result:
+- If the LLM introduces a number not present in the SQL rows → `actual_answer` used instead
+- If the response is empty or malformed → `actual_answer` used
+
+This ensures hallucinated numbers never reach the user.
+
+---
+
+## 15. Feature: KG Explore — SQL vs SPARQL Comparison
+
+**Page:** `/kg-explore`  
+**Frontend:** `kg_explore.js` (D3.js)  
+**API:** `/api/kg/graph`, `/api/kg/scenarios`, `/api/kg/compare`
+
+Built for dissertation deliverable D8 (RQ6). Demonstrates side-by-side SQL and SPARQL results for the same historical question.
+
+### 15.1 D3.js Force Graph
+
+`GET /api/kg/graph` returns 152 townland nodes with geographic hierarchy edges (townland → parish → barony). The D3 force simulation renders a navigable knowledge graph where clicking a node shows its properties.
+
+### 15.2 SQL vs SPARQL Comparison
+
+`POST /api/kg/compare`:
+1. Runs the SQL query against `coolattin.db`
+2. Runs the SPARQL query against GraphDB at `http://localhost:7200/repositories/coolattin`
+3. Returns both result sets, their execution times, and any numeric discrepancies
+
+### 15.3 The co: Ontology
+
+The local GraphDB repository uses the Coolattin ontology (`https://coolattin.ie/ontology#`, prefix `co:`). The `semantic_layer.compile_sparql(slot_fill)` function generates SPARQL from the same `SlotFill` struct that produces SQL — making the comparison directly equivalent.
+
+**Current state:** The `co:` repository is provisioned and the comparison framework is fully operational. The local repository is not yet populated with data (`scripts/rdf_uplift.py` generates Turtle but the load step is pending). SPARQL queries return 0/empty (open-world assumption).
+
+### 15.4 Four Canned Scenarios
+
+| Scenario | SQL source | SPARQL target |
+|---|---|---|
+| `emigration_count_by_townland` | `unified_record` COUNT | `co:emigrationCount` property |
+| `eviction_count_by_year` | `clearances_record` | `co:clearanceCount` |
+| `surname_frequency` | `unified_record` GROUP BY | `co:person rdfs:label` frequency |
+| `person_event_detail` | `unified_record` JOIN | `co:Event` triple pattern |
+
+---
+
+## 16. Feature: Workhouse Entity Resolution
+
+**Module:** `backend/services/workhouse_entity_resolution.py` + `entity_resolution/` subpackage  
+**Tables:** `source_mentions`, `entity_resolution_candidates`, `workhouse_unified_links`, `entity_resolution_decisions`  
+**Run:** `python scripts/link_workhouse_records.py`
+
+A dedicated entity-resolution subsystem that links workhouse admission records to unified estate records. Separate from the Ask pipeline because it is a record-linkage problem (explicit, reviewable candidate links with transparent scores) rather than a semantic retrieval problem.
+
+### 16.1 Pipeline
+
+```
+Step 1  Load workhouse data
+        workhouse_service.get_workhouse()
+        → reads workhouse_data_final.xlsx (two sheets, ~500 rows)
+
+Step 2  Normalise each mention
+        normalise.normalise_person_fields(raw_name)
+        • Unicode NFKD → uppercase
+        • Remove editorial annotations ([?], [illegible], (Sic))
+        • Expand abbreviations: JNO→JOHN, WM→WILLIAM, JAS→JAMES, THOS→THOMAS,
+          RD→RICHARD, EDWD→EDWARD, SAML→SAMUEL, ELIZH→ELIZABETH, MARGT→MARGARET
+        • Normalise Mc/Mac/O variants
+        • jellyfish.metaphone() phonetic encoding
+
+Step 3  Build unified index
+        build_unified_index()
+        → 13,707 unified_record rows, first blocking pass by place
+
+Step 4  Generate candidates
+        candidates.generate_candidates(mention, unified_index)
+        → up to 25 ranked candidates per mention
+        → blocking: exact name, surname+initial, phonetic, place+name, fuzzy, year ±1
+
+Step 5  Score candidates (7-signal, 60-point scale)
+Step 6  Assign confidence bands
+Step 7  Persist to 4 SQLite tables
+Step 8  Review queue (match_review_repository.py)
+```
+
+### 16.2 Scoring
+
+| Signal | Max pts | Rule |
+|---|---|---|
+| Full name similarity (token_sort_ratio) | 10 | ≥90%→10; ≥75%→7; ≥60%→4; else→0 |
+| Exact surname | 10 | Exact→10; Metaphone→7; else→0 |
+| Forename | 10 | Missing→5 (neutral); exact→10; ≥80%→7; ≥60%→4; conflict→0 |
+| Townland normalisation | 10 | Exact→10; variant→6; else→0 |
+| Birth-year alignment | 5 | Gap≤3y→5; ≤8y→3; else→0 |
+| Gender | 10 | Both missing→5; match→10; mismatch→0 |
+| Timeline alignment | 5 | Age-progression consistency |
+| **TOTAL** | **60** | Normalised to 0.0–1.0 |
+
+### 16.3 Confidence Bands
+
+| Band | Score | Action |
+|---|---|---|
+| `CONFIRMED_MATCH` | ≥ 0.75 | Auto-accepted; → `workhouse_unified_links` |
+| `POSSIBLE_MATCH` | 0.50–0.74 | Flagged for human review |
+| `WEAK_CANDIDATE` | < 0.50 | Requires explicit review |
+| `NO_MATCH` | — | Hard negative rule or all signals missing |
+
+### 16.4 Result
+
+**140 confirmed links** (CONFIRMED_MATCH ≥ 0.75) persisted in the seed DB. Visible in the person detail endpoint and surfaced in the unified search API response.
+
+### 16.5 Worked Example
+
+**Workhouse mention:** "Jno Murphy, Aghowle, 1851, age 35, male"  
+**Candidate:** "John Murphy, AGHOWLE LOWER, 1851, age 37, male"
+
+| Signal | Score |
+|---|---|
+| Full name similarity: token_sort_ratio("JOHN MURPHY","JOHN MURPHY")=100% | 10 |
+| Exact surname: "MURPHY"="MURPHY" | 10 |
+| Forename: "JNO"→"JOHN"="JOHN" | 10 |
+| Townland: "AGHOWLE" variant → "AGHOWLE LOWER" | 6 |
+| Birth-year: \|1851-35 – 1851-37\| = 2 yrs ≤ 3 | 5 |
+| Gender: male=male | 10 |
+| Timeline: consistent | 5 |
+| **Total: 56/60 = 0.93 → CONFIRMED_MATCH** | |
+
+---
+
+## 17. Feature: PDF Export
+
+**Endpoint:** `GET /api/ask/pdf/<filename>`  
+**Generator:** `_write_pdf_report()` in `ask_service.py`  
+**Format:** Hand-written PDF 1.4 (no external library)
+
+Every Ask response generates a PDF report in `exports/ask/ask_report_{UTC}.pdf` containing:
+- Original question
+- SQL query (if show_sql=true)
+- Answer text (LLM-rephrased)
+- Data table (first 50 rows)
+- VRTI context (townland, parish, barony)
+- Timestamp and provenance notes
+
+### Why Hand-Written PDF
+
+PDF 1.4 is ultimately a structured text format. Writing it by hand avoids a dependency on `reportlab`, `fpdf`, or `weasyprint` — all of which add significant overhead or have complex install requirements on Azure. The hand-written generator implements only the features needed (text, tables, basic layout) and is completely self-contained.
+
+### Security
+
+Filenames are validated before serving: only files in `exports/ask/` matching the pattern `ask_report_*.pdf` are served. Path traversal prevention is enforced.
+
+---
+
+## 18. Feature: Excel Export
+
+**Endpoint:** `GET /api/exports/census`  
+**Generator:** `export_service.py` via `openpyxl`
+
+Downloads census data as an Excel workbook (`.xlsx`). Columns: townland, year, population, males, females, inhabited houses, uninhabited houses, source. Used by researchers who want the raw data in spreadsheet form.
+
+---
+
+## 19. Feature: Internationalisation (English / Irish)
+
+**Module:** `frontend/static/js/i18n.js`  
+**Toggled:** Language switch button in the navbar
+
+All UI labels are available in both English and Irish Gaelic. `i18n.js` holds the translation dictionary and applies translations to elements with `data-i18n` attributes on toggle. Map polygon labels show both `TL_ENGLISH` and `TL_GAEILGE` from the GeoJSON properties.
+
+---
+
+## 20. API Reference — All Endpoints
+
+### Page Routes
+
+| Route | Method | Returns |
+|---|---|---|
+| `/` | GET | Home (map) HTML |
+| `/census` | GET | Census explorer HTML |
+| `/ask` | GET | Ask page HTML |
+| `/analytics` | GET | Analytics dashboard HTML |
+| `/heritage` | GET | Heritage landscape HTML |
+| `/about` | GET | About page HTML |
+| `/info` | GET | Technical info HTML |
+| `/kg-explore` | GET | KG compare page HTML |
+
+### Ask API (`/api/ask/`)
+
+| Route | Method | Description |
+|---|---|---|
+| `/api/ask/query` | POST | SSE stream — main Ask pipeline. Body: `{question, townland_hint, show_sql}` |
+| `/api/ask/feedback` | POST | Save feedback. Body: `{question, sql, feedback}` |
+| `/api/ask/llm-status` | GET | LLM health check. Returns `{available, provider, model}` |
+| `/api/ask/pdf/<name>` | GET | Download PDF report |
+| `/api/ask/audit-log` | GET | Recent audit log (ADMIN_API_KEY required) |
+
+### Census API (`/api/census/`)
+
+| Route | Method | Description |
+|---|---|---|
+| `/api/census/townlands` | GET | All census data (all townlands, all years) |
+| `/api/census/summary` | GET | Estate-wide totals per year |
+| `/api/census/townland/<name>` | GET | Census data for one townland |
+| `/api/census/refresh` | POST | Trigger VRTI refresh (admin) |
+
+### Unified Records API (`/api/unified/`)
+
+| Route | Method | Description |
+|---|---|---|
+| `/api/unified/records` | GET | Paginated search. Params: `q`, `townland`, `page`, `per_page` |
+| `/api/unified/stats` | GET | Dataset statistics |
+| `/api/unified/townlands` | GET | Townlands with record counts |
+| `/api/unified/surnames` | GET | Surname frequency table |
+| `/api/unified/person/<id>` | GET | Person detail + workhouse enrichment |
+
+### Townlands API (`/api/townlands/`)
+
+| Route | Method | Description |
+|---|---|---|
+| `/api/townlands` | GET | All townlands (name, id, parish, barony) |
+| `/api/townlands/<name>/detail` | GET | Townland detail: census + clearances + VRTI |
+| `/api/townlands/geojson` | GET | Full GeoJSON for map rendering |
+
+### KG Explore API (`/api/kg/`)
+
+| Route | Method | Description |
+|---|---|---|
+| `/api/kg/graph` | GET | D3.js force graph JSON |
+| `/api/kg/scenarios` | GET | 4 canned comparison scenarios |
+| `/api/kg/compare` | POST | Execute SQL + SPARQL, return side-by-side |
+
+### Ask SSE Result Schema
+
+The final `type: "result"` event payload:
+
 ```json
 {
-  "data": [{ "townland": "Aghowle", "year": 1841, "total": 312, "male": 158, "female": 154 }],
-  "meta": {
-    "source": "database",
-    "cache_status": "hit",
-    "generated_at": "2026-05-18T12:00:00Z",
-    "record_count": 8033,
-    "export_file": "exports/census_wicklow_all_20260518.xlsx"
+  "type": "result",
+  "question": "string",
+  "answer": "string",
+  "llm_rephrased_answer": "string",
+  "columns": ["string"],
+  "rows": [["value"]],
+  "row_count": 0,
+  "sql": "string",
+  "chart": {"type": "bar|line", "labels": [], "datasets": []},
+  "vrti_context": {"townlands": [], "parish_count": 0},
+  "graphrag_context": {"nodes": 0, "edges": 0, "linearized_text": "", "provenance_path": ""},
+  "fusion": {"discrepancy_count": 0, "agreement_count": 0, "fusion_text": ""},
+  "discrepancies": [],
+  "warnings": [],
+  "identity_disambiguation": "string",
+  "pdf_url": "string",
+  "availability": {"has_local_data": true, "has_vrti_data": true},
+  "related_insights": ["string"],
+  "query_provenance": {
+    "strategy": "rule_fill | verified_analysis | memory_reuse | template_embedding | slot_fill_llm | llm_sql | subgraph | comparative",
+    "used_approved_memory": false,
+    "direct_memory_reuse": false,
+    "execution_mode": "executed_as_generated | repaired | fallback"
+  },
+  "llm_meta": {
+    "provider": "anthropic | grok | openrouter | ollama | verified_analysis | rule_fill",
+    "model": "string",
+    "mode": "analytical_semantic | relational_subgraph | comparative | fallback"
   }
 }
 ```
 
 ---
 
-## 10. Feature: Analytics Dashboard
+## 21. Frontend Architecture
 
-### Route
-`GET /analytics`
+### 21.1 Template Structure
 
-### What It Does
-A pluggable analytics dashboard showing KPIs and charts for each dataset (emigrations, evictions, tenancies, townland geography, unified overview). Each panel shows key performance indicators and interactive Chart.js visualisations.
-
-### Pluggable Module Architecture
-
-The analytics system is designed for extensibility. Every analytics dataset is an independent Python module following the `AnalyticsModule` Protocol defined in `analytics/base.py`.
-
-**Protocol definition:**
-```python
-class AnalyticsModule(Protocol):
-    dataset_id:   str
-    dataset_name: str
-    description:  str
-
-    def compute(self) -> AnalyticsResult: ...
+```
+frontend/templates/
+  base.html         ← shared layout (navbar, footer, CSS/JS imports)
+  index.html        ← extends base.html, {% block content %}
+  census.html
+  ask.html
+  analytics.html
+  heritage.html
+  about.html
+  info.html
+  kg_explore.html
 ```
 
-**Adding a new analytics module** requires only:
-1. Creating `analytics/my_dataset.py` with a `MODULE` object
-2. No registration step — `analytics/registry.py` auto-discovers via `importlib`
+### 21.2 JavaScript — One File Per Page
 
-**Currently auto-discovered modules:**
+| File | Page | Key patterns |
+|---|---|---|
+| `main.js` | Home / Map | Leaflet choropleth, GeoJSON, layer switching |
+| `map.js` | (shared) | Shared Leaflet helpers, polygon utilities |
+| `census.js` | Census | Year slider, sidebar chart, townland click |
+| `ask.js` | Ask | EventSource SSE consumer, progressive rendering, Chart.js |
+| `analytics.js` | Analytics | Module tabs, KPI cards, Chart.js |
+| `heritage.js` | Heritage | Monument overlay, filter panel |
+| `kg_explore.js` | KG Explore | D3 force graph, comparison panel |
+| `i18n.js` | All | English/Irish toggle |
+| `marked.min.js` | Ask | Markdown rendering for LLM answers |
 
-| Module File | Dataset ID | Key KPIs / Charts |
-|-------------|------------|-------------------|
-| `emigrations.py` | `emigration_stats` | Total emigrants, year breakdown, top townlands, Canada vs other |
-| `evictions.py` | `evictions_stats` | Total evictions, per-year trend, clearances breakdown |
-| `tenancies.py` | `tenancy_stats` | Tenancy records, family size distribution, holding acres |
-| `townland_geo.py` | `townland_geography` | Townland count, area distribution, parish breakdown |
-| `unified.py` | `unified_overview` | Total records, surname frequency, coverage metrics |
+### 21.3 Why No Frontend Framework
 
-**KPI and Chart dataclasses:**
-```python
-@dataclass
-class KPI:
-    label: str
-    value: str | int | float
-    hint:  str | None = None
+Eight pages with independent functionality. A JavaScript framework (React, Vue) would add:
+- A build step
+- A dependency manager
+- Component lifecycle concepts
+- Hundreds of kB of library code
 
-@dataclass
-class Chart:
-    chart_id: str
-    title:    str
-    type:     Literal["bar", "line", "doughnut"]
-    data:     dict        # Chart.js data format
-    options:  dict | None = None
-```
+None of these trade-offs are worth it for this use case. The `EventSource` SSE consumer in `ask.js` is cleaner without a framework. The code is readable by anyone who knows JavaScript.
 
 ---
 
-## 11. Feature: Historic Landscape / Heritage Layer
+## 22. Security Architecture
 
-### Route
-`GET /heritage`
+### 22.1 SQL Injection
 
-### What It Does
-A dedicated map view showing archaeological and heritage features across the Coolattin Estate area — holy wells, ring forts, historic sites from the Archaeological Survey of Ireland, and historical landscape overlays.
+All SQL in `backend/repositories/` uses parameterised queries (`?` placeholders). The `_sanitize_and_validate_sql()` guardrail in `ask_service.py` blocks all write operations in LLM-generated SQL. No SQL is constructed via string concatenation in route handlers.
 
-### Implementation
+### 22.2 Admin Endpoint Protection
 
-**`frontend/static/js/heritage.js`**
+The `ADMIN_API_KEY` environment variable gates access to:
+- `GET /api/ask/audit-log`
+- `POST /api/exports/regenerate`
+- `POST /api/census/refresh`
 
-Loads multiple GeoJSON overlays from static files:
-- `holywells_wicklow.geojson` — Holy well sites
-- `asi_wicklow.geojson` — Archaeological Survey of Ireland features (ring forts, souterrains, etc.)
+Requests without the correct `X-Admin-Key` header receive 403.
 
-Each feature layer is independently togglable via Leaflet's layer control. Clicking a feature opens a popup with the feature's name, period, type, and OSI/ASI reference number.
+### 22.3 Rate Limiting
 
-**Heritage seeding for Ask page:**
+`flask-limiter` is initialised in `create_app.py`. The `/api/ask/query` endpoint is rate-limited to prevent LLM API abuse.
 
-`ask_service._ensure_heritage_feature_seeded()` creates temporary SQLite tables `holy_wells` and `ring_forts` from the same GeoJSON files. This allows the LLM to answer questions like "how many holy wells are within 5 km of Aghowle?" using SQL with a custom `distance_km()` SQLite function.
+### 22.4 Environment Safety
 
----
+`FLASK_ENV` defaults to `production` when unset. Azure deployments never accidentally enable debug mode even if the environment variable is not set explicitly.
 
-## 12. Feature: Natural-Language Ask (LLM Q&A)
+### 22.5 PDF Security
 
-### Route
-`POST /api/ask/query` (Server-Sent Events stream)
+PDF filenames are validated to prevent directory traversal. Only files in `exports/ask/` matching the expected pattern `ask_report_*.pdf` are served.
 
-### What It Does
-The Ask page accepts a free-text historical research question in English, processes it through a seven-phase orchestrated pipeline, and returns a precise, data-backed answer. The pipeline uses intent-first routing to select the most appropriate retrieval strategy: deterministic slot-fill compilation (ANALYTICAL), SPARQL graph traversal (RELATIONAL), or LLM-generated SQL (FALLBACK). The LLM is only invoked when deterministic paths have been exhausted.
+### 22.6 Audit Log
 
-**Entry point:** `_orchestrated_pipeline_stream()` in `ask_service.py` (enabled by `ASK_USE_NEW_PIPELINE=true`, default since June 2026)
-
-### Pipeline Architecture
-
-```
-Stage: resolving_identity    — Phase 1: townland fuzzy match + person disambiguation
-Stage: slot_filling          — Phase 2/FL1: semantic layer rule-based or LLM slot-fill
-Stage: schema_sql            — Phase 2: deterministic SQL compiler
-Stage: classifying_intent    — Phase 5: ANALYTICAL / RELATIONAL / COMPARATIVE / FALLBACK
-Stage: querying_subgraph     — Phase 3: VRTI SPARQL + GraphDB k-hop traversal (RELATIONAL)
-Stage: embedding_retrieval   — Phase 4: TF-IDF + RRF fast-lane search
-Stage: contacting_llm        — FALLBACK: LLM free-form SQL generation
-Stage: framing_query         — Safety guardrail (FORBIDDEN_SQL regex)
-Stage: querying_database     — SQLite execution with haversine distance_km()
-Stage: querying_vrti_graph   — VRTI SPARQL enrichment (1-hour TTL cache)
-Stage: querying_graphdb      — GraphDB SPARQL enrichment (co: ontology)
-Stage: querying_fusion       — Phase 6: discrepancy detection between sources
-Stage: synthesizing_answer   — Phase 7: LLM rewrite into historically-contextualised prose
-Stage: preparing_output      — PDF generation + chart spec assembly
-```
-
-SSE event format (each stage):
-```json
-{"type": "progress", "stage": "querying_database", "status": "completed", "detail": "47 rows returned", "duration_ms": 12}
-```
-
-Final event (`type: "result"`) includes: `answer`, `llm_rephrased_answer`, `columns`, `rows`, `sql`, `chart`, `vrti_context`, `fusion`, `discrepancies`, `pdf_url`, `query_provenance`, `llm_meta`.
-
-### Four Fast Lanes (before intent routing)
-
-The pipeline checks four short-circuit conditions before running full intent classification. First hit wins:
-
-1. **Rule-based slot-fill** (`semantic_layer.try_rule_based_fill`): 22 metrics, keyword matching, confidence scoring. If confidence ≥ 0.80 → compile SQL directly. **0 LLM calls, < 5 ms.**
-2. **Verified template** (`_try_verified_analysis`): 83 templates scored by required_keywords + optional_keywords. Match in VERIFIED_ANALYSIS_TEMPLATE_IDS → SQL, confidence 1.0.
-3. **Direct memory reuse**: approved `ask_query_memory` entries; `token_sort_ratio + cosine ≥ 0.55`.
-4. **Embedding fast lane** (`embedding_index.py`): TF-IDF unigram+bigram + RRF; cosine ≥ 0.68 AND all required_keywords present.
-
-### Intent Classification (Phase 5)
-
-`classify_intent()` in `intent_router.py` uses keyword-priority rules:
-- **COMPARATIVE** → ANALYTICAL (SQL) + RELATIONAL (SPARQL) in parallel
-- **RELATIONAL** → subgraph engine (VRTI SPARQL + GraphDB); place/heritage questions
-- **ANALYTICAL** → semantic layer slot-fill → deterministic SQL compiler
-- **FALLBACK** → LLM free-form SQL generation
-
-Core Rule 1: heritage/sensemaking keywords alone do not route to RELATIONAL if the question asks for a count/aggregate — stays on ANALYTICAL.
-
-### Semantic Layer — ANALYTICAL Lane (Phase 2)
-
-`semantic_layer.py` implements a 22-metric registry. Each metric defines:
-- SQL aggregate expression (`COUNT(DISTINCT record_id)`, `SUM()`, `AVG()`)
-- Dimension selects/group-bys for `GROUP BY` columns
-- Filter templates with `{val}` placeholders
-- SPARQL equivalent (`sparql_agg`) for GraphDB comparison
-
-Two slot-fill paths:
-- **Rule-based** (confidence ≥ 0.80): keyword matching → `SlotFill` struct → `compile_sql()` deterministic compiler
-- **LLM slot-fill** (confidence ≥ 0.70): LLM returns JSON `{metric, dimensions, filters, group_mode, confidence}` → `compile_sql()`
-
-`compile_sparql(slot_fill)` generates GraphDB SPARQL from the same SlotFill for RQ6 SQL-vs-SPARQL comparison.
-
-### Subgraph Engine — RELATIONAL Lane (Phase 3)
-
-`subgraph_engine.retrieve_subgraph(question, entity_uri, k=2)`:
-- VRTI: townland→parish→barony→county hierarchy; siblings; external links
-- GraphDB: `get_entity_neighborhood(name, k=2, max_nodes=40)` via co: ontology
-- Returns qualitative context only; exact counts always come from SQL
-
-### FALLBACK Lane — LLM SQL Generation
-
-When no fast lane fires and intent is FALLBACK, `_generate_sql()` is called:
-
-- Annotated schema: tables, columns, row counts, sampled categoricals, join rules
-- Approved examples: up to 3 similar question→SQL pairs from `ask_query_memory`
-- Safety: `FORBIDDEN_SQL` regex blocks INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/…
-- On execution error: 1 LLM repair attempt
-
-**LLM Provider Selection (`_llm_generate()`):**
-```
-ASK_LLM_PROVIDER=auto:
-  1. Check OPENROUTER_API_KEY → try OpenRouter (primary)
-  2. If OpenRouter fails → try next free model from _OPENROUTER_FREE_MODELS list
-  3. If all OpenRouter models fail → fall back to Ollama
-  4. If Ollama unreachable → return error
-```
-
-Free OpenRouter models tried in order:
-- openai/gpt-oss-20b:free
-- meta-llama/llama-3.3-70b-instruct:free
-- google/gemma-3-27b-it:free
-- deepseek/deepseek-r1-distill-llama-70b:free
-- (and ~10 more)
-
-### Stage 7: SQL Safety Guardrails
-
-Before any SQL is executed, `_is_safe_sql()` checks against a regex pattern that blocks all write operations:
-
-```python
-FORBIDDEN_SQL = re.compile(
-    r'\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|TRUNCATE'
-    r'|PRAGMA(?!\s+table_info)|ATTACH|DETACH|VACUUM|REINDEX)\b',
-    re.IGNORECASE
-)
-```
-
-Only `SELECT` and `WITH` (CTEs) are permitted.
-
-### Stage 8: VRTI Graph Enrichment
-
-Parallel to database execution, `_fetch_vrti_kg_context()` calls the VRTI SPARQL endpoint to enrich the answer with:
-- Civil parish and barony for the resolved townland
-- Historical population context (KG URI, VRTI identifiers)
-- Related townlands in the same parish
-
-This enrichment is used in the LLM rewrite prompt and displayed in the "Data Provenance" section of the Ask UI.
-
-### Stage 9: GraphDB SPARQL Query (D8 Prototype)
-
-When `GRAPHDB_ENABLED=true`, the pipeline also runs the equivalent SPARQL query against the local GraphDB instance (143,123 triples). This enables side-by-side comparison of SQL vs SPARQL results in the Ask page.
-
-**SPARQL generation uses three steps:**
-
-1. **Rule-based template matching** (`_match_sparql_template()`) — handles ~15 common question patterns with hard-coded, verified SPARQL
-2. **LLM generation** (if no template) — prompt includes the Coolattin RDF ontology schema and a `FORBIDDEN` properties list (SQLite column names that must never appear as RDF predicates)
-3. **Post-validation** (`_sparql_uses_forbidden_props()`) — if banned properties detected, fall back to template or generic listing
-
-**Mismatch explanation:** If SQLite and GraphDB return different result counts or values, `_explain_result_mismatch()` calls the LLM with both queries and result samples to generate a structured academic explanation of the discrepancy (closed-world vs open-world semantics, NULL handling differences, etc.).
-
-### Stage 10: LLM Rewrite
-
-`_generate_rephrased_answer()` takes the raw SQL result and rewrites it into 1–3 sentences of plain English. The prompt (`_build_rephrase_prompt()`) enforces:
-- Use ONLY supplied data (no hallucination)
-- Keep all numbers identical to actual results
-- For results with >10 rows: state count + 1–2 examples, do not enumerate all
-- No markdown, bullets, SQL, or preamble
-
-Individual cell values are pre-truncated to 300 characters before being sent to the LLM (`_build_llm_data_context._truncate_row()`), preventing prompt inflation from large list-type results.
-
-### Query Memory (Learning from Feedback)
-
-Users can rate answers with thumbs-up/down via `POST /api/ask/feedback`. Approved (thumbs-up) queries are stored in `ask_query_memory` with the SQL text, result summary, and confidence score.
-
-`_find_similar_approved_queries()` uses `_memory_similarity_score()` (trigram + SequenceMatcher hybrid) to find previously approved queries similar to the current question. These are injected into the LLM SQL prompt as examples, improving accuracy over time.
+All Ask requests are logged with question text (truncated), route taken, LLM provider, and latency. Accessible via the admin endpoint.
 
 ---
 
-## 13. Feature: Knowledge Graph Visualiser
+## 23. Performance Design and Caching
 
-### Route
-`GET /explore-knowledge` → `kg_explore.html`  
-`GET /api/kg/graph` → full graph topology  
-`GET /api/kg/townland/<name>` → person drill-down  
+### 23.1 DB-First Pattern
 
-### What It Does
-An interactive D3.js force-directed graph visualising the **entire Coolattin Estate database** as a knowledge graph. The graph represents all 13,707 estate records aggregated across 516 townlands, grouped under 20 civil parishes, and connected to event hubs (Emigration, Eviction, Tenancy), a Census Records data hub, and a Clearances data hub. Clicking any townland loads its individual person records on demand.
+VRTI SPARQL calls take 500 ms–2 s. SQLite queries take < 1 ms. All VRTI data is pulled once during ingest and served from SQLite at runtime. The live VRTI endpoint is called at runtime only for per-question Ask enrichment (optional, non-blocking, 1-h TTL cache).
 
-### Graph Architecture
+### 23.2 In-Process Caches
 
-**Node types:**
+| Cache | TTL | Contents |
+|---|---|---|
+| Townland catalog | 10 min | All canonical names |
+| VRTI parish data | 60 min per townland | VRTI enrichment per townland |
+| VRTI circuit breaker | 5 min cooldown | Down flag after timeout |
+| OpenRouter status | 60 s | Health check result |
+| Ollama model list | 120 s | Available models |
+| Schema descriptor | 5 min | Annotated schema for LLM prompts |
+| Query memory | 60 s | Approved SQL from thumbs-up |
+| Clearances schema | process lifetime | Column name variant |
+| Unified CSV | process lifetime | pandas DataFrame |
+| NetworkX graph | process lifetime | 49,081 nodes + 64,308 edges |
 
-| Type | Count | Visual | Size |
-|------|-------|--------|------|
-| EventHub | 3 | Fixed at canvas corners | 22px radius |
-| DataHub | 2 | Fixed at canvas corners | 18px radius |
-| Parish | 20 | Purple (#7c3aed) | 16px radius |
-| Townland | 516 | Colour = dominant event | 8–22px (scaled by records) |
+### 23.3 Parallel Loading
 
-**Edge types:**
+Map page: GeoJSON + unified data loaded in parallel (`Promise.all`). Ask page: townland catalog pre-loaded on page load.
 
-| Type | Count | Meaning |
-|------|-------|---------|
-| `parish_townland` | 178 | Parish contains Townland |
-| `townland_event` | 820 | Townland → EventHub (has events of type) |
-| `townland_census` | 147 | Townland → Census hub (has population data) |
-| `townland_clearances` | 109 | Townland → Clearances hub (has clearances data) |
-| **Total** | **1,254** | — |
+### 23.4 BGE Model Cold Start
 
-**Hub fixed positions** (D3 `fx/fy`):
-- Emigration hub: top-left (12% W, 18% H)
-- Eviction hub: top-right (88% W, 18% H)
-- Tenancy hub: bottom-centre (50% W, 88% H)
-- Census hub: bottom-left (12% W, 82% H)
-- Clearances hub: bottom-right (88% W, 82% H)
+The first GraphRAG request after process start triggers a BGE model load (~17 s on cold hardware). Subsequent requests use the cached model (< 1 ms). On Azure, Voyage AI is used instead (no model to load).
 
-**Townland node colour coding:**
-- Green (#15803d) — emigration-dominant (emigrant_count ≥ eviction_count AND ≥ tenancy_count)
-- Red (#b91c1c) — eviction-dominant
-- Blue (#1d4ed8) — tenancy-dominant
+### 23.5 SQLite WAL Mode
 
-**Townland node size scaling:**
-```javascript
-size = Math.min(8 + total_records / 30, 22)
-// Carnew (550 records) → size 22  
-// small townland (10 records) → size 8
-```
-
-### Backend: Graph Builder (`kg_service._build_graph_inner()`)
-
-The graph is built from four SQLite queries:
-
-**Query 1** — aggregated stats per townland:
-```sql
-SELECT townland,
-       COUNT(*)                      AS total_records,
-       SUM(has_emigration_record)    AS emigrant_count,
-       SUM(has_eviction_record)      AS eviction_count,
-       SUM(has_tenancy_record)       AS tenancy_count
-FROM unified_record
-WHERE townland IS NOT NULL AND townland != ''
-GROUP BY townland
-ORDER BY total_records DESC
-```
-
-**Query 2** — parish mapping (from unified_record.parish, filtering noise):
-Townland → parish from `unified_record.parish` (most common clean value per townland). Bad values filtered: `"?"`, slash-separated strings, "Co Wexford", "County Wexford", values under 3 characters.
-
-**Query 3** — fallback enrichment from townland table:
-For townlands not matched by Query 2, a UPPER-key lookup into the `townland` reference table provides `civil_parish`, `barony`, `county`.
-
-**Query 4 + 5** — census and clearances membership:
-`SELECT DISTINCT townland_id FROM census_record` and `clearances_record` are used to determine which townland nodes connect to the data hubs.
-
-The result is cached in `_GRAPH_CACHE` (process-level singleton) for the lifetime of the server process.
-
-### D3.js Force Simulation
-
-The simulation uses differentiated force parameters to create a semantically meaningful layout:
-
-```javascript
-d3.forceLink(edges)
-  .distance(e => {
-    parish_townland:    55,   // parishes close to their townlands
-    townland_event:    110,   // townlands pulled toward relevant hubs
-    townland_census:   130,   // data hubs at distance
-    townland_clearances: 130
-  })
-  .strength(e => {
-    parish_townland: 0.55,    // strong parish grouping
-    townland_event:  0.25,
-    default:         0.15
-  })
-
-d3.forceManyBody().strength(d => {
-  EventHub: -900,   // strong repulsion keeps hubs apart
-  DataHub:  -700,
-  Parish:   -350,
-  Townland:  -45    // mild repulsion between townlands
-})
-```
-
-`alphaDecay(0.022)` gives the simulation longer to settle, producing a cleaner final layout.
-
-### On-Demand Person Drill-Down
-
-Clicking a Townland node triggers `showTownlandDetail(d)`, which asynchronously calls:
-```
-GET /api/kg/townland/{name}
-```
-
-This route calls `kg_service.get_townland_persons(townland_name, limit=50)`, which returns up to 50 persons with name, year, event type, and occupation. The detail card shows:
-- Aggregated stats (emigrant/eviction/tenancy counts)
-- Parish, barony, county
-- Scrollable person list with event-type colour badges
+WAL mode allows concurrent reads during a write (ingest). The application is single-writer (ingest is batch, not concurrent), so WAL is used purely for read concurrency during the ingest window.
 
 ---
 
-## 14. Feature: GraphDB SPARQL Integration
+## 24. Deployment and CI/CD
 
-### Technical Background
+### 24.1 Azure App Service
 
-The Coolattin estate data was uplifted to RDF using a custom ontology and loaded into a local GraphDB 10.x instance. The repository contains **143,123 triples** covering:
-- `co:Person` instances (one per estate record)
-- `co:Event` instances (linked to persons via `co:hasEvent`)
-- `co:townland`, `co:year`, `co:eventType` properties
-- `schema:givenName`, `schema:familyName` (Schema.org vocabulary)
+- **Region:** Italy North
+- **Resource group:** `coolattin-rg2`
+- **App:** `coolattin-app.azurewebsites.net`
+- **Runtime:** Python 3.12 on Linux
+- **WSGI:** Gunicorn 4 gthread workers
+- **Startup:** `startup.sh` → `gunicorn "create_app:create_app()" --bind 0.0.0.0:8000 --worker-class gthread --threads 4`
 
-**Custom ontology prefixes:**
-```sparql
-PREFIX co:     <https://coolattin.ie/ontology#>
-PREFIX ex:     <https://coolattin.ie/resource/>
-PREFIX schema: <https://schema.org/>
+### 24.2 CI/CD Pipeline (`azure-deploy.yml`)
+
+GitHub Actions triggered on push to `main`:
+
+```
+1. Checkout → OIDC login to Azure (no long-lived secrets in GitHub)
+2. Swap requirements.txt → requirements-azure.txt
+   (removes torch, sentence-transformers — too large for Oryx build)
+3. Zip deploy artifact
+4. az webapp deploy (zip deploy)
+5. Oryx build inside the container (pip install)
+6. az webapp config set --startup-file startup.sh
 ```
 
-### GraphDB Client (`backend/integrations/graphdb_sparql.py`)
+### 24.3 Azure-Specific Configuration
 
-This is the **only module** that communicates with GraphDB. All other modules call `graphdb_sparql.query()` or `graphdb_sparql.probe()`.
+Because `torch` and `sentence-transformers` are excluded from the Azure build:
+- `EMBEDDING_PROVIDER=voyage` in production env vars → uses `voyageai.Client` for 1024-dim embeddings
+- `VOYAGE_API_KEY` must be set in Azure App Service configuration
+- `requirements-azure.txt` excludes the `torch`, `sentence-transformers`, `numpy` (bundled) stack
 
-**Critical implementation note — POST not GET:**
-The GraphDB instance stalls indefinitely on GET requests (connection starts but response never completes). All SPARQL queries use `POST` with `application/x-www-form-urlencoded` encoding per SPARQL 1.1 Protocol §2.1.3:
+### 24.4 Environment Variables on Azure
 
-```python
-resp = requests.post(
-    endpoint,
-    data={"query": full_query},
-    headers={
-        "Accept": "application/sparql-results+json",
-        "Content-Type": "application/x-www-form-urlencoded",
-    },
-    timeout=timeout,
-)
-```
+Set via Azure App Service "Configuration" → "Application settings":
+- `OPENROUTER_API_KEY` — required for cloud LLM
+- `ANTHROPIC_API_KEY` — Claude synthesis (first in chain)
+- `VOYAGE_API_KEY` — dense embeddings (Azure production)
+- `FLASK_ENV=production`
+- `EMBEDDING_PROVIDER=voyage`
+- `ADMIN_API_KEY` — admin endpoint guard
 
-**Probe mechanism (GraphDB REST /size):**
-`probe()` and `triple_count()` use the GraphDB REST `/size` endpoint instead of a SPARQL query. This returns a plain-text integer (triple count) instantly without SPARQL overhead and without the GET stalling issue:
+### 24.5 Demo Freeze
 
-```python
-def _size_endpoint() -> str:
-    return ActiveConfig.GRAPHDB_SPARQL_ENDPOINT.rstrip("/") + "/size"
-
-def probe() -> bool:
-    resp = requests.get(_size_endpoint(), timeout=5)
-    return resp.status_code == 200
-```
-
-**Safe fallback:** All GraphDB calls wrap exceptions and return `([], [])` on connection error, timeout, or any exception — the application degrades gracefully when GraphDB is unavailable.
-
-**Forbidden properties validation:**
-The LLM sometimes confuses SQLite column names with RDF predicates. `_SPARQL_FORBIDDEN_PROPS` contains banned property names (e.g., `co:hasEmigrationRecord`, `co:totalFamilySize`). `_sparql_uses_forbidden_props()` validates generated SPARQL before execution and triggers a fallback if banned properties are detected.
-
-### Comparison Scenarios
-
-Four pre-defined scenarios enable SQL vs SPARQL comparison in the KG Explore page:
-
-| Scenario | SQL | SPARQL | Key Difference |
-|----------|-----|--------|---------------|
-| Emigration by townland | `GROUP BY townland` in unified_record | `co:hasEvent` traversal → GROUP BY | SQL NULLs excluded by WHERE; SPARQL naturally excludes unbound |
-| Evictions per year | `WHERE has_eviction_record=1 AND year IS NOT NULL` | `?ev co:eventType "eviction"` | 4 NULL years cause SQL=38 rows if excluded vs SPARQL=38 rows always |
-| Top 10 surnames | `GROUP BY surname ORDER BY COUNT DESC` | `schema:familyName GROUP BY` | Usually identical — cleanest parity example |
-| Person + event detail | CASE WHEN for event_type | `?ev co:eventType` graph walk | Graph walk vs relational join pattern |
+Git tag `v1.0-demo-freeze` (2026-06-10) pins the evaluation state:
+- 75-question evaluation results in `eval_results/eval_graphrag_on.json`
+- GraphRAG enrichment evaluation in `eval/graphrag_enrichment_eval.py`
+- Canonical configuration documented in `docs/11_demo_freeze.md`
 
 ---
 
-## 15. Feature: PDF Export
-
-### Route
-`GET /api/ask/pdf/<filename>`
-
-### What It Does
-After every Ask pipeline run, a PDF report is generated and made available for download. The report includes the original question, the SQL query used, the data table, the LLM-rewritten natural-language answer, VRTI enrichment context, townland information, and LLM metadata.
-
-### Implementation
-
-The PDF is generated **without any PDF library** — it is hand-written binary PDF 1.4 format in `ask_service._write_pdf_report()`. This was a deliberate design decision to eliminate a large dependency and maintain full control over formatting.
-
-The PDF writer:
-1. Opens with PDF 1.4 header (`%PDF-1.4`)
-2. Writes a catalog, pages tree, and font object (Helvetica)
-3. Constructs a single content stream with `BT ... ET` text blocks
-4. Line-wraps text at 80 characters using `_wrap_line()`
-5. Stores XRef table and trailer
-
-**File naming convention:** `exports/ask/ask_report_YYYYMMDD_HHMMSS.pdf`
-
-**PDF content sections:**
-- Header: "Coolattin Archive – Ask Report" + UTC timestamp
-- Question (as submitted)
-- Actual data answer (raw SQL result summary)
-- LLM rephrased answer (natural language)
-- SQL LLM metadata (provider, model, mode)
-- Rewrite LLM metadata
-- SQLite SQL query text
-- Local results table (formatted, per-row)
-- VRTI graph context (townland URIs, parish, barony)
-- VRTI PostgreSQL SQL (if available)
-
----
-
-## 16. Feature: Excel Export
-
-### Routes
-```
-GET  /api/exports/census/latest      → latest export metadata
-GET  /api/exports/census/download    → download .xlsx file
-POST /api/census/export/regenerate   → regenerate from DB
-```
-
-### What It Does
-Census data can be exported as a structured Excel file using openpyxl. The export includes all census records with townland metadata, plus a separate metadata sheet documenting the source, query scope, and generation time.
-
-### Implementation (`backend/services/export_service.py`)
-
-`export_census(records, scope, extra_meta)` creates a workbook with two sheets:
-- **Data sheet:** columns = townland, year, male, female, total, inhabited, uninhabited, source, kg_uri
-- **Metadata sheet:** source, generated_at, query_scope, record_count, columns
-
-Files are saved to `exports/census_wicklow_<scope>_YYYYMMDD_HHMMSS.xlsx` and their path is stored in `refresh_state` for tracking.
-
----
-
-## 17. Feature: Workhouse Matching
-
-### Route
-`GET /api/workhouse/match/<record_id>`
-
-### What It Does
-Each unified estate record can be cross-referenced against workhouse admission and discharge registers. The matching algorithm attempts to identify the same person in both the estate records and workhouse registers, providing a richer picture of what happened to evicted or emigrating families.
-
-### Matching Algorithm (`backend/services/workhouse_service.py`)
-
-The algorithm uses a **place-first, date-windowed fuzzy matching** strategy:
-
-**Stage 1 — Place filtering:**
-Filter workhouse records where `electoral_division` matches the estate record's townland or parish name (normalised, case-insensitive).
-
-**Stage 2 — Date window:**
-Within place candidates, retain only records within ±1 year of the estate record's year.
-
-**Stage 3 — Name scoring:**
-Apply `difflib.SequenceMatcher` to the concatenated `forename + surname` strings.
-
-**Stage 4 — Occupation bonus:**
-If both records have occupations, check for shared keywords (labourer, farmer, servant, widow, etc.). Match → +0.05 bonus on score.
-
-**Confidence bands:**
-| Band | Criteria |
-|------|----------|
-| High | Place match AND date match AND score ≥ 0.80 |
-| Medium | (Place OR date match) AND score ≥ 0.60 |
-| Low | Score ≥ 0.60, no place or date match |
-
-**Fallback:** If no place+date candidates exist, score all workhouse records by name only (prevents zero results for records with unusual townlands).
-
-**Data source:** `frontend/static/data/workhouse_data_final.xlsx` — two sheets ("1-127" and "from 128") loaded once into pandas at startup.
-
----
-
-## 18. Feature: Internationalisation (English / Irish)
-
-### Implementation (`frontend/static/js/i18n.js`)
-
-The application supports two languages: English (default) and Irish (Gaeilge). A lightweight client-side i18n framework handles all translations without a server round-trip.
-
-**Mechanism:**
-- HTML elements with `data-i18n="key"` attribute are auto-translated on page load
-- `i18n.init(lang)` loads the translation dictionary for the selected language
-- `i18n.translate(key)` returns the translated string
-- Language toggle button in the navigation bar switches between EN/GA
-
-**Translation coverage:** All navigation items, section headings, CTA buttons, form labels, and key UI strings have Irish translations.
-
----
-
-## 19. API Reference
-
-### Page Routes (Blueprint: `main`)
-
-| Method | Path | Response |
-|--------|------|----------|
-| GET | `/` | index.html |
-| GET | `/about` | about.html |
-| GET | `/analytics` | analytics.html |
-| GET | `/census` | census.html |
-| GET | `/info` | info.html |
-| GET | `/ask` | ask.html |
-| GET | `/heritage` | heritage.html |
-| GET | `/explore-knowledge` | kg_explore.html |
-
-### Census API (`/api/census`)
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/` | Paginated census records with filters (`year`, `townland`, `barony`, `page`, `limit`) |
-| GET | `/records` | Backward-compat alias |
-| GET | `/townlands` | List of townlands with census data |
-| GET | `/summary` | Aggregate stats by year |
-| GET | `/townland?name=` | Full history for one townland |
-| POST | `/refresh` | Force KG re-ingestion |
-| GET | `/export/latest` | Latest export metadata |
-| POST | `/export/regenerate` | Re-generate Excel from DB |
-
-### Unified Records API (`/api/unified`)
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/records` | Search records (`surname`, `forename`, `townland`, `year`, `estate`, `limit`) |
-| GET | `/stats` | Record counts and field coverage |
-| GET | `/townlands` | Unique townlands with record counts |
-| GET | `/surnames` | Unique surnames with record counts |
-| GET | `/surname-suggest?q=` | Autocomplete surnames |
-
-### Ask API (`/api/ask`)
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/query` | SSE pipeline stream; body: `{question, townland_hint?, show_sql?, force_llm?}` |
-| POST | `/feedback` | Record thumbs-up/down with metadata |
-| GET | `/llm-status` | LLM health check |
-| GET | `/townland-suggest?q=` | Townland autocomplete |
-| GET | `/pdf/<filename>` | Download PDF report |
-
-### Knowledge Graph API (`/api/kg`)
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/graph` | Graph nodes + edges for D3.js |
-| GET | `/scenarios` | Canned SQL vs SPARQL comparison scenarios |
-| POST | `/compare` | Execute scenario or custom SQL/SPARQL |
-| POST | `/explain-mismatch` | LLM explanation of result differences |
-| GET | `/graphdb-status` | Live GraphDB connectivity check |
-| GET | `/townland/<name>` | Person records for a specific townland |
-| GET | `/rdf-status` | TTL file health + triple count |
-
-### Townlands API (`/api/townlands`)
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/` | All townlands (optional `?county=` filter) |
-| GET | `/wicklow` | Wicklow townlands |
-| POST | `/refresh` | Force KG refresh |
-
-### Map API (`/api/map`)
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/layers` | Basemap tile layer definitions |
-| GET | `/centroids` | Townland centroid coordinates |
-
-### Exports API (`/api/exports`)
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/census/latest` | Latest census export metadata |
-| GET | `/census/download` | Download .xlsx file |
-
----
-
-## 20. Frontend Architecture
-
-### Design Philosophy
-
-The frontend is written in **vanilla JavaScript with no framework** (no React, Vue, or Angular). This was a deliberate choice to:
-- Minimise dependency surface for long-term reproducibility
-- Keep the codebase simple and auditable for academic submission
-- Avoid build tooling (no webpack, no transpilation)
-- Ensure the application runs from `python app.py` with zero frontend build steps
-
-### JavaScript File Structure
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `ask.js` | ~530 | Ask page SSE stream consumer, result rendering, feedback |
-| `main.js` | ~800 | Home page records search, modal, workhouse, glossary |
-| `kg_explore.js` | ~360 | D3.js force simulation, node detail, search |
-| `heritage.js` | ~200 | Heritage layer Leaflet map |
-| `census.js` | ~300 | Census explorer map + sidebar |
-| `analytics.js` | ~150 | Analytics dashboard Chart.js rendering |
-| `i18n.js` | ~100 | EN/GA internationalisation |
-| `map.js` | ~150 | Basemap layer control |
-
-### ask.js: SSE Stream Consumption
-
-```javascript
-async function submitQuestion() {
-    const resp = await fetch("/api/ask/query", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ question, townland_hint, show_sql })
-    });
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const text = decoder.decode(value);
-        // Parse "data: {...}\n\n" lines
-        for (const line of text.split("\n")) {
-            if (line.startsWith("data: ")) {
-                const event = JSON.parse(line.slice(6));
-                handleStreamEvent(event);
-            }
-        }
-    }
-}
-```
-
-Each `handleStreamEvent()` call updates a specific UI section based on `event.type` (stage_update, complete, error).
-
-### renderTable() — Long Cell Value Handling
-
-A known issue in historical data: GROUP_CONCAT or aggregated queries can produce very long comma-separated cell values. `renderTable()` detects these and renders them as collapsible lists:
-
-```javascript
-function renderCell(val) {
-    const raw = String(val ?? "");
-    if (raw.length > 200 && raw.includes(",")) {
-        const parts = raw.split(",").map(s => s.trim()).filter(Boolean);
-        const preview = parts.slice(0, 5).map(escapeHtml).join(", ");
-        const rest = parts.length - 5;
-        return `<td>
-          <span>${preview}</span>
-          <span style="color:#94a3b8;">…and ${rest} more</span>
-          <details><summary>Show all ${parts.length}</summary>
-            <div>${parts.map(escapeHtml).join("<br>")}</div>
-          </details>
-        </td>`;
-    }
-    return `<td>${escapeHtml(raw)}</td>`;
-}
-```
-
-### Static File Caching
-
-All static files (GeoJSON, CSS, JavaScript) are served with a 24-hour `Cache-Control` header configured via `SEND_FILE_MAX_AGE_DEFAULT = 86400`. JavaScript files are cache-busted with `?v=N` query parameters in templates (e.g., `ask.js?v=14`).
-
----
-
-## 21. Security & Data Integrity
-
-### SQL Injection Prevention
-
-All user-provided values are passed as parameterised query arguments to SQLite (never string-interpolated). Additionally, the LLM-generated SQL is validated by a strict regex before execution:
-
-```python
-FORBIDDEN_SQL = re.compile(
-    r'\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|TRUNCATE'
-    r'|PRAGMA(?!\s+table_info)|ATTACH|DETACH|VACUUM|REINDEX)\b',
-    re.IGNORECASE
-)
-```
-
-Only `SELECT` statements and CTEs (`WITH ... SELECT`) pass the guardrail.
-
-### XSS Prevention
-
-All user-supplied values rendered in the frontend pass through `escapeHtml()`:
-```javascript
-function escapeHtml(s) {
-    return String(s ?? "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-}
-```
-
-All innerHTML assignments use only escaped values.
-
-### Read-Only Database Architecture
-
-The application has no routes that write to the database from user input. All writes happen through:
-- Ingest jobs (run manually or at startup)
-- Feedback recording (own table, no user-controlled columns)
-- Cache refresh (triggered explicitly, writes only to well-defined tables)
-
-### API Key Isolation
-
-`OPENROUTER_API_KEY` and other secrets are loaded from `.env.local` (gitignored). The `.env.example` file documents all required variables with safe placeholder values. No secrets appear in the codebase.
-
----
-
-## 22. Performance Design
-
-### Database-Level Optimisations
-
-| Optimisation | Implementation | Benefit |
-|-------------|----------------|---------|
-| WAL mode | `PRAGMA journal_mode=WAL` | Concurrent reads during writes |
-| Page cache | `PRAGMA cache_size=-65536` (64 MB) | Avoids repeated disk reads |
-| Memory-mapped I/O | `PRAGMA mmap_size=268435456` (256 MB) | OS-level page cache bypass |
-| Covering indexes | `(townland_id, year)` composite | Avoids table scans in census queries |
-| Temp in memory | `PRAGMA temp_store=2` | Sort + aggregate without temp files |
-
-### Application-Level Caching
-
-| Cache | Location | Mechanism | Contents |
-|-------|----------|-----------|---------|
-| Unified records | `unified_service._UNIFIED_CACHE` | Process-level variable | 13,707-row pandas DataFrame |
-| Centroids | `unified_service._CENTROIDS_CACHE` | Process-level variable | `{name: (lat, lon)}` dict |
-| Workhouse index | `workhouse_service._MATCH_INDEX` | Process-level variable | Place-first inverted index |
-| RDF graph | `kg_service._RDF_GRAPH` | Thread-locked singleton | rdflib Graph object |
-| KG topology | `kg_service._GRAPH_CACHE` | Thread-locked singleton | D3.js nodes+edges dict |
-| Census data | `refresh_state` + SQLite | DB-first with TTL | Paginated census results |
-
-### Template Matching (Fast Path)
-
-The most impactful performance optimisation for the Ask page: 100+ SQL templates matched by keyword scoring completely bypass the LLM. Response time without LLM: **< 100ms**. Response time with LLM: 3–15 seconds (dependent on provider). Template matching succeeds for ~60% of common research questions in testing.
-
-### Browser Caching
-
-Static files (GeoJSON, CSS, JS) are served with 24-hour `Cache-Control` max-age. The 6.2 MB `townlands.json` GeoJSON file is particularly important to cache — without it, every page load would cost significant bandwidth.
-
----
-
-## 23. RDF / Knowledge Graph Uplift Script
-
-### Script: `scripts/rdf_uplift.py`
-
-This script converts `unified_processed.csv` into a Turtle (`.ttl`) RDF file using a custom Coolattin ontology, and optionally loads it directly into GraphDB.
-
-**Usage:**
-```bash
-python3 scripts/rdf_uplift.py                   # Generate TTL only
-python3 scripts/rdf_uplift.py --import          # Generate + POST to GraphDB
-python3 scripts/rdf_uplift.py --limit 500       # Sample 500 rows (development)
-python3 scripts/rdf_uplift.py --repo my-repo    # Custom GraphDB repository name
-```
-
-**Output:** `data/coolattin_sample.ttl`
-
-### Ontology Design
-
-**Namespace prefixes:**
-```
-co:     https://coolattin.ie/ontology#    (Coolattin domain ontology)
-ex:     https://coolattin.ie/resource/    (instance URIs)
-schema: https://schema.org/               (standard person properties)
-xsd:    http://www.w3.org/2001/XMLSchema#
-rdf:    http://www.w3.org/1999/02/22-rdf-syntax-ns#
-rdfs:   http://www.w3.org/2000/01/rdf-schema#
-```
-
-**Classes:**
-- `co:Person` — estate record subject
-- `co:Event` — discrete event (emigration, eviction, or tenancy)
-
-**Properties:**
-- `schema:givenName`, `schema:familyName` — person name components
-- `co:townland` — townland name (string)
-- `co:estate` — estate name
-- `co:hasEvent` — person → event link
-- `co:forPerson` — event → person back-link
-- `co:eventType` — "emigration" | "eviction" | "tenancy"
-- `co:year` — year (xsd:integer)
-
-**Instance URI pattern:**
-- Person: `ex:person_{record_id}`
-- Event: `ex:event_{record_id}`
-
-**Current GraphDB load:** 143,123 triples (full dataset)
-
-**SPARQL verification example:**
-```sparql
-SELECT (COUNT(DISTINCT ?person) AS ?emigrantCount)
-WHERE {
-  ?person a co:Person ;
-          co:hasEvent ?event .
-  ?event co:eventType "emigration" .
-}
-# Returns: 6016 (matches SQLite: SELECT COUNT(*) WHERE has_emigration_record=1)
-```
-
----
-
-## 24. Deployment & Operations
-
-### Starting the Application
-
-```bash
-# 1. Create and activate virtual environment
-python3 -m venv venv && source venv/bin/activate
-
-# 2. Install dependencies (75 Python files; key: flask, requests, pandas, openpyxl, rdflib)
-pip install -r requirements.txt
-
-# 3. Configure environment
-cp .env.example .env.local
-# Set OPENROUTER_API_KEY for LLM features
-# Set GRAPHDB_ENABLED=false if not running GraphDB locally
-
-# 4. Start application
-python3 app.py
-# → http://127.0.0.1:5001
-```
-
-The database is created automatically on first run. To populate with live data:
-```bash
-python -m backend.jobs.full_ingest
-```
-
-### Starting GraphDB (local)
-
-GraphDB must be running on port 7200 with a repository named `coolattin`:
-```bash
-# Start GraphDB
-./graphdb-free/bin/graphdb &
-
-# Import TTL data (if not already loaded)
-python3 scripts/rdf_uplift.py --import
-```
-
-The application degrades gracefully if GraphDB is unavailable — all features work; only the SPARQL comparison column in Ask results is hidden.
-
-### Environment Variables (.env.local)
-
-```bash
-FLASK_ENV=development
-SECRET_KEY=your-secret-key-here
-OPENROUTER_API_KEY=sk-or-v1-...
-GRAPHDB_ENABLED=true
-GRAPHDB_SPARQL_ENDPOINT=http://localhost:7200/repositories/coolattin
-ASK_LLM_PROVIDER=auto
-```
-
-### Production Deployment
-
-```bash
-# Use gunicorn with multiple workers
-gunicorn --bind 0.0.0.0:5001 --workers 4 --timeout 120 app:app
-
-# Or with uvicorn + ASGI adapter (alternative)
-# Set FLASK_ENV=production in environment
-```
-
-**Production checklist:**
-- `SECRET_KEY` set to a strong random value
-- `FLASK_ENV=production` (disables DEBUG, tightens TTLs)
-- `DATABASE_PATH` pointing to a persistent volume
-- `EXPORTS_DIR` writable and persistent
-- GraphDB reachable and repository pre-loaded
-- `OPENROUTER_API_KEY` set
-
----
-
-## 25. Codebase Metrics
-
-### Size
+## 25. Evaluation Results
+
+### 25.1 Full Regression — 75 Competency Questions (2026-06-10)
+
+Run: `python3 -m backend.services.ask_eval --phase graphrag_on`
+
+| Metric | Result |
+|---|---|
+| Questions run | 75 |
+| Routing accuracy | **89.3%** |
+| Aggregation correctness | **100.0%** |
+| SQL execution success | **100.0%** |
+| Entity label accuracy | **100.0%** |
+| Template hit rate | **100.0%** |
+| Lane routing accuracy | 72.0% |
+| LLM SQL calls required | **0** |
+| p50 latency | 372 ms |
+| p90 latency | 2,095 ms |
+| p95 latency | 4,152 ms |
+
+All 75 questions answered via fast lanes or the semantic layer — the LLM was never invoked for SQL generation.
+
+**Known issues (non-blocking):**
+- Honest-refusal rate 0%: G-series out-of-scope questions answered by semantic layer (partial keyword matches). An explicit out-of-scope classifier would fix this.
+- Lane routing accuracy 72%: several questions correctly answered as ANALYTICAL but labelled RELATIONAL. SQL result is correct; only the intent label disagrees.
+
+### 25.2 GraphRAG Enrichment (OFF vs ON)
 
 | Metric | Value |
-|--------|-------|
-| Python files | 75 |
-| JavaScript files (static) | 11 |
-| HTML templates | 9 |
-| Lines in ask_service.py | 6,651 |
-| Functions in ask_service.py | 154 |
-| Total Python LOC (approx.) | ~12,000 |
-| Total JS LOC (approx.) | ~4,000 |
+|---|---|
+| Cases tested | 9 |
+| Numeric delta = 0 | 9/9 (100%) |
+| Avg auto-usefulness | 4.4/5 |
+| p90 latency overhead | +46 ms |
 
-### Data
+GraphRAG enrichment is purely additive — SQL aggregates unchanged.
 
-| Dataset | Records | Notes |
-|---------|---------|-------|
-| Estate records (unified_record) | 13,707 | Source: unified_processed.csv |
-| Townland references | 4,225 | Source: VRTI KG |
-| Census records | 8,033 | 12 years × 1,319 townlands |
-| Clearances records | 1,211 | 10 years × 122 townlands |
-| GraphDB triples | 143,123 | Full estate dataset in RDF |
-| Unique townlands (in estate records) | 516 | From unified_record |
-| Unique surnames | 977 | From unified_record |
-| Civil parishes (in reference) | 22 | From townland table |
+### 25.3 RQ6 SQL vs SPARQL
 
-### Coverage
-
-| Event Type | Records |
-|------------|---------|
-| Emigration | 6,016 (43.9%) |
-| Eviction | 4,108 (30.0%) |
-| Tenancy | 5,247 (38.3%) |
-| Note: some records have multiple flags | |
-
-Record years span 1841–1886, concentrated in 1847–1856 (Famine period).
+6 competency questions run; all SPARQL results return 0/empty (co: repository not loaded with data). The comparison framework is complete; data loading is the remaining gap.
 
 ---
 
-## Summary
+## 26. Codebase Metrics
 
-The Coolattin Estate Records Explorer is a comprehensive full-stack web application implementing the following distinct research and user-facing features:
-
-| # | Feature | Technologies |
-|---|---------|-------------|
-| 1 | Unified estate records search | pandas, SQLite, Jinja2 |
-| 2 | Interactive map with choropleth | Leaflet.js, GeoJSON, SQLite |
-| 3 | Census explorer (12 years) | SQLite, VRTI SPARQL, openpyxl |
-| 4 | Analytics dashboard (KPIs + charts) | Chart.js, pluggable module protocol |
-| 5 | Historic heritage landscape | Leaflet.js, GeoJSON overlays |
-| 6 | Natural-language Q&A (LLM) | OpenRouter, Ollama, SSE streaming |
-| 7 | SQL template matching (fast path) | difflib, 100+ templates |
-| 8 | VRTI Knowledge Graph enrichment | SPARQL, external endpoint |
-| 9 | GraphDB SPARQL integration | GraphDB 10, custom ontology |
-| 10 | SQL vs SPARQL comparison | rdflib, D3.js, LLM mismatch analysis |
-| 11 | Knowledge graph visualiser | D3.js v7 force simulation |
-| 12 | Townland drill-down (persons) | SQLite, async fetch |
-| 13 | PDF report generation | Hand-written PDF 1.4 |
-| 14 | Excel export | openpyxl |
-| 15 | Workhouse fuzzy matching | pandas, difflib, SequenceMatcher |
-| 16 | Feedback / query memory | SQLite, semantic similarity |
-| 17 | Townland autocomplete | fuzzy matching, alias resolution |
-| 18 | Internationalisation (EN/GA) | Vanilla JS i18n framework |
-| 19 | RDF uplift (CSV → TTL → GraphDB) | rdflib, custom co: ontology |
-| 20 | DB-first / KG-second caching | SQLite, SPARQL, TTL-based refresh |
-
----
-
----
-
-## 26. June 2026 Sprint — Orchestrated Pipeline and Identity Resolution
-
-This section records the significant additions made in the June 2026 development sprint (commits `661fcdf`, `3c3174d`, `4d18308`). See `docs/10_handoff_notes.md` for the full detailed handoff.
-
-### 26.1 Orchestrated 7-Phase Ask Pipeline
-
-The Ask pipeline was rewritten from a flat sequence into a routed, orchestrated architecture. `ASK_USE_NEW_PIPELINE=true` is the default as of 2 June 2026.
-
-| Phase | Module | What it does |
+| File | Lines | Role |
 |---|---|---|
-| 1 — Intent routing | `intent_router.py` | Classifies: ANALYTICAL / RELATIONAL / COMPARATIVE / FALLBACK |
-| 2 — Hybrid retrieval | `embedding_index.py` | TF-IDF + optional dense; RRF fusion; fast-lane short-circuit |
-| 3 — Semantic layer | `semantic_layer.py` | Slot-fill → deterministic SQL + SPARQL; no LLM on fast path |
-| 4 — Subgraph engine | `subgraph_engine.py` | KG traversal (VRTI + GraphDB) for relational questions |
-| 5 — LLM SQL gen | `ask_service.py` | Fallback only; annotated schema + few-shot examples |
-| 6 — Identity resolution | `identity_resolver.py` | Mention/Person/Factoid disambiguation; Jaro-Winkler + phonetic |
-| 7 — Synthesis | `ask_service.py` | Aggregate SQL + KG + chunks; discrepancy detection; provenance |
+| `ask_service.py` | 10,192 | 7-phase orchestrated LLM pipeline |
+| `semantic_layer.py` | 1,185 | Slot-fill compiler, deterministic SQL/SPARQL |
+| `extensions.py` | ~400 | DB singleton, schema, migrations |
+| `create_app.py` | ~200 | Application factory |
+| `graphrag.py` | 573 | In-process GraphRAG engine |
+| `workhouse_entity_resolution.py` | ~600 | ER pipeline orchestrator |
+| `embedding_index.py` | ~500 | Hybrid TF-IDF + dense retrieval |
+| `identity_resolver.py` | ~400 | Three-layer identity model |
+| `subgraph_engine.py` | ~520 | VRTI + GraphDB traversal |
+| `intent_router.py` | ~140 | Intent classification |
+| `config.py` | ~150 | Configuration |
 
-### 26.2 Workhouse Entity Resolution
-
-A separate ER subsystem (not part of the Ask pipeline) for linking workhouse records to estate records:
-- `workhouse_entity_resolution.py` — pipeline orchestrator
-- `entity_resolution/` — normalise, candidates, scoring subpackage
-- New tables: `source_mentions`, `entity_resolution_candidates`, `workhouse_unified_links`, `entity_resolution_decisions`, `match_review`
-- Confidence bands: High (≥0.75) / Medium (0.50–0.74) / Low (<0.50)
-
-### 26.3 Embeddings and Retrieval
-
-- `voyage_embeddings.py` — Cohere Embed v3 client (`embed-english-v3.0`, 1024-dim); asymmetric input_type
-- `local_embeddings.py` — BAAI/bge-large-en-v1.5 local model (no API key; CPU)
-- `ask_pgvector.py` — optional pgvector backend when `DATABASE_URL` (Postgres) is set
-- `retrieval_chunks.py` — chunk builders for person/place/event retrieval corpus
-
-### 26.4 New Config Variables
-
-`ASK_USE_NEW_PIPELINE`, `EMBEDDING_PROVIDER`, `COHERE_API_KEY`, `DATABASE_URL`, `GRAPHDB_ENABLED`, `GRAPHDB_SPARQL_ENDPOINT`, `GRAPHDB_REQUEST_TIMEOUT`
-
-### 26.5 Evaluation Infrastructure
-
-`ask_eval.py` (2125 lines) provides a full evaluation harness. Baselines captured in `backend/services/eval_results/` (phases 0–5+, pre/post fix comparisons).
-
----
-
-*Report generated: June 2026*  
-*Application version: as committed to main branch*
+**Total backend:** ~18,000 lines of Python  
+**Frontend JS:** ~3,500 lines  
+**Templates:** 9 HTML files  
+**DB tables:** 17  
+**Graph nodes:** 49,081  
+**Graph edges:** 64,308  
+**Evaluation questions:** 75 (A-series + R-series + C-series + G-series)  
+**Confirmed workhouse links:** 140

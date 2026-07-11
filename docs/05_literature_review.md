@@ -30,7 +30,7 @@ State-of-the-art performance on Spider as of 2024 exceeds 90% execution accuracy
 
 A complementary line of work favours template-based or rule-based SQL generation for high-stakes queries where LLM hallucination is unacceptable. Chakraborty et al. (2019) demonstrate that a relatively small library of parameterised SQL templates, matched to user questions by keyword scoring, can cover the majority of queries in a constrained domain. This approach trades recall (it cannot answer questions outside the template library) for precision (it is never wrong on questions it can answer).
 
-The Coolattin system adopts this hybrid architecture: a library of 83 verified SQL templates handles the domain-expert competency questions (where accuracy is paramount), and LLM SQL generation covers the long tail of arbitrary questions. This design is consistent with recommendations from Katsogiannis-Meimarakis and Koutrika (2021), who survey NL-to-SQL systems and conclude that template-based and neural approaches are complementary rather than competing.
+The Coolattin system adopts this hybrid architecture: a library of 81 verified SQL templates handles the domain-expert competency questions (where accuracy is paramount), and LLM SQL generation covers the long tail of arbitrary questions. This design is consistent with recommendations from Katsogiannis-Meimarakis and Koutrika (2021), who survey NL-to-SQL systems and conclude that template-based and neural approaches are complementary rather than competing.
 
 ### 2.3 Schema injection and prompt engineering for LLM SQL generation
 
@@ -220,7 +220,7 @@ No prior system combines all three for the Coolattin Estate or for any comparabl
 |---|---|---|
 | NL-to-SQL history | Woods (1973), Codd et al. (1974), Zhong et al. (2017), Yu et al. (2018) | Establishes the problem lineage; Spider/WikiSQL benchmarks used for evaluation context |
 | LLM-based NL-to-SQL | Guo et al. (2023), Pourreza and Rafiei (2023), Gao et al. (2023) | Schema injection, DIN-SQL decomposition, RAG-SQL — directly informs prompt design |
-| Template-based NL-to-SQL | Chakraborty et al. (2019), Katsogiannis-Meimarakis and Koutrika (2021) | Justification for the 83-template hybrid architecture |
+| Template-based NL-to-SQL | Chakraborty et al. (2019), Katsogiannis-Meimarakis and Koutrika (2021) | Justification for the 81-template hybrid architecture |
 | SQL repair | Chen et al. (2023) | Self-correction in `_execute_with_recovery` |
 | Query feedback loops | Cai et al. (2022) | `ask_query_memory` design |
 | SQL guardrails | Raj et al. (2023) | `FORBIDDEN_SQL` regex |

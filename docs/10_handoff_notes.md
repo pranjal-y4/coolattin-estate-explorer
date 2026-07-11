@@ -19,7 +19,7 @@ The Ask page pipeline was rewritten from a flat 7-step sequence into a fully orc
 |---|---|---|
 | Pre-flight | `ask_service.py` | 4 fast lanes checked in order: rule-fill (conf ≥ 0.80) → verified template → memory reuse (cosine ≥ 0.55) → embedding retrieval (cosine ≥ 0.68) |
 | 1 | `identity_resolver.py` | Resolve townland + person identity once; `sql_id` + `kg_uri` shared downstream |
-| 2 | `semantic_layer.py` | Slot-fill compiler → deterministic SQL + SPARQL; 22-metric registry; 0 LLM for rule-fill path |
+| 2 | `semantic_layer.py` | Slot-fill compiler → deterministic SQL + SPARQL; 14-metric registry; 0 LLM for rule-fill path |
 | 3 | `subgraph_engine.py` | KG traversal — VRTI multi-hop SPARQL + GraphDB k=2 neighbourhood expansion |
 | 4 | `embedding_index.py` | Hybrid TF-IDF + RRF; fast-lane threshold 0.68 for template short-circuit |
 | 5 | `intent_router.py` | Classifies question: ANALYTICAL / RELATIONAL / COMPARATIVE / FALLBACK (priority order) |

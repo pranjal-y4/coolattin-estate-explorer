@@ -397,8 +397,8 @@ Before any question is answered, two seeding operations run if not already done:
 
 ### Stage 2 — Four Fast Lanes (first match short-circuits all routing)
 
-1. **Rule-based slot-fill** (`semantic_layer.try_rule_based_fill`) — 22 metric keyword sets; confidence scoring starts at 1.0, penalised for competing metrics and no-filter queries. If confidence ≥ 0.80 → compile SQL directly. **0 LLM calls, < 5 ms.**
-2. **Verified template** (`_try_verified_analysis`) — 83 templates scored by `required_keywords` + `optional_keywords`. If match in `VERIFIED_ANALYSIS_TEMPLATE_IDS` → SQL, confidence 1.0.
+1. **Rule-based slot-fill** (`semantic_layer.try_rule_based_fill`) — 14 metric keyword sets; confidence scoring starts at 1.0, penalised for competing metrics and no-filter queries. If confidence ≥ 0.80 → compile SQL directly. **0 LLM calls, < 5 ms.**
+2. **Verified template** (`_try_verified_analysis`) — 81 templates scored by `required_keywords` + `optional_keywords`. If match in `VERIFIED_ANALYSIS_TEMPLATE_IDS` → SQL, confidence 1.0.
 3. **Direct memory reuse** — `ask_query_memory` (TTL 60 s cache); `token_sort_ratio + cosine ≥ 0.55` → reuse approved SQL.
 4. **Embedding fast lane** (`embedding_index.py`) — TF-IDF + RRF; cosine ≥ 0.68 AND all required_keywords present → template SQL.
 
@@ -413,7 +413,7 @@ Before any question is answered, two seeding operations run if not already done:
 ### Stage 4 — SQL Acquisition
 
 **ANALYTICAL lane (semantic_layer.py):**
-- 22-metric registry; each metric has SQL aggregate, dimensions, filter templates, and SPARQL equivalent
+- 14-metric registry; each metric has SQL aggregate, dimensions, filter templates, and SPARQL equivalent
 - Rule-fill path (confidence ≥ 0.80): direct `compile_sql(slot_fill)` — no LLM
 - LLM slot-fill path (confidence ≥ 0.70): LLM returns JSON `{metric, dimensions, filters}` → `compile_sql()`
 - `compile_sparql(slot_fill)` generates GraphDB SPARQL equivalent for RQ6 comparison
@@ -461,7 +461,7 @@ The `METRIC_REGISTRY` in `semantic_layer.py` covers these categories:
 
 All 15 domain-expert competency questions are covered by metrics in the registry. The semantic layer compiles both SQL and SPARQL from the same `SlotFill` struct, enabling the SQL-vs-SPARQL comparison for RQ6.
 
-**Verified templates (83 entries in `QUESTION_TEMPLATES`)** remain as the Fast Lane 2 path for exact keyword pattern matches. `VERIFIED_ANALYSIS_TEMPLATE_IDS` marks templates that are authoritative — the LLM path is never taken for them, and they include per-template `warning` strings surfaced to the user when data coverage is limited.
+**Verified templates (81 entries in `QUESTION_TEMPLATES`)** remain as the Fast Lane 2 path for exact keyword pattern matches. `VERIFIED_ANALYSIS_TEMPLATE_IDS` marks templates that are authoritative — the LLM path is never taken for them, and they include per-template `warning` strings surfaced to the user when data coverage is limited.
 
 ---
 
@@ -591,7 +591,7 @@ This is explicitly a **data warehouse pattern**: sources are uplifted into the s
 
 The Ask pipeline implements a seven-stage architecture:
 
-1. Template-first matching (83 verified templates, keyword scoring, O(n) over template list)
+1. Template-first matching (81 verified templates, keyword scoring, O(n) over template list)
 2. Fuzzy townland resolution (rapidfuzz, cached catalogue)
 3. LLM SQL generation with bounded schema injection (OpenRouter / Ollama fallback)
 4. Read-only SQL guardrail (regex-based forbidden-statement detection)
@@ -639,7 +639,7 @@ All source data, ingest scripts, schema, and query templates are version-control
 
 ## 3.5 One-paragraph summary for supervisor communication
 
-> This dissertation contributes (1) a reproducible data warehouse architecture integrating five heterogeneous Irish historical archival sources — estate GeoJSON, VRTI SPARQL KG, person-level CSV records, NMS heritage GeoJSON, and Townlands.ie reference — into a unified SQLite serving layer; (2) a seven-stage NL→SQL pipeline with template-first matching (83 verified templates), LLM fallback SQL generation via OpenRouter/Ollama, read-only guardrail, VRTI SPARQL enrichment, SSE streaming, and PDF export, evaluated against 15 domain-expert competency questions; and (3) the first publicly accessible integrated computational interface for the Coolattin Estate records, enabling genealogical and historical research that previously required bespoke programming.
+> This dissertation contributes (1) a reproducible data warehouse architecture integrating five heterogeneous Irish historical archival sources — estate GeoJSON, VRTI SPARQL KG, person-level CSV records, NMS heritage GeoJSON, and Townlands.ie reference — into a unified SQLite serving layer; (2) a seven-stage NL→SQL pipeline with template-first matching (81 verified templates), LLM fallback SQL generation via OpenRouter/Ollama, read-only guardrail, VRTI SPARQL enrichment, SSE streaming, and PDF export, evaluated against 15 domain-expert competency questions; and (3) the first publicly accessible integrated computational interface for the Coolattin Estate records, enabling genealogical and historical research that previously required bespoke programming.
 
 ---
 
