@@ -1,5 +1,9 @@
 # Coolattin Estate Records Explorer
 
+youtube - 
+app - 
+do let me know what you think about this - 
+
 An interactive web application for exploring historical records from the **Coolattin Estate** in County Wicklow, Ireland (mid-19th century). Built as a Masters Dissertation project.
 
 The application integrates tenancy, eviction, emigration, and census data from the [Virtual Record Treasury of Ireland (VRTI)](https://virtualtreasury.ie/) Knowledge Graph into a unified interface with an interactive map, analytics dashboards, and a natural-language Q&A system backed by an LLM.
