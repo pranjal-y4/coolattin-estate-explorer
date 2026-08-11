@@ -48,3 +48,6 @@ data/entity_index.pkl
 .idea/
 *.swp
 *.swo
+
+# ── Local database backups (not part of the submitted snapshot) ─────────────
+*.bak

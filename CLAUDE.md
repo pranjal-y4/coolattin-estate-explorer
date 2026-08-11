@@ -59,6 +59,7 @@ Coolattin-app/
 │   │   ├── map_service.py
 │   │   ├── refresh_service.py
 │   │   ├── townland_service.py
+│   │   ├── townland_resolution.py # Source townland → canonical entity ER flow (xref + provenance)
 │   │   ├── unified_service.py
 │   │   └── workhouse_service.py
 │   ├── repositories/       # All SQL queries (no raw SQL outside here)
@@ -70,6 +71,7 @@ Coolattin-app/
 │   │   └── townlands_reference.py
 │   └── jobs/               # One-shot ingest jobs (run manually or at startup)
 │       ├── full_ingest.py
+│       ├── source_townland_ingest.py  # Estate-record townland names → canonical entities
 │       ├── census_ingest.py
 │       └── townlands_ingest.py
 │
@@ -193,6 +195,15 @@ All routes then: safety check → SQLite execution → VRTI → Phase 3 subgraph
 SSE streaming: each phase yields `{type, stage, status, detail, duration_ms}` events. Do not buffer.
 PDF generation is hand-written (no reportlab/fpdf dependency), written to `exports/ask/`.
 
+**Townland entity resolution** (`backend/services/townland_resolution.py`) turns a source townland record into a canonical `townland` entity:
+
+- `resolve_source_townland(SourceTownland)` — normalise → xref replay / exact / alias (`data/seed/townland_aliases.json`, compound names in `townland_compound_map.json`) → blocked candidates → shared authority id → `townland_service.score_pair`/`decide_match` → merge, `match_review` pending, or new canonical
+- One source record = one transaction; idempotent on `(source, source_record_id)`
+- A name alone never merges, and an explicit county/barony/parish conflict blocks even an exact-name or authority-id match
+- Callers: `backend/jobs/full_ingest.py` (estate GeoJSON) and `backend/jobs/source_townland_ingest.py` (estate record place names, plus `--enrich-geometry` for VRTI boundaries)
+
+**Map data comes from the database.** `GET /static/data/townlands.json` is served by `create_app` from `map_service.build_townland_featurecollection()`: the estate GeoJSON is the geometry baseline, each feature is stamped with its canonical `entity_id`, and canonical townlands the database holds with geometry are appended. Never hard-code townlands in the frontend — ingest them.
+
 **Workhouse entity resolution** is a separate subsystem from the Ask pipeline:
 - `workhouse_entity_resolution.py` orchestrates mention building → candidate generation → scoring → persistence
 - `entity_resolution/` subpackage handles normalise, candidates, scoring
@@ -206,7 +217,7 @@ All tables created/migrated by `extensions.py::ensure_schema()`:
 | Table | Purpose |
 |---|---|
 | `townland` | Canonical townland reference — `entity_id` UUID + `name` (not UNIQUE) + `qualifier` |
-| `townland_xref` | Maps `(source, source_record_id)` → `entity_id`; multi-source cross-reference |
+| `townland_xref` | Maps `(source, source_record_id)` → `entity_id`; multi-source cross-reference. Also keeps `source_name` (observed spelling), `status`, `evidence_json`, `conflicts_json` |
 | `field_provenance` | Field-level survivorship: which source won each field value and why |
 | `census_record` | Population per townland × year (1841–1891 from KG, 1827–1868 from estate) |
 | `clearances_record` | Estate evictions per townland × year (1847–1856) |

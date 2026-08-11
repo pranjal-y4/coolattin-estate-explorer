@@ -1,0 +1,58 @@
+create_app.insecure_secret_key — SECRET_KEY is the default placeholder. Set a strong random value in the SECRET_KEY environment variable before deploying.
+INFO backend.services.unified_service unified_service.loaded | rows=13707
+INFO backend.services.townland_service townland_service.alias_map_loaded | entries=11
+INFO backend.services.unified_service unified_service.records_cache_built | rows=13707
+INFO create_app create_app.prewarm_complete
+WARNING backend.jobs.full_ingest full_ingest.census_kg_empty_using_csv_seed | estate_seed_rows=779
+====================================================================================================
+1. RAW SOURCE FILE ROW COUNTS
+====================================================================================================
+  unified_processed.csv: 13707
+  unified_census.csv: 165
+  wicklow-census-data.csv: 1539
+  workhouse_data_final.xlsx[1-127]: 3920
+  workhouse_data_final.xlsx[from 128]: 4294
+  workhouse_data_final.xlsx[TOTAL]: 8214
+  townlands.json[features]: 152
+
+====================================================================================================
+2. CURRENTLY-LOADED DB ROW COUNTS
+====================================================================================================
+  unified_record: 13707
+  source_mentions: 8214
+  census_record: 8033
+  clearances_record: 1211
+  townland: 4225
+
+====================================================================================================
+3. INGESTION COMPLETENESS (raw vs loaded, where directly comparable)
+====================================================================================================
+  unified_processed.csv (13707) -> unified_record (13707): MATCH — 100% complete
+  workhouse_data_final.xlsx total (8214) -> source_mentions (8214): MATCH — 100% complete
+  townlands.json features (152) -> estate townland universe: see full_ingest dry-run below, not a direct 1:1 table count
+  census_record and clearances_record are NOT a direct 1:1 file-to-table mapping —
+  census_record blends live VRTI KG (1841-1891) + GeoJSON-embedded + CSV-seed fallback
+  (1827-1868); clearances_record comes from GeoJSON-embedded per-townland fields.
+  See the full_ingest dry-run below for what each source currently contributes.
+
+====================================================================================================
+4. FULL_INGEST DRY RUN (safe — writes nothing) vs CURRENT DB STATE
+====================================================================================================
+  Dry-run stats: {'townlands_processed': 152, 'townlands_kg_enriched': 151, 'census_records_json': 683, 'census_records_kg': 0, 'census_records_csv_seed': 779, 'clearances_records': 1231, 'kg_errors': 1}
+
+  townlands.json features: 152, processed: 152, KG-enriched (any geometry/centroid): 151
+  census_records_kg (live VRTI fetch, right now): 0
+  census_records_json (GeoJSON-embedded): 683
+  census_records_csv_seed (estate fallback, used because KG returned 0): 779
+  Fresh-rebuild census total: 1462  vs  currently stored: 8033
+  clearances_records (fresh dry run): 1231  vs  currently stored: 1211
+
+  *** WARNING: live VRTI census KG endpoint returned 0 rows just now. ***
+  *** A real (non-dry-run) full_ingest today would SHRINK census_record from
+  *** 8033 to ~1462 rows. DO NOT run a real rebuild
+  *** against this database until this is investigated — see evidence doc.
+
+====================================================================================================
+5. TOWNLAND ALIGNMENT COVERAGE (scoped to ~152 estate townlands)
+====================================================================================================
+  {'total_matched_townland_rows': 152, 'osm_matched': 132, 'osi_matched': 83, 'vrti_matched': 132, 'logainm_matched': 0}

@@ -92,6 +92,16 @@ _V2_MIGRATION_COLS: list[tuple[str, str]] = [
     ("geometry_flag",  "TEXT"),
 ]
 
+# Provenance columns added to townland_xref so a cross-reference records the
+# original source spelling and the resolution outcome, not just the link.
+_XREF_MIGRATION_COLS: list[tuple[str, str]] = [
+    ("source_name",    "TEXT"),
+    ("status",         "TEXT DEFAULT 'confirmed'"),
+    ("evidence_json",  "TEXT DEFAULT '[]'"),
+    ("conflicts_json", "TEXT DEFAULT '[]'"),
+    ("updated_at",     "TEXT"),
+]
+
 _SUPPORT_TABLES = """
 -- Cross-reference: maps (source, source_record_id) → entity_id.
 -- Allows one estate townland to map to multiple modern units and
@@ -103,6 +113,11 @@ CREATE TABLE IF NOT EXISTS townland_xref (
     source_record_id TEXT NOT NULL,          -- TD_ID, kg_uri, townlands.ie URL, etc.
     confidence       REAL,                   -- match confidence 0..1
     match_method     TEXT,                   -- 'exact_id' | 'name_geo' | 'manual'
+    source_name      TEXT,                   -- original source spelling (observed alias)
+    status           TEXT DEFAULT 'confirmed', -- 'confirmed' | 'pending' | 'rejected'
+    evidence_json    TEXT DEFAULT '[]',
+    conflicts_json   TEXT DEFAULT '[]',
+    updated_at       TEXT DEFAULT (datetime('now')),
     created_at       TEXT DEFAULT (datetime('now')),
     UNIQUE(source, source_record_id)
 );
@@ -316,6 +331,19 @@ def ensure_schema() -> None:
         # ----------------------------------------------------------------
         conn.executescript(_SUPPORT_TABLES)
 
+        # townland_xref provenance columns (additive; pre-existing rows keep
+        # their values and default to status='confirmed')
+        xref_cols = {
+            c["name"] for c in conn.execute("PRAGMA table_info(townland_xref)").fetchall()
+        }
+        for col_name, col_type in _XREF_MIGRATION_COLS:
+            if col_name not in xref_cols:
+                try:
+                    conn.execute(f"ALTER TABLE townland_xref ADD COLUMN {col_name} {col_type}")
+                except Exception:
+                    pass
+        conn.execute("UPDATE townland_xref SET status = 'confirmed' WHERE status IS NULL")
+
         # ----------------------------------------------------------------
         # Indexes
         # ----------------------------------------------------------------
@@ -331,8 +359,20 @@ def ensure_schema() -> None:
             "CREATE INDEX IF NOT EXISTS idx_clearances_tl_year    ON clearances_record(townland_id, year)",
             "CREATE INDEX IF NOT EXISTS idx_xref_entity_id        ON townland_xref(entity_id)",
             "CREATE INDEX IF NOT EXISTS idx_match_review_status   ON match_review(status)",
+            "CREATE INDEX IF NOT EXISTS idx_townland_name_upper   ON townland(name)",
+            "CREATE INDEX IF NOT EXISTS idx_townland_td_id        ON townland(td_id)",
         ]:
             conn.execute(stmt)
+
+        # One review row per townland pair keeps re-running an ingest idempotent.
+        # Skipped (not fatal) if legacy duplicate pairs already exist.
+        try:
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_match_review_pair "
+                "ON match_review(townland_id_a, townland_id_b)"
+            )
+        except Exception as exc:
+            log.warning("extensions.match_review_pair_index_skipped | error=%s", exc)
 
         conn.commit()
         log.info("extensions.schema_ready")

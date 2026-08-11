@@ -19,34 +19,11 @@ Routes:
 All responses follow the envelope:
   { "data": [...], "meta": { source, cache_status, generated_at, record_count, export_file } }
 """
-import functools
-
 from flask import Blueprint, jsonify, request
 
 from backend.models.census_models import CensusFilters
+from backend.routes._auth import require_admin_key
 
-
-def _require_admin(fn):
-    """Reject requests that don't carry a valid ADMIN_API_KEY header or query param.
-
-    If ADMIN_API_KEY is not configured, the endpoint is disabled entirely —
-    it should never be reachable on a public deployment without a key set.
-    """
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        from config import ActiveConfig
-        required = (ActiveConfig.ADMIN_API_KEY or "").strip()
-        if not required:
-            return jsonify({"error": "Admin operations are disabled — set ADMIN_API_KEY in the environment."}), 403
-        provided = (
-            request.headers.get("X-Admin-Key")
-            or request.args.get("admin_key")
-            or ""
-        ).strip()
-        if not provided or provided != required:
-            return jsonify({"error": "Forbidden"}), 403
-        return fn(*args, **kwargs)
-    return wrapper
 
 bp = Blueprint("census_api", __name__)
 
@@ -126,7 +103,7 @@ def get_townland_detail():
 
 
 @bp.post("/refresh")
-@_require_admin
+@require_admin_key
 def trigger_refresh():
     """
     Force a synchronous census refresh from the VRTI KG.
@@ -152,7 +129,7 @@ def get_latest_export():
 
 
 @bp.post("/export/regenerate")
-@_require_admin
+@require_admin_key
 def regenerate_export():
     """
     Re-generate Excel export from the local DB.

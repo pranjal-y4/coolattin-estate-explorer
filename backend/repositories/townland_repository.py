@@ -73,6 +73,18 @@ def count() -> int:
         conn.close()
 
 
+def watermark() -> tuple:
+    """(row count, latest update timestamp) — used for cache invalidation."""
+    conn = get_db_conn()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n, MAX(updated_at) AS ts FROM townland"
+        ).fetchone()
+        return (row["n"], row["ts"])
+    finally:
+        conn.close()
+
+
 def upsert(townland: Townland) -> int:
     """
     Insert or update a townland record.
@@ -281,6 +293,235 @@ def get_or_create(name: str, **kwargs) -> tuple[int, bool]:
     t = Townland(name=canonical, **kwargs)
     rowid = upsert(t)
     return rowid, True
+
+
+# ---------------------------------------------------------------------------
+# Entity-resolution support
+#
+# These take an optional open connection so one source record can be resolved
+# inside a single transaction (candidate lookup → canonical write → xref).
+# ---------------------------------------------------------------------------
+
+# Authority identifier columns, in descending order of reliability.
+AUTHORITY_ID_COLUMNS: tuple[str, ...] = (
+    "kg_uri", "vrti_id", "osi_id", "osm_id", "logainm_id", "td_id", "guid",
+)
+
+_MUTABLE_COLUMNS: frozenset[str] = frozenset({
+    "qualifier", "logainm_id", "name_gaelic", "barony", "civil_parish",
+    "electoral_division", "placename_theme", "description", "td_id", "guid",
+    "area_sqm", "kg_uri", "wkt_geometry", "centroid_lat", "centroid_lon",
+    "county", "osm_id", "osi_id", "vrti_id", "geometry_flag",
+})
+
+
+def _with_conn(conn):
+    """Return (conn, should_close) so callers can pass an open transaction."""
+    return (conn, False) if conn is not None else (get_db_conn(), True)
+
+
+def find_row_by_name(name_upper: str, conn=None) -> Optional[dict]:
+    """Exact canonical-name lookup. Returns a plain dict or None."""
+    c, close = _with_conn(conn)
+    try:
+        row = c.execute(
+            "SELECT * FROM townland WHERE UPPER(name) = ? ORDER BY id LIMIT 1",
+            (name_upper.strip().upper(),),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        if close:
+            c.close()
+
+
+def find_row_by_id(townland_id: int, conn=None) -> Optional[dict]:
+    """Return a canonical townland row as a plain dict, or None."""
+    c, close = _with_conn(conn)
+    try:
+        row = c.execute("SELECT * FROM townland WHERE id = ?", (townland_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        if close:
+            c.close()
+
+
+def find_row_by_entity_id(entity_id: str, conn=None) -> Optional[dict]:
+    """Return the canonical townland row carrying an entity_id, or None."""
+    c, close = _with_conn(conn)
+    try:
+        row = c.execute(
+            "SELECT * FROM townland WHERE entity_id = ? ORDER BY id LIMIT 1", (entity_id,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        if close:
+            c.close()
+
+
+def assign_entity_id(townland_id: int, conn=None) -> str:
+    """Give a legacy row without an entity_id a stable surrogate key."""
+    entity_id = str(uuid.uuid4())
+    c, close = _with_conn(conn)
+    try:
+        c.execute(
+            "UPDATE townland SET entity_id = ? WHERE id = ?", (entity_id, townland_id)
+        )
+        if close:
+            c.commit()
+        return entity_id
+    finally:
+        if close:
+            c.close()
+
+
+def find_resolved_without_geometry(limit: int = 0, conn=None) -> list[dict]:
+    """
+    Canonical townlands that a source record resolved to but which have no
+    boundary geometry — the ones the map cannot draw yet.
+    """
+    c, close = _with_conn(conn)
+    try:
+        sql = """
+            SELECT DISTINCT t.* FROM townland t
+              JOIN townland_xref x ON x.entity_id = t.entity_id
+             WHERE t.wkt_geometry IS NULL
+             ORDER BY t.name
+        """
+        params: tuple = ()
+        if limit and limit > 0:
+            sql += " LIMIT ?"
+            params = (limit,)
+        return [dict(r) for r in c.execute(sql, params).fetchall()]
+    finally:
+        if close:
+            c.close()
+
+
+def find_rows_by_authority_id(column: str, value: str, conn=None) -> list[dict]:
+    """Look up canonical townlands sharing an authority identifier."""
+    if column not in AUTHORITY_ID_COLUMNS or not value:
+        return []
+    c, close = _with_conn(conn)
+    try:
+        rows = c.execute(
+            f"SELECT * FROM townland WHERE {column} = ? ORDER BY id",  # noqa: S608 — column is allow-listed
+            (value,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        if close:
+            c.close()
+
+
+def find_block_candidates(
+    name_upper: str,
+    county: Optional[str] = None,
+    limit: int = 200,
+    conn=None,
+) -> list[dict]:
+    """
+    Return bounded, deterministic candidate rows for a source name.
+
+    Blocking key mirrors townland_service._block_key: same county (when known)
+    and the same first three characters of the normalised name.
+    """
+    prefix = (name_upper or "").strip().upper()[:3]
+    if not prefix:
+        return []
+    c, close = _with_conn(conn)
+    try:
+        if county:
+            rows = c.execute(
+                """
+                SELECT * FROM townland
+                 WHERE UPPER(SUBSTR(name, 1, 3)) = ?
+                   AND (county IS NULL OR UPPER(county) = ?)
+                 ORDER BY id LIMIT ?
+                """,
+                (prefix, county.strip().upper(), limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM townland WHERE UPPER(SUBSTR(name, 1, 3)) = ? ORDER BY id LIMIT ?",
+                (prefix, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        if close:
+            c.close()
+
+
+def enrich_row(townland_id: int, fields: dict, conn=None) -> list[str]:
+    """
+    Fill NULL columns on an existing canonical townland.
+
+    Never overwrites a populated value and never touches `name` — the canonical
+    representation stays stable regardless of import order.  Returns the names
+    of the columns this call actually filled.
+    """
+    updates = {
+        k: v for k, v in fields.items()
+        if k in _MUTABLE_COLUMNS and v is not None and v != ""
+    }
+    if not updates:
+        return []
+
+    c, close = _with_conn(conn)
+    try:
+        current = c.execute(
+            "SELECT * FROM townland WHERE id = ?", (townland_id,)
+        ).fetchone()
+        if current is None:
+            return []
+        filled = [k for k in updates if current[k] is None or current[k] == ""]
+        if not filled:
+            return []
+        assignments = ", ".join(f"{k} = ?" for k in filled)
+        c.execute(
+            f"UPDATE townland SET {assignments}, updated_at = datetime('now') WHERE id = ?",  # noqa: S608 — keys are allow-listed
+            [updates[k] for k in filled] + [townland_id],
+        )
+        if close:
+            c.commit()
+        return filled
+    finally:
+        if close:
+            c.close()
+
+
+def insert_canonical(fields: dict, conn=None) -> tuple[int, str]:
+    """
+    Create a new canonical townland row. Returns (townland_id, entity_id).
+
+    Only the fields supplied are written — missing values stay NULL rather than
+    being manufactured.
+    """
+    name = (fields.get("name") or "").strip().upper()
+    if not name:
+        raise ValueError("insert_canonical requires a name")
+
+    entity_id = fields.get("entity_id") or str(uuid.uuid4())
+    cols = ["entity_id", "name", "source"]
+    vals = [entity_id, name, fields.get("source") or "manual"]
+    for col in sorted(_MUTABLE_COLUMNS):
+        val = fields.get(col)
+        if val is not None and val != "":
+            cols.append(col)
+            vals.append(val)
+
+    placeholders = ", ".join("?" for _ in cols)
+    c, close = _with_conn(conn)
+    try:
+        cursor = c.execute(
+            f"INSERT INTO townland ({', '.join(cols)}) VALUES ({placeholders})",  # noqa: S608 — columns are allow-listed
+            vals,
+        )
+        if close:
+            c.commit()
+        return int(cursor.lastrowid), entity_id
+    finally:
+        if close:
+            c.close()
 
 
 def _row_to_model(row) -> Townland:

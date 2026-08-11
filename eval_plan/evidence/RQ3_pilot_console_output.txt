@@ -1,0 +1,132 @@
+create_app.insecure_secret_key — SECRET_KEY is the default placeholder. Set a strong random value in the SECRET_KEY environment variable before deploying.
+ask_service.numeric_gate_fallback violations=['1864'] — trying backup providers
+ask_service.grok_generate_failed model=grok-3-mini error=403 Client Error: Forbidden for url: https://api.x.ai/v1/chat/completions
+ask_service.grok_generate_failed model=grok-3-mini-fast error=403 Client Error: Forbidden for url: https://api.x.ai/v1/chat/completions
+ask_service.grok_generate_failed model=grok-beta error=400 Client Error: Bad Request for url: https://api.x.ai/v1/chat/completions
+ask_service.numeric_gate_fallback violations=['1845', '1852'] — trying backup providers
+ask_service.grok_generate_failed model=grok-3-mini error=403 Client Error: Forbidden for url: https://api.x.ai/v1/chat/completions
+ask_service.grok_generate_failed model=grok-3-mini-fast error=403 Client Error: Forbidden for url: https://api.x.ai/v1/chat/completions
+ask_service.grok_generate_failed model=grok-beta error=400 Client Error: Bad Request for url: https://api.x.ai/v1/chat/completions
+ask_service.grok_generate_failed model=grok-3-mini error=403 Client Error: Forbidden for url: https://api.x.ai/v1/chat/completions
+ask_service.grok_generate_failed model=grok-3-mini-fast error=403 Client Error: Forbidden for url: https://api.x.ai/v1/chat/completions
+ask_service.grok_generate_failed model=grok-beta error=400 Client Error: Bad Request for url: https://api.x.ai/v1/chat/completions
+ask_service.numeric_gate_fallback violations=['1841'] — trying backup providers
+ask_service.grok_generate_failed model=grok-3-mini error=403 Client Error: Forbidden for url: https://api.x.ai/v1/chat/completions
+ask_service.grok_generate_failed model=grok-3-mini-fast error=403 Client Error: Forbidden for url: https://api.x.ai/v1/chat/completions
+ask_service.grok_generate_failed model=grok-beta error=400 Client Error: Bad Request for url: https://api.x.ai/v1/chat/completions
+
+====================================================================================================
+cen_01_estate_1841 [census]: What was the total population of the estate in 1841?
+  gold_answer='119300' type=scalar out_of_scope=N
+  strategy=llm_sql_direct  elapsed_ms=20611
+  sql='SELECT SUM(cr.total) AS total_population_1841\nFROM census_record cr\nJOIN townland t ON cr.townland_id = t.id\nWHERE cr.year = 1841'
+  actual_answer='I found 119300 total population 1841.'
+  llm_rephrased_answer='The census records held in the estate database show a total population of 119,300 for the year 1841, drawn by summing all household totals across every townland linked to the estate in the census_reco'
+
+====================================================================================================
+cmp_01_emigration_vs_kg [comparative]: Compare the emigration count from Ballynultagh in the estate records versus the knowledge graph
+  gold_answer='SQLite=400' type=scalar out_of_scope=N
+  strategy=llm_sql_direct  elapsed_ms=25730
+  sql="SELECT\n    'Estate Records' AS source,\n    COUNT(DISTINCT record_id) AS emigration_count\nFROM unified_record\nWHERE townland_norm = 'BALLYNULTAGH'\n  AND has_emigration_record = 1\nUNION ALL\nSELECT\n    'Knowledge Graph (townland.kg_uri present)' AS source,\n    COUNT(DISTINCT u.record_id) AS emigration_count\nFROM unified_record u\nJOIN townland t ON UPPER(t.name) = u.townland_norm\nWHERE u.townland_norm = 'BALLYNULTAGH'\n  AND u.has_emigration_record = 1\n  AND t.kg_uri IS NOT NULL"
+  actual_answer='I found 2 grouped results for emigration count. Top rows: Estate Records (400), Knowledge Graph (townland.kg_uri present) (400).'
+  llm_rephrased_answer='Both the estate records and the knowledge graph return an identical emigration count of 400 distinct records for Ballynultagh, drawn from the unified_record table and confirmed by a join to the townla'
+
+====================================================================================================
+emi_01_total [emigration]: How many people emigrated from the Coolattin estate?
+  gold_answer='6016' type=scalar out_of_scope=N
+  strategy=llm_sql_direct  elapsed_ms=17571
+  sql='SELECT COUNT(DISTINCT record_id) AS emigrants\nFROM unified_record\nWHERE has_emigration_record = 1'
+  actual_answer='I found 6016 emigrants for Coolattin.'
+  llm_rephrased_answer='The sql_result here requires an important clarification: the query counted all emigration records across the entire unified_record table (6,016 distinct records where has_emigration_record = 1), rathe'
+
+====================================================================================================
+er_01_exact_ballinacor [entity]: Show me the census data for Ballinacor
+  gold_answer='townland id=355 resolved' type=entity out_of_scope=N
+  strategy=llm_sql_direct  elapsed_ms=19671
+  sql="SELECT t.name AS townland, cr.year, cr.total, cr.male, cr.female, cr.inhabited, cr.uninhabited\nFROM census_record cr\nJOIN townland t ON cr.townland_id = t.id\nWHERE UPPER(t.name) = 'BALLINACOR'\nORDER BY cr.year"
+  actual_answer='I found 12 grouped results for year. Top rows: BALLINACOR (1827), BALLINACOR (1839), BALLINACOR (1841).'
+  llm_rephrased_answer='The census records for Ballinacor, drawn from the census_record table joined to the townland table, return 12 observations spanning from 1827 to 1891, revealing a population history of striking volati'
+
+====================================================================================================
+evic_01_total [eviction]: How many evictions were recorded in total?
+  gold_answer='7763' type=scalar out_of_scope=N
+  strategy=llm_sql_direct  elapsed_ms=8551
+  sql='SELECT COUNT(DISTINCT record_id) AS total_evictions\nFROM unified_record\nWHERE has_eviction_record = 1'
+  actual_answer='I found 4108 total evictions.'
+  llm_rephrased_answer='Searching the unified_record table for all entries where has_eviction_record is flagged as true, the query returned a single aggregate result: a total of 4,108 distinct eviction records are held acros'
+
+====================================================================================================
+fbl_01_rent [fallback]: What was the average rent paid by tenants on the Coolattin estate?
+  gold_answer='N/A — no verified template' type=none out_of_scope=N
+  strategy=llm_sql_direct  elapsed_ms=68095
+  sql='SELECT AVG(holding_acres) AS avg_holding_acres, COUNT(DISTINCT record_id) AS tenant_count\nFROM unified_record\nWHERE has_tenancy_record = 1\nAND holding_acres IS NOT NULL'
+  actual_answer='I found one matching row for Coolattin: avg holding acres=28.185169722980874, tenant count=2563.'
+  llm_rephrased_answer='The question asks about average rent paid by Coolattin estate tenants, but the database query returned average holding size rather than a rent figure. Searching the unified_record table for all tenant'
+
+====================================================================================================
+gen_01_mortality [general]: How many people died of Famine-related causes on the Coolattin estate?
+  gold_answer='N/A — not in DB' type=none out_of_scope=Y
+  strategy=llm_sql_direct  elapsed_ms=17910
+  sql='SELECT COUNT(DISTINCT record_id) AS people_count\nFROM unified_record\nWHERE 1=0'
+  actual_answer='I found 0 people count for Coolattin.'
+  llm_rephrased_answer='The database does not hold any records categorised specifically as Famine-related deaths for the Coolattin townland: the query against unified_record returned a count of zero, meaning this cause-of-de'
+
+====================================================================================================
+geo_01_total_townlands [geography]: How many townlands are there in the estate?
+  gold_answer='4225' type=scalar out_of_scope=N
+  strategy=llm_sql_direct  elapsed_ms=9890
+  sql='SELECT COUNT(DISTINCT townland_norm) AS townland_count\nFROM unified_record\nWHERE townland_norm IS NOT NULL'
+  actual_answer='I found 516 townland count.'
+  llm_rephrased_answer='The estate records held in the unified_record table contain 516 distinct townlands, based on a count of all non-null normalised townland values across the dataset. This figure represents every townlan'
+
+====================================================================================================
+her_01_holy_well_population [heritage]: Are townlands with holy wells more populous than those without?
+  gold_answer='comparison' type=comparison out_of_scope=N
+  strategy=llm_sql_direct  elapsed_ms=22525
+  sql="SELECT\n  CASE WHEN hf.townland_norm IS NOT NULL THEN 'Has Holy Well' ELSE 'No Holy Well' END AS holy_well_status,\n  COUNT(DISTINCT t.id) AS townland_count,\n  SUM(cr.total) AS total_population,\n  ROUND(AVG(cr.total), 1) AS avg_population_per_townland,\n  ROUND(1.0 * SUM(cr.total) / COUNT(DISTINCT t.id), 1) AS avg_pop_weighted\nFROM townland t\nJOIN census_record cr ON cr.townland_id = t.id AND cr.year = 1841\nLEFT JOIN (\n  SELECT DISTINCT townland_norm\n  FROM heritage_feature\n  WHERE feature_group = 'holy_well'\n) hf ON UPPER(hf.townland_norm) = UPPER(t.name)\nGROUP BY holy_well_status\nORDER BY avg_population_per_townland DESC"
+  actual_answer='I found 2 grouped results for townland count. Top rows: Has Holy Well (62), No Holy Well (1204).'
+  llm_rephrased_answer='The query, drawing on the townland and census_record tables joined to the heritage_feature table for the year 1841, returns a clear answer: yes, townlands with holy wells were more populous on average'
+
+====================================================================================================
+ov_01_famine_impact [overview]: What was the impact of the Great Famine on the estate?
+  gold_answer='multi-source sensemaking' type=narrative out_of_scope=N
+  strategy=validated_sql_unavailable  elapsed_ms=31343
+  sql="SELECT 'I could not produce a validated SQL query that safely answers this question. Please rephrase it with a clearer townland, surname, year, ship, record type, or measure.' AS message"
+  actual_answer='I could not produce a validated SQL query that safely answers this question. Please rephrase it with a clearer townland, surname, year, ship, record type, or measure.'
+  llm_rephrased_answer='The question as posed — "What was the impact of the Great Famine on the estate?" — is too broad for the estate records database to answer directly, as it does not specify a townland, surname, year ran'
+
+====================================================================================================
+ppl_01_total_records [people]: How many people are in the records?
+  gold_answer='13707' type=scalar out_of_scope=N
+  strategy=llm_sql_direct  elapsed_ms=6935
+  sql='SELECT COUNT(DISTINCT record_id) AS total_people FROM unified_record'
+  actual_answer='I found 13707 total people.'
+  llm_rephrased_answer='The unified_record table contains a total of 13,707 distinct records, representing the full breadth of individuals documented across the estate records held in this database. This count was produced b'
+
+====================================================================================================
+rel_01_ballinacor_barony [relational]: Which barony does Ballinacor belong to?
+  gold_answer='Arklow (SQLite) / Ballinacor South (KG)' type=scalar out_of_scope=N
+  strategy=llm_sql_direct  elapsed_ms=15374
+  sql="SELECT name, barony, civil_parish, county\nFROM townland\nWHERE UPPER(name) = 'BALLINACOR'"
+  actual_answer='I found one matching row for Ballinacor: name=BALLINACOR, barony=Arklow, civil parish=Kilbride, county=Wicklow.'
+  llm_rephrased_answer='Ballinacor belongs to the barony of Arklow. The townland sits within the civil parish of Kilbride, in County Wicklow, and carries the Gaelic name Baile na Corra.\n\nThe population history of Ballinacor '
+
+====================================================================================================
+ten_01_total [tenancy]: How many tenants are recorded?
+  gold_answer='5247' type=scalar out_of_scope=N
+  strategy=llm_sql_direct  elapsed_ms=8781
+  sql='SELECT COUNT(DISTINCT record_id) AS tenant_count\nFROM unified_record\nWHERE has_tenancy_record = 1'
+  actual_answer='I found 5247 tenant count.'
+  llm_rephrased_answer='Searching the unified_record table for all entries flagged with a tenancy record returns a total of 5,247 distinct tenants recorded across the dataset. This figure was produced by counting distinct re'
+
+====================================================================================================
+cen_02_estate_1851 [census]: What was the estate population in 1851?
+  gold_answer='91860' type=scalar out_of_scope=N
+  strategy=llm_sql_direct  elapsed_ms=24341
+  sql='SELECT SUM(cr.total) AS population_1851\nFROM census_record cr\nJOIN townland t ON cr.townland_id = t.id\nWHERE cr.year = 1851'
+  actual_answer='I found 91860 population 1851.'
+  llm_rephrased_answer='The census records held in the database return a total estate population figure of 91,860 for the year 1851, drawn directly from the census_record table joined to the townland table on the shared town'
+
+
+Wrote 14 results to /Users/pranjal/Desktop/Masters/Dissertation/Coolattin-app/eval_plan/scripts/../../eval_plan/evidence/RQ3_pilot_raw_output.json
+Errors: 0/14  With result: 14/14

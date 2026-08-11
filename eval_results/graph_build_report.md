@@ -1,6 +1,6 @@
 # Graph Build Report
 
-**Built:** 2026-06-11 04:28:09
+**Built:** 2026-08-07 09:43:16
 **Verdict:** BUILD CLEAN
 
 ## Hierarchy strategy
@@ -13,10 +13,10 @@ ancestor (nearest-available-ancestor, no sentinel nodes).  Gaps logged to
 | Metric | Value |
 |--------|-------|
 | Total nodes | 49081 |
-| Total edges | 64307 |
+| Total edges | 69302 |
 | Communities | 3501 |
 | Nodes embedded | 0 |
-| Orphan rate | 25.0% (12278/49081) |
+| Orphan rate | 22.9% (11228/49081) |
 | Skipped edges | 7960 |
 | Dangling edges | 0 |
 
@@ -99,8 +99,7 @@ Total skipped: 7960
 
 ## Validation
 ### Warnings
-- Orphan rate 25.0% exceeds 2% threshold (12278/49081)
+- Orphan rate 22.9% exceeds 2% threshold (11228/49081)
 - 4612 Person nodes have no direct Townland edge
-- 17954 retrievable nodes missing passport embedding
 
 ## Verdict: BUILD CLEAN

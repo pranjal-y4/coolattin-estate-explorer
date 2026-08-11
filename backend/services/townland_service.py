@@ -52,6 +52,12 @@ MATCH_THRESHOLD_LOW:  float = 0.40   # auto-reject
 _ALIAS_MAP: dict[str, str] = {}
 _ALIAS_MAP_LOADED: bool = False
 
+# Compound source names ("Ballard And Crone") split across two or more canonical
+# townlands.  They are deliberately kept out of the 1:1 alias map — a compound
+# name has no single canonical target and must not auto-merge.
+_COMPOUND_MAP: dict[str, list[str]] = {}
+_COMPOUND_MAP_LOADED: bool = False
+
 
 # ---------------------------------------------------------------------------
 # Name normalisation
@@ -111,6 +117,18 @@ def resolve_alias(name: str) -> str:
     """Resolve a normalised name through the alias map."""
     _ensure_alias_map_loaded()
     return _ALIAS_MAP.get(name, name)
+
+
+def resolve_compound(name: str) -> list[str]:
+    """
+    Return the canonical townland names a compound source name covers.
+
+    "BALLARD AND CRONE" → ["BALLARD", "CRONE"].  Returns [] when the name is
+    not a known compound.  A result with 2+ entries means the source record
+    spans several townlands and cannot be resolved to one canonical entity.
+    """
+    _ensure_compound_map_loaded()
+    return list(_COMPOUND_MAP.get(name, []))
 
 
 def canonical_name(raw: str) -> str:
@@ -568,7 +586,17 @@ def build_centroids_from_geojson(geojson_path: Path) -> dict[str, tuple[float, f
         return {}
 
     geo = json.loads(geojson_path.read_text(encoding="utf-8"))
+    return build_centroids_from_features(geo.get("features") or [])
 
+
+def build_centroids_from_features(features: list[dict]) -> dict[str, tuple[float, float]]:
+    """
+    Compute lat/lon centroids for already-loaded GeoJSON features.
+
+    Split out from build_centroids_from_geojson so the map can compute
+    centroids for the database-backed FeatureCollection, which includes
+    townlands that are not in the estate GeoJSON file.
+    """
     try:
         from shapely.geometry import shape as _shape
         use_shapely = True
@@ -584,7 +612,7 @@ def build_centroids_from_geojson(geojson_path: Path) -> dict[str, tuple[float, f
         )
 
     out: dict[str, tuple[float, float]] = {}
-    for feat in geo.get("features", []):
+    for feat in features:
         props = feat.get("properties") or {}
         name  = str(props.get("TL_ENGLISH", "")).strip()
         geom  = feat.get("geometry") or {}
@@ -686,6 +714,30 @@ def _ensure_alias_map_loaded() -> None:
         except Exception as exc:
             log.warning("townland_service.alias_map_load_failed | error=%s", exc)
     _ALIAS_MAP_LOADED = True
+
+
+def _ensure_compound_map_loaded() -> None:
+    global _COMPOUND_MAP, _COMPOUND_MAP_LOADED
+    if _COMPOUND_MAP_LOADED:
+        return
+    from config import ActiveConfig
+    path = ActiveConfig.DATA_SEED_DIR / "townland_compound_map.json"
+    if path.exists():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            for key, parts in raw.items():
+                if key.startswith("_"):
+                    continue
+                norm_key = normalize_townland_name(key)
+                norm_parts = [
+                    p for p in (normalize_townland_name(x) for x in parts or []) if p
+                ]
+                if norm_key and norm_parts:
+                    _COMPOUND_MAP[norm_key] = norm_parts
+            log.info("townland_service.compound_map_loaded | entries=%d", len(_COMPOUND_MAP))
+        except Exception as exc:
+            log.warning("townland_service.compound_map_load_failed | error=%s", exc)
+    _COMPOUND_MAP_LOADED = True
 
 
 def _write_reconciliation_gaps(gaps: list[str]) -> None:

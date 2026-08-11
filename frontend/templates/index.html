@@ -41,18 +41,18 @@
 <section class="section section-below-hero">
   <div class="container" style="max-width:960px;">
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:40px;">
-      <figure style="margin:0;border-radius:16px;overflow:hidden;border:1px solid var(--line);box-shadow:var(--shadow-soft);background:var(--surface);transition:transform 220ms var(--ease),box-shadow 220ms var(--ease);" onmouseover="this.style.transform='translateY(-4px)';this.style.boxShadow='var(--shadow-hover)'" onmouseout="this.style.transform='';this.style.boxShadow='var(--shadow-soft)'">
+      <figure class="photo-card" style="margin:0;border-radius:16px;overflow:hidden;border:1px solid var(--line);box-shadow:var(--shadow-soft);background:var(--surface);transition:transform 220ms var(--ease),box-shadow 220ms var(--ease);">
         <div style="overflow:hidden;">
-          <img loading="lazy" src="{{ url_for('static', filename='images/wick1.jpg') }}" alt="County Wicklow countryside, the landscape where Coolattin Estate tenants lived and farmed" style="width:100%;height:200px;object-fit:cover;display:block;filter:sepia(0.12) saturate(0.9);transition:transform 350ms var(--ease);" onmouseover="this.style.transform='scale(1.04)'" onmouseout="this.style.transform=''" />
+          <img loading="lazy" src="{{ url_for('static', filename='images/wick1.jpg') }}" alt="County Wicklow countryside, the landscape where Coolattin Estate tenants lived and farmed" style="width:100%;height:200px;object-fit:cover;display:block;filter:sepia(0.12) saturate(0.9);transition:transform 350ms var(--ease);" />
         </div>
         <figcaption style="padding:16px 18px 18px;">
           <div style="font-family:var(--font-display);font-weight:600;font-size:17px;color:var(--ink);margin-bottom:5px;">County Wicklow</div>
           <div style="font-size:13px;color:var(--muted);line-height:1.55;">The heartland of the Coolattin Estate — rolling farmland where tenant families worked the land across the Famine decades.</div>
         </figcaption>
       </figure>
-      <figure style="margin:0;border-radius:16px;overflow:hidden;border:1px solid var(--line);box-shadow:var(--shadow-soft);background:var(--surface);transition:transform 220ms var(--ease),box-shadow 220ms var(--ease);" onmouseover="this.style.transform='translateY(-4px)';this.style.boxShadow='var(--shadow-hover)'" onmouseout="this.style.transform='';this.style.boxShadow='var(--shadow-soft)'">
+      <figure class="photo-card" style="margin:0;border-radius:16px;overflow:hidden;border:1px solid var(--line);box-shadow:var(--shadow-soft);background:var(--surface);transition:transform 220ms var(--ease),box-shadow 220ms var(--ease);">
         <div style="overflow:hidden;">
-          <img loading="lazy" src="{{ url_for('static', filename='images/wick2.jpg') }}" alt="Wicklow Mountains, the upland commons shared by estate townlands" style="width:100%;height:200px;object-fit:cover;display:block;filter:sepia(0.12) saturate(0.9);transition:transform 350ms var(--ease);" onmouseover="this.style.transform='scale(1.04)'" onmouseout="this.style.transform=''" />
+          <img loading="lazy" src="{{ url_for('static', filename='images/wick2.jpg') }}" alt="Wicklow Mountains, the upland commons shared by estate townlands" style="width:100%;height:200px;object-fit:cover;display:block;filter:sepia(0.12) saturate(0.9);transition:transform 350ms var(--ease);" />
         </div>
         <figcaption style="padding:16px 18px 18px;">
           <div style="font-family:var(--font-display);font-weight:600;font-size:17px;color:var(--ink);margin-bottom:5px;">Wicklow Mountains</div>
@@ -229,7 +229,7 @@
         <div><span>Period:</span> 1845–1868 · 51 records</div>
         <div><span>Sources:</span> Fitzwilliam Papers MS 4970 · MS 4972 · MS 4974-5</div>
       </div>
-      <button class="btn btn-soft btn-block" onclick="exploreOnMap('Coolboy', 'Byrne')">Explore on Map</button>
+      <button class="btn btn-soft btn-block" data-action="exploreOnMap" data-arg="Coolboy" data-arg2="Byrne">Explore on Map</button>
     </article>
 
     <article class="record-card" data-kind="evictions">
@@ -243,7 +243,7 @@
         <div><span>Period:</span> 1845–1852 · 43 records</div>
         <div><span>Sources:</span> Fitzwilliam Papers MS 4972 · MS 4974-5</div>
       </div>
-      <button class="btn btn-soft btn-block" onclick="exploreOnMap('Coolboy', 'Fox')">Explore on Map</button>
+      <button class="btn btn-soft btn-block" data-action="exploreOnMap" data-arg="Coolboy" data-arg2="Fox">Explore on Map</button>
     </article>
 
     <article class="record-card" data-kind="emigrations">
@@ -257,42 +257,12 @@
         <div><span>Period:</span> 1847–1886 · 52 records</div>
         <div><span>Sources:</span> Fitzwilliam Papers MS 4974-5 · MS 4970</div>
       </div>
-      <button class="btn btn-soft btn-block" onclick="exploreOnMap('Killinure', 'Healy')">Explore on Map</button>
+      <button class="btn btn-soft btn-block" data-action="exploreOnMap" data-arg="Killinure" data-arg2="Healy">Explore on Map</button>
     </article>
   </div>
 </section>
 
-<script>
-function exploreOnMap(townland, surname) {
-  const exploreSection = document.getElementById('explore');
-  if (exploreSection) exploreSection.scrollIntoView({ behavior: 'smooth' });
-
-  // Retry until townland options are loaded (data arrives async)
-  let attempts = 0;
-  function tryApply() {
-    attempts++;
-    const tlSelect = document.getElementById('townlandSelect');
-    const snInput  = document.getElementById('surnameInput');
-    const applyBtn = document.getElementById('applyFiltersBtn');
-    if (!tlSelect || !snInput || !applyBtn) { if (attempts < 20) setTimeout(tryApply, 200); return; }
-
-    // Options populated = more than just "All townlands"
-    if (tlSelect.options.length <= 1 && attempts < 20) { setTimeout(tryApply, 200); return; }
-
-    // Match townland name case-insensitively
-    for (let i = 0; i < tlSelect.options.length; i++) {
-      if (tlSelect.options[i].value.toLowerCase() === townland.toLowerCase()) {
-        tlSelect.value = tlSelect.options[i].value;
-        tlSelect.dispatchEvent(new Event('change'));
-        break;
-      }
-    }
-    snInput.value = surname;
-    applyBtn.click();
-  }
-  setTimeout(tryApply, 400);
-}
-</script>
+<script src="{{ url_for('static', filename='js/home.js') }}?v=1"></script>
 
 <section class="section muted" id="faq">
   <div class="container center-head">
