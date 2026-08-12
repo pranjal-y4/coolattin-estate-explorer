@@ -16,7 +16,11 @@ jobs:
       contents: read
 
     steps:
+      # See azure-deploy.yml: without lfs, coolattin.db arrives as a pointer file
+      # and the deployed site fails to start.
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Set up Python version
         uses: actions/setup-python@v5
