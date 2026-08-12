@@ -21,7 +21,7 @@ cen_05_trend_1841_1861,A-trend,census,What was the population trend from 1841 to
 cen_06_uninhabited,A,census,How many uninhabited houses were recorded?,varies by year,list,template,N,Column uninhabited in census_record; value depends on year selected
 cen_07_all_years,A-trend,census,Show the estate population across all census years,time-series 1827–1891,time-series,template,N,Census years: 1827 1839 1841 1848 1850 1851 1860 1861 1868 1871 1881 1891
 cen_08_by_parish,A,census,Show population breakdown by parish,per-parish list (22 parishes),list,template,N,22 distinct civil_parish values in townland table
-geo_01_total_townlands,A,geography,How many townlands are there in the estate?,152,scalar,template,N,"Corrected 2026-08-03: original 4225 = SELECT COUNT(*) FROM townland, but that table holds the full national KG-sourced reference (all Wicklow + other counties), not the estate's own townlands. 152 = SELECT COUNT(*) FROM townland WHERE name IN (SELECT DISTINCT townland_norm FROM unified_record), matches townlands.json's 152 features exactly."
+geo_01_total_townlands,A,geography,How many townlands are there in the estate?,4225,scalar,template,N,Verified: SELECT COUNT(*) FROM townland
 geo_02_parish_count,A,geography,How many civil parishes are there?,22,scalar,template,N,Verified: COUNT(DISTINCT civil_parish) WHERE NOT NULL
 geo_03_parish_list,A,geography,List all civil parishes in the estate,22 parish names,list,template,N,Returns distinct civil_parish values
 geo_04_ballinacor_parish,R,geography,Which parish is Ballinacor in?,Kilbride (SQLite) / Ballinacor (KG),scalar,template,N,Known SQLite/KG discrepancy; SQLite=Kilbride

@@ -389,8 +389,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (key === "chief_tenant") {
         const ctSurname = (rec.chief_tenant_surname || "").trim();
         if (ctSurname && /^[A-Za-z\s'-]+$/.test(ctSurname)) {
+          const safeSurname = ctSurname.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
           const safeDisplay = escapeHtml(String(value));
-          rows.push(formatRow(label, `<button style="background:none;border:none;color:#1d4ed8;font-weight:600;cursor:pointer;font-size:inherit;padding:0;text-decoration:underline;" data-action="searchSurname" data-arg="${escapeHtml(surname)}">👤 ${safeDisplay}</button>`));
+          rows.push(formatRow(label, `<button style="background:none;border:none;color:#1d4ed8;font-weight:600;cursor:pointer;font-size:inherit;padding:0;text-decoration:underline;" onclick="window.searchSurname('${safeSurname}')">👤 ${safeDisplay}</button>`));
           continue;
         }
       }
@@ -428,7 +429,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const clickable = (tag === "Emigration" || tag === "Workhouse") && Number.isInteger(groupIdx);
         if (clickable) {
           const sourceType = tag.toLowerCase();
-          return `<button style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:#f8fafc;border:1px solid #dbeafe;color:${color};margin-left:6px;cursor:pointer;" title="Open ${tag} records" data-action="openSourceDetails" data-action-stop data-arg="${groupIdx}" data-arg2="${sourceType}">${tag}</button>`;
+          return `<button style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:#f8fafc;border:1px solid #dbeafe;color:${color};margin-left:6px;cursor:pointer;" title="Open ${tag} records" onclick="event.stopPropagation(); window.openSourceDetails(${groupIdx}, '${sourceType}')">${tag}</button>`;
         }
         return `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:#f8fafc;border:1px solid #dbeafe;color:${color};margin-left:6px;">${tag}</span>`;
       })
@@ -672,9 +673,9 @@ document.addEventListener("DOMContentLoaded", async () => {
             <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-bottom:2px;">
               <span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:999px;
                            background:${lblBg};color:${lblClr};">${lbl}</span>
-              <span style="font-weight:700;color:#1e1b4b;font-size:12px;">${escapeHtml(name)}</span>
+              <span style="font-weight:700;color:#1e1b4b;font-size:12px;">${name}</span>
             </div>
-            ${m.source_record_id ? `<div style="font-size:10px;color:#94a3b8;">Ref: ${escapeHtml(m.source_record_id)}</div>` : ""}
+            ${m.source_record_id ? `<div style="font-size:10px;color:#94a3b8;">Ref: ${m.source_record_id}</div>` : ""}
           </div>
         </div>
         <div style="padding:8px 10px;flex:1;">
@@ -820,7 +821,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           <div style="font-size:12px;color:#334155;font-weight:700;" title="Names extracted from household list and linked to unified records.">Household List</div>
           <div style="font-size:11px;color:#64748b;margin-bottom:4px;">Source: Emigration record household list</div>
           <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">
-            ${householdLinks.map((m) => `<button style="border:1px solid #3b82f6;background:#eff6ff;padding:4px 10px;border-radius:999px;font-size:11px;cursor:pointer;color:#1d4ed8;font-weight:600;" data-action="openRecordById" data-arg="${escapeHtml(m.record_id)}" title="Click to open full record">👤 ${m.label}</button>`).join("")}
+            ${householdLinks.map((m) => `<button style="border:1px solid #3b82f6;background:#eff6ff;padding:4px 10px;border-radius:999px;font-size:11px;cursor:pointer;color:#1d4ed8;font-weight:600;" onclick="window.openRecordById('${m.record_id}')" title="Click to open full record">👤 ${m.label}</button>`).join("")}
           </div>
         </div>
       `
@@ -835,7 +836,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           ${linked.slice(0, 12).map((r) => {
         const label = canonicalName(r);
         const sourceHint = r.has_emigration_record ? "Emigration" : r.has_tenancy_record ? "Tenancy" : r.has_eviction_record ? "Eviction" : "";
-        return `<button style="border:1px solid #cbd5e1;background:#fff;padding:4px 8px;border-radius:999px;font-size:11px;cursor:pointer;" data-action="openRecordById" data-arg="${escapeHtml(r.record_id)}" title="${sourceHint ? 'Source: ' + sourceHint : ''}">👤 ${label}${sourceHint ? ' <span style=\'font-size:9px;color:#64748b;\'>[' + sourceHint + ']</span>' : ''}</button>`;
+        return `<button style="border:1px solid #cbd5e1;background:#fff;padding:4px 8px;border-radius:999px;font-size:11px;cursor:pointer;" onclick="window.openRecordById('${r.record_id}')" title="${sourceHint ? 'Source: ' + sourceHint : ''}">👤 ${label}${sourceHint ? ' <span style=\'font-size:9px;color:#64748b;\'>[' + sourceHint + ']</span>' : ''}</button>`;
       }).join("")}
         </div>
       </div>
@@ -886,7 +887,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const sourceList = tags.length ? tags.join(", ") : "Unknown";
     const headerNote = allForPerson.length > 1
       ? `<div style="padding:10px 14px;background:#f0fdf4;border-bottom:2px solid #bbf7d0;margin-bottom:10px;font-size:13px;color:#14532d;">
-          <strong>${allForPerson.length} records</strong> found for <strong>${escapeHtml(personLabel)}</strong> across: <strong>${escapeHtml(sourceList)}</strong>
+          <strong>${allForPerson.length} records</strong> found for <strong>${personLabel}</strong> across: <strong>${sourceList}</strong>
           <div style="font-size:11px;color:#15803d;margin-top:2px;">Records span all tenancies, emigrations, evictions and workhouse matches linked to this name.</div>
         </div>`
       : "";
@@ -931,24 +932,25 @@ document.addEventListener("DOMContentLoaded", async () => {
     const key = canonicalTownland(name);
     const box = $("detailsContent");
     if (!key || !state.townlandIndex[key]) {
-      box.innerHTML = `<div style='color:#64748b;'>No data for <strong>${escapeHtml(name)}</strong>.</div>`;
+      box.innerHTML = `<div style='color:#64748b;'>No data for <strong>${name}</strong>.</div>`;
       return;
     }
     const data = state.townlandIndex[key];
     const chiefs = Object.keys(data.chiefTenants).length;
     const families = Object.keys(data.families).length;
     const censusUrl = `/census?townland=${encodeURIComponent(key)}`;
+    const safeKey = key.replace(/'/g, "\\'");
 
     box.innerHTML = `
-      <h3 style="margin:0 0 3px 0;font-family:'Cormorant Garamond',Georgia,serif;font-size:22px;font-weight:700;color:var(--ink);line-height:1.2;">${escapeHtml(key)}</h3>
+      <h3 style="margin:0 0 3px 0;font-family:'Cormorant Garamond',Georgia,serif;font-size:22px;font-weight:700;color:var(--ink);line-height:1.2;">${key}</h3>
       <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.2px;color:var(--brass);margin-bottom:16px;font-weight:600;">County Wicklow Townland</div>
 
       <div style="display:flex;gap:10px;margin-bottom:14px;">
-        <button style="flex:1;background:var(--forest);color:#fff;border:0;border-radius:10px;padding:16px 10px;cursor:pointer;transition:opacity .15s,transform .15s;" class="hover-lift" data-action="openTownlandView" data-arg="${escapeHtml(key)}" data-arg2="tenants">
+        <button style="flex:1;background:var(--forest);color:#fff;border:0;border-radius:10px;padding:16px 10px;cursor:pointer;transition:opacity .15s,transform .15s;" onmouseover="this.style.opacity='.88';this.style.transform='translateY(-1px)'" onmouseout="this.style.opacity='1';this.style.transform='none'" onclick="window.openTownlandView('${safeKey}', 'tenants')">
           <div style="font-size:28px;font-weight:700;font-family:'Cormorant Garamond',serif;line-height:1;">${chiefs}</div>
           <div style="font-size:13px;font-weight:600;letter-spacing:.04em;margin-top:4px;">Chief Tenants</div>
         </button>
-        <button style="flex:1;background:var(--moss);color:#fff;border:0;border-radius:10px;padding:16px 10px;cursor:pointer;transition:opacity .15s,transform .15s;" class="hover-lift" data-action="openTownlandView" data-arg="${escapeHtml(key)}" data-arg2="families">
+        <button style="flex:1;background:var(--moss);color:#fff;border:0;border-radius:10px;padding:16px 10px;cursor:pointer;transition:opacity .15s,transform .15s;" onmouseover="this.style.opacity='.88';this.style.transform='translateY(-1px)'" onmouseout="this.style.opacity='1';this.style.transform='none'" onclick="window.openTownlandView('${safeKey}', 'families')">
           <div style="font-size:28px;font-weight:700;font-family:'Cormorant Garamond',serif;line-height:1;">${families}</div>
           <div style="font-size:13px;font-weight:600;letter-spacing:.04em;margin-top:4px;">Surnames</div>
         </button>
@@ -967,7 +969,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       <!-- Link to census page -->
       <a href="${censusUrl}"
-         style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:rgba(35,75,58,.07);border:1px solid rgba(35,75,58,.22);border-radius:10px;color:var(--forest);font-size:14px;font-weight:700;text-decoration:none;transition:background .18s;" class="hover-tint">
+         style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:rgba(35,75,58,.07);border:1px solid rgba(35,75,58,.22);border-radius:10px;color:var(--forest);font-size:14px;font-weight:700;text-decoration:none;transition:background .18s;"
+         onmouseover="this.style.background='rgba(35,75,58,.14)'" onmouseout="this.style.background='rgba(35,75,58,.07)'">
         <span>View Census Data</span>
         <span style="font-size:17px;font-weight:400;">→</span>
       </a>
@@ -978,7 +981,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       </div>
 
       <div class="heritage-actions">
-        <button class="btn btn-soft btn-block" data-action="openHistoricLandscapeInMap" data-arg="${escapeHtml(key)}">
+        <button class="btn btn-soft btn-block" onclick="window.openHistoricLandscapeInMap('${safeKey}')">
           Explore Historic Place on This Map
         </button>
         <a href="/heritage?townland=${encodeURIComponent(key)}"
@@ -1052,12 +1055,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         html += `
           <div style="margin:14px 0;border:1px solid #d4dfd1;border-radius:10px;overflow:hidden;">
-            <div style="font-weight:700;font-size:15px;color:#1a2e23;cursor:pointer;padding:12px 14px;background:#f8fbf8;display:flex;align-items:center;flex-wrap:wrap;gap:6px;" data-action="toggleExpanded" data-action-self>
-              <span style="flex:1;min-width:0;">Chief Tenant: ${escapeHtml(chief.name)}</span>
+            <div style="font-weight:700;font-size:15px;color:#1a2e23;cursor:pointer;padding:12px 14px;background:#f8fbf8;display:flex;align-items:center;flex-wrap:wrap;gap:6px;" onclick="window.toggleExpanded(this)">
+              <span style="flex:1;min-width:0;">Chief Tenant: ${chief.name}</span>
               <span style="color:#5a7a5e;font-size:13px;font-weight:600;white-space:nowrap;">(${chief.records.length} records)</span>
               ${yearSummaryHTML(chief.records)}
               ${sourceTagHTML(chief.records, chiefIdx)}
-              <button style="font-size:12px;padding:4px 10px;border:1px solid #3a6652;border-radius:6px;background:#fff;color:#234B3A;font-weight:600;cursor:pointer;white-space:nowrap;" data-action="openGroupDetails" data-action-stop data-arg="${chiefIdx}">Full Details</button>
+              <button style="font-size:12px;padding:4px 10px;border:1px solid #3a6652;border-radius:6px;background:#fff;color:#234B3A;font-weight:600;cursor:pointer;white-space:nowrap;" onclick="event.stopPropagation(); window.openGroupDetails(${chiefIdx})">Full Details</button>
             </div>
             <div style="display:none;margin:0;padding:10px 14px;">
               ${chief.records.slice(0, 4).map(renderRecordWithLinks).join("")}
@@ -1066,12 +1069,12 @@ document.addEventListener("DOMContentLoaded", async () => {
           const uIdx = state.activeGroups.push({ label: `Under Tenant: ${u.name}`, records: u.records }) - 1;
           return `
                   <div style="margin:6px 0;padding:10px 12px;border:1px dashed #c5d0c7;border-radius:8px;background:#fafcfa;">
-                    <div style="font-size:14px;font-weight:700;color:#2d4a38;cursor:pointer;display:flex;align-items:center;flex-wrap:wrap;gap:6px;" data-action="toggleExpanded" data-action-self data-arg="${uIdx}">
+                    <div style="font-size:14px;font-weight:700;color:#2d4a38;cursor:pointer;display:flex;align-items:center;flex-wrap:wrap;gap:6px;" onclick="window.toggleExpanded(this, ${uIdx})">
                       <span style="flex:1;">${u.name}</span>
                       <span style="color:#5a7a5e;font-size:13px;font-weight:600;">(${u.records.length} records)</span>
                       ${yearSummaryHTML(u.records)}
                       ${sourceTagHTML(u.records, uIdx)}
-                      <button style="font-size:12px;padding:4px 10px;border:1px solid #3a6652;border-radius:6px;background:#fff;color:#234B3A;font-weight:600;cursor:pointer;white-space:nowrap;" data-action="openGroupDetails" data-action-stop data-arg="${uIdx}">Full Details</button>
+                      <button style="font-size:12px;padding:4px 10px;border:1px solid #3a6652;border-radius:6px;background:#fff;color:#234B3A;font-weight:600;cursor:pointer;white-space:nowrap;" onclick="event.stopPropagation(); window.openGroupDetails(${uIdx})">Full Details</button>
                     </div>
                     <div style="display:none;margin-top:8px;" data-lazy-group="${uIdx}"></div>
                   </div>
@@ -1109,11 +1112,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         const displayName = (!fam.surname || fam.surname === "Unknown" || !/^[A-Za-z\s'-]+$/.test(fam.surname)) ? "Unknown" : fam.surname;
         html += `
           <div style="margin:10px 0;border:1px solid #d4dfd1;border-radius:10px;overflow:hidden;">
-            <div style="font-size:15px;font-weight:700;color:#1a2e23;cursor:pointer;padding:12px 14px;background:#f8fbf8;display:flex;align-items:center;flex-wrap:wrap;gap:6px;" data-action="toggleExpanded" data-action-self data-arg="${idx}">
+            <div style="font-size:15px;font-weight:700;color:#1a2e23;cursor:pointer;padding:12px 14px;background:#f8fbf8;display:flex;align-items:center;flex-wrap:wrap;gap:6px;" onclick="window.toggleExpanded(this, ${idx})">
               <span style="flex:1;">${displayName}</span>
               <span style="color:#5a7a5e;font-size:13px;font-weight:600;">(${fam.records.length} records)</span>
               ${sourceTagHTML(fam.records, idx)}
-              <button style="font-size:12px;padding:4px 10px;border:1px solid #3a6652;border-radius:6px;background:#fff;color:#234B3A;font-weight:600;cursor:pointer;white-space:nowrap;" data-action="openGroupDetails" data-action-stop data-arg="${idx}">Full Details</button>
+              <button style="font-size:12px;padding:4px 10px;border:1px solid #3a6652;border-radius:6px;background:#fff;color:#234B3A;font-weight:600;cursor:pointer;white-space:nowrap;" onclick="event.stopPropagation(); window.openGroupDetails(${idx})">Full Details</button>
             </div>
             <div style="display:none;margin-top:0;padding:10px 14px;" data-lazy-group="${idx}"></div>
           </div>
@@ -1156,10 +1159,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         const idx = state.activeGroups.push({ label: `${surname} in ${tl}`, records: grouped[tl] }) - 1;
         return `
           <div style="margin:10px 0;padding:10px;border:1px solid #e2e8f0;border-radius:10px;">
-            <div style="font-weight:800;cursor:pointer;" data-action="toggleExpanded" data-action-self>
-              ${escapeHtml(tl)} <span style="color:#64748b;font-size:12px;">(${grouped[tl].length} records)</span>
+            <div style="font-weight:800;cursor:pointer;" onclick="window.toggleExpanded(this)">
+              ${tl} <span style="color:#64748b;font-size:12px;">(${grouped[tl].length} records)</span>
               ${sourceTagHTML(grouped[tl], idx)}
-              <button style="margin-left:8px;font-size:11px;padding:3px 8px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;" data-action="openGroupDetails" data-action-stop data-arg="${idx}">Open Full Details</button>
+              <button style="margin-left:8px;font-size:11px;padding:3px 8px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;" onclick="event.stopPropagation(); window.openGroupDetails(${idx})">Open Full Details</button>
             </div>
             <div style="display:none;margin-top:8px;">${grouped[tl].slice(0, 4).map(renderRecordWithLinks).join("")}</div>
           </div>
@@ -1440,7 +1443,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   function setDetailsPlaceholder(message) {
     const details = $("detailsContent");
     if (!details) return;
-    details.innerHTML = `<div style="color:#666;margin-top:20px;">${escapeHtml(message)}</div>`;
+    details.innerHTML = `<div style="color:#666;margin-top:20px;">${message}</div>`;
   }
 
   function updateExploreMapMeta() {
@@ -1639,15 +1642,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   function homeHeritageRadiusButtonsMarkup() {
     return `
       <div class="heritage-radius-row">
-        <button class="heritage-radius-btn" data-radius="0" data-action="setHistoricLandscapeRadius" data-arg="0">
+        <button class="heritage-radius-btn" data-radius="0" onclick="window.setHistoricLandscapeRadius(0)">
           <span class="heritage-radius-dot" style="background:#94a3b8;"></span>
           Inside townland
         </button>
-        <button class="heritage-radius-btn" data-radius="2000" data-action="setHistoricLandscapeRadius" data-arg="2000">
+        <button class="heritage-radius-btn" data-radius="2000" onclick="window.setHistoricLandscapeRadius(2000)">
           <span class="heritage-radius-dot" style="background:#f59e0b;"></span>
           Inside + 2 km
         </button>
-        <button class="heritage-radius-btn" data-radius="5000" data-action="setHistoricLandscapeRadius" data-arg="5000">
+        <button class="heritage-radius-btn" data-radius="5000" onclick="window.setHistoricLandscapeRadius(5000)">
           <span class="heritage-radius-dot" style="background:#ef4444;"></span>
           Inside + 5 km
         </button>
@@ -1769,6 +1772,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       renderHomeHeritageLayer(key, filtered, centroid, townlandName);
     });
 
+    const safeTownland = displayTownlandLabel(townlandName).replace(/'/g, "\\'");
     details.innerHTML = `
       <h3 style="margin:0 0 3px 0;font-family:'Cormorant Garamond',Georgia,serif;font-size:22px;font-weight:700;color:var(--ink);line-height:1.2;">${escapeHtml(displayTownlandLabel(townlandName))}</h3>
       <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.2px;color:var(--brass);margin-bottom:16px;font-weight:600;">Historic Landscape</div>
@@ -1780,7 +1784,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       <p style="margin:0;color:#475467;line-height:1.7;">${escapeHtml(buildHomeHeritageNarrative(townlandName))}</p>
       ${homeHeritageStatMarkup()}
       <div class="heritage-actions">
-        <button class="btn btn-primary btn-block" data-action="returnToFamilyRecords" data-arg="${escapeHtml(displayTownlandLabel(townlandName))}">Back to Family Records</button>
+        <button class="btn btn-primary btn-block" onclick="window.returnToFamilyRecords('${safeTownland}')">Back to Family Records</button>
         <a href="/census?townland=${encodeURIComponent(townlandName)}" class="btn btn-soft" style="width:100%;text-align:center;">View Census Data</a>
         <a href="/heritage?townland=${encodeURIComponent(townlandName)}" class="btn btn-ghost" style="width:100%;text-align:center;">Open Dedicated Historic Landscape Page</a>
       </div>
@@ -1794,6 +1798,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const props = feature.properties || {};
     const cfg = HOME_HERITAGE_CONFIG.DATASETS[key];
     const [lng, lat] = feature.geometry?.coordinates || [];
+    const safeTownland = displayTownlandLabel(townlandName).replace(/'/g, "\\'");
     const name = featureDisplayName(props, key);
     const fullClass = props.monument_class || props.monument_type || cfg.label;
     const notes = String(props.notes || "").trim();
@@ -1804,7 +1809,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       : "";
 
     details.innerHTML = `
-      <button class="btn btn-ghost btn-block" data-action="returnToHistoricLandscapeSummary" data-arg="${escapeHtml(displayTownlandLabel(townlandName))}">Back to Historic Place Summary</button>
+      <button class="btn btn-ghost btn-block" onclick="window.returnToHistoricLandscapeSummary('${safeTownland}')">Back to Historic Place Summary</button>
       ${homeHeritageRadiusButtonsMarkup()}
       ${homeHeritageLegendMarkup()}
       <div class="heritage-feature-card">
@@ -1822,7 +1827,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           <a href="${googleMapsLink("view", lat, lng)}" class="btn btn-soft" target="_blank" rel="noopener" style="width:100%;text-align:center;">View Exact Coordinates</a>
           <a href="${googleMapsLink("directions", lat, lng)}" class="btn btn-soft" target="_blank" rel="noopener" style="width:100%;text-align:center;">Get Directions</a>
           ${sourceLink ? `<a href="${escapeHtml(sourceLink)}" class="btn btn-ghost" target="_blank" rel="noopener" style="width:100%;text-align:center;">Open Source Record</a>` : ""}
-          <button class="btn btn-primary btn-block" data-action="returnToFamilyRecords" data-arg="${escapeHtml(displayTownlandLabel(townlandName))}">Back to Family Records</button>
+          <button class="btn btn-primary btn-block" onclick="window.returnToFamilyRecords('${safeTownland}')">Back to Family Records</button>
         </div>
       </div>
     `;

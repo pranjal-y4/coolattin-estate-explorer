@@ -92,8 +92,6 @@ def run_full_ingest(dry_run: bool = False) -> dict:
     from backend.services.townland_service import canonical_name, normalize_townland_name
     from config import ActiveConfig
 
-    from backend.services import townland_resolution
-
     stats = {
         "townlands_processed": 0,
         "townlands_kg_enriched": 0,
@@ -102,11 +100,6 @@ def run_full_ingest(dry_run: bool = False) -> dict:
         "census_records_csv_seed": 0,
         "clearances_records": 0,
         "kg_errors": 0,
-        "resolved_existing": 0,
-        "resolved_new_canonical": 0,
-        "resolved_pending_review": 0,
-        "resolved_ambiguous": 0,
-        "resolved_without_geometry": 0,
     }
 
     # ---- Step 1: Load GeoJSON name list ---------------------------------
@@ -196,42 +189,14 @@ def run_full_ingest(dry_run: bool = False) -> dict:
                 log.debug("full_ingest.kg_no_match | name=%s", raw_name)
                 stats["kg_errors"] += 1
 
-        # ---- 3c: Resolve to a canonical entity and persist --------------
-        # The GeoJSON feature is a SOURCE record: entity resolution decides
-        # which canonical townland it belongs to (or creates a new one) and
-        # writes the townland_xref + provenance trail.  Nothing is written
-        # directly to the townland table from here.
-        source_record = townland_resolution.SourceTownland(
-            name=raw_name,
-            source="geojson",
-            source_record_id=td_id or guid or canonical,
-            name_gaelic=townland.name_gaelic,
-            barony=townland.barony,
-            civil_parish=townland.civil_parish,
-            county=townland.county,
-            area_sqm=area_sqm,
-            wkt_geometry=(
-                _geojson_wkt(feat) or townland.wkt_geometry
-            ),
-            centroid_lat=townland.centroid_lat,
-            centroid_lon=townland.centroid_lon,
-            kg_uri=townland.kg_uri,
-            osm_id=townland.osm_id,
-            osi_id=townland.osi_id,
-            vrti_id=townland.vrti_id,
-            td_id=td_id,
-            guid=guid,
-        )
-
+        # ---- 3c: Persist townland --------------------------------------
         if not dry_run:
-            outcome = townland_resolution.resolve_source_townland(source_record)
-            _tally_resolution(stats, outcome)
-            log.debug(
-                "full_ingest.resolved | source_name=%s status=%s method=%s "
-                "canonical=%s entity_id=%s geometry=%s",
-                raw_name, outcome.status, outcome.method,
-                outcome.canonical_name, outcome.entity_id, outcome.has_geometry,
-            )
+            townland_repository.upsert(townland)
+
+        log.debug(
+            "full_ingest.townland | name=%s kg=%s area_sqm=%s",
+            canonical, townland.kg_uri, area_sqm,
+        )
 
         # ---- 3d: Estate population survey records (from GeoJSON) -------
         for year, col in ESTATE_POP_COLUMNS.items():
@@ -357,18 +322,11 @@ def run_full_ingest(dry_run: bool = False) -> dict:
             record_count=total_records,
         )
 
-        # The map serves a database-backed FeatureCollection — drop the cached
-        # copy so this run's canonical townlands are visible immediately.
-        from backend.services.map_service import invalidate_townland_featurecollection
-        invalidate_townland_featurecollection()
-
     log.info(
         "full_ingest.complete | "
         "townlands=%d kg_enriched=%d "
         "census_json=%d census_kg=%d census_csv_seed=%d "
-        "clearances=%d kg_errors=%d "
-        "resolved_existing=%d new_canonical=%d pending_review=%d ambiguous=%d "
-        "without_geometry=%d dry_run=%s",
+        "clearances=%d kg_errors=%d dry_run=%s",
         stats["townlands_processed"],
         stats["townlands_kg_enriched"],
         stats["census_records_json"],
@@ -376,11 +334,6 @@ def run_full_ingest(dry_run: bool = False) -> dict:
         stats["census_records_csv_seed"],
         stats["clearances_records"],
         stats["kg_errors"],
-        stats["resolved_existing"],
-        stats["resolved_new_canonical"],
-        stats["resolved_pending_review"],
-        stats["resolved_ambiguous"],
-        stats["resolved_without_geometry"],
         dry_run,
     )
     return stats
@@ -389,26 +342,6 @@ def run_full_ingest(dry_run: bool = False) -> dict:
 # ------------------------------------------------------------------ #
 # Internal helpers                                                     #
 # ------------------------------------------------------------------ #
-
-def _geojson_wkt(feature: dict) -> Optional[str]:
-    """WKT for a GeoJSON feature's own polygon, or None."""
-    from backend.services.townland_resolution import geojson_geometry_to_wkt
-    return geojson_geometry_to_wkt(feature.get("geometry"))
-
-
-def _tally_resolution(stats: dict, outcome) -> None:
-    """Count resolution outcomes so an ingest run reports what it decided."""
-    if outcome.status == "matched":
-        stats["resolved_existing"] += 1
-    elif outcome.status == "created":
-        stats["resolved_new_canonical"] += 1
-    elif outcome.status == "review":
-        stats["resolved_pending_review"] += 1
-    elif outcome.status == "ambiguous":
-        stats["resolved_ambiguous"] += 1
-    if outcome.status in ("matched", "created") and not outcome.has_geometry:
-        stats["resolved_without_geometry"] += 1
-
 
 def _load_geojson_features(path: Path) -> list[dict]:
     """Load GeoJSON features from file."""

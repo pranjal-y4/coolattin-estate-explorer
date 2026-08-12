@@ -97,17 +97,8 @@ def search_records(
         fn_low = forename.lower()
         records = [r for r in records if fn_low in str(r.get("forename") or "").lower()]
     if townland:
-        spellings = _source_spellings_for(townland)
-        if spellings:
-            # Selecting a canonical townland must return every estate record
-            # filed under any of its observed source spellings.
-            records = [
-                r for r in records
-                if str(r.get("townland") or "").strip().lower() in spellings
-            ]
-        else:
-            tl_low = townland.lower()
-            records = [r for r in records if tl_low in str(r.get("townland") or "").lower()]
+        tl_low = townland.lower()
+        records = [r for r in records if tl_low in str(r.get("townland") or "").lower()]
     if year:
         records = [r for r in records if year in str(r.get("year") or "")]
     if estate:
@@ -118,37 +109,6 @@ def search_records(
         records = records[:limit]
 
     return records
-
-
-def _source_spellings_for(townland: str) -> set[str]:
-    """
-    Every source spelling that resolves to the same canonical townland.
-
-    Goes name → canonical entity_id → townland_xref, so a townland selected on
-    the map by its canonical name still finds estate records written under a
-    historical variant ("Boleynakill" → BALLINAKILL).  Returns an empty set when
-    the name is unknown to the resolver, leaving the caller's plain substring
-    match in place.
-    """
-    try:
-        from backend.repositories import match_review_repository, townland_repository
-        from backend.services.townland_service import canonical_name
-
-        row = townland_repository.find_row_by_name(canonical_name(townland))
-        if row is None or not row.get("entity_id"):
-            return set()
-        xrefs = match_review_repository.get_xrefs_for_entity(row["entity_id"])
-        spellings = {
-            str(x["source_name"]).strip().lower()
-            for x in xrefs
-            if x.get("source_name") and x.get("status") != "rejected"
-        }
-        if spellings:
-            spellings.add(str(row["name"]).strip().lower())
-        return spellings
-    except Exception as exc:
-        log.debug("unified_service.source_spellings_failed | townland=%s error=%s", townland, exc)
-        return set()
 
 
 def get_stats() -> dict:

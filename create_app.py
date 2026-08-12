@@ -182,24 +182,6 @@ def _apply_ask_rate_limits(app: Flask) -> None:
 def _register_legacy_routes(app: Flask) -> None:
     from flask import jsonify
 
-    # The map requests /static/data/townlands.json.  This explicit rule takes
-    # precedence over Flask's /static/<path:filename> catch-all and serves the
-    # database-backed FeatureCollection instead of the raw file, so canonical
-    # townlands added by entity resolution appear without a frontend change.
-    # The estate GeoJSON remains the geometry baseline; nothing is duplicated.
-    @app.get("/static/data/townlands.json")
-    def townlands_map_data():
-        from flask import Response
-        from backend.services.map_service import build_townland_featurecollection
-        import json as _json
-
-        payload = _json.dumps(build_townland_featurecollection())
-        response = Response(payload, mimetype="application/json")
-        # Revalidate every load: the database, not the browser cache, decides
-        # which townlands the map draws.
-        response.headers["Cache-Control"] = "no-cache, must-revalidate"
-        return response
-
     @app.get("/api/centroids")
     def api_centroids_legacy():
         from backend.services.map_service import build_centroids

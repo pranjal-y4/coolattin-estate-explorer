@@ -693,7 +693,7 @@ function buildNarrative(name) {
   if (counts.monuments > 0) parts.push(`${counts.monuments} monument${counts.monuments !== 1 ? "s" : ""} to visit`);
 
   if (parts.length === 0) {
-    return `No recorded heritage features found ${radiusLabel} for ${escapeHtml(name)}. Try widening the radius.`;
+    return `No recorded heritage features found ${radiusLabel} for ${name}. Try widening the radius.`;
   }
 
   const joined =
@@ -701,7 +701,7 @@ function buildNarrative(name) {
       ? parts[0]
       : parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1];
 
-  return `The historic landscape ${radiusLabel} of ${escapeHtml(name)} contains ${joined}.`;
+  return `The historic landscape ${radiusLabel} of ${name} contains ${joined}.`;
 }
 
 // ─── Feature detail panel ─────────────────────────────────────────────────────
@@ -725,12 +725,12 @@ function showFeatureDetail(feature, key, distM) {
   $("hp-feature-content").innerHTML = `
     <div class="hp-feature-card">
       <div class="hp-feature-type" style="color:${cfg.color};">${cfg.label}</div>
-      <div class="hp-feature-name">${escapeHtml(name)}</div>
+      <div class="hp-feature-name">${name}</div>
       <div class="hp-feature-meta">
-        ${fullClass ? `<div><strong>Class:</strong> ${escapeHtml(fullClass)}</div>` : ""}
-        ${townland !== "—" ? `<div><strong>Townland:</strong> ${escapeHtml(townland)}</div>` : ""}
-        ${smrs !== "—" ? `<div><strong>SMRS Ref:</strong> ${escapeHtml(smrs)}</div>` : ""}
-        ${distStr ? `<div><strong>Distance:</strong> ${escapeHtml(distStr)}</div>` : ""}
+        ${fullClass ? `<div><strong>Class:</strong> ${fullClass}</div>` : ""}
+        ${townland !== "—" ? `<div><strong>Townland:</strong> ${townland}</div>` : ""}
+        ${smrs !== "—" ? `<div><strong>SMRS Ref:</strong> ${smrs}</div>` : ""}
+        ${distStr ? `<div><strong>Distance:</strong> ${distStr}</div>` : ""}
         <div><strong>Coordinates:</strong> ${lat.toFixed(5)}, ${lng.toFixed(5)}</div>
       </div>
       ${notes ? `<div class="hp-feature-notes">${escapeHtml(notes).substring(0, 600)}${notes.length > 600 ? "…" : ""}</div>` : ""}
@@ -809,7 +809,7 @@ async function fetchAndRenderPhotos(lat, lng, townlandName) {
 
   if (!grid) return;
 
-  grid.innerHTML = `<p class="note" id="hp-photos-loading">Searching for photos of ${escapeHtml(townlandName)} and nearby places…</p>`;
+  grid.innerHTML = `<p class="note" id="hp-photos-loading">Searching for photos of ${townlandName} and nearby places…</p>`;
   if (sub) sub.textContent = `Near ${townlandName}, County Wicklow`;
 
   try {
@@ -880,7 +880,7 @@ function renderPhotos(photos, grid, townlandName) {
          class="hp-photo-card" style="text-decoration:none;">
         <img src="${escapeHtml(p.thumb)}" alt="${escapeHtml(p.title)}"
              class="hp-photo-img" loading="lazy"
-             data-hide-closest=".hp-photo-card">
+             onerror="this.closest('.hp-photo-card').style.display='none'">
         <div class="hp-photo-body">
           <div class="hp-photo-title">${escapeHtml(p.title)}</div>
           ${p.extract ? `<div class="hp-photo-caption">${escapeHtml(p.extract.substring(0, 90))}…</div>` : ""}
