@@ -1,12 +1,3 @@
-"""
-backend/services/ask_pgvector.py
-
-Persistent pgvector retrieval backend for the Ask page.
-
-This module is intentionally isolated from the rest of the application DB
-layer: the main app continues to use SQLite, while Ask-page dense retrieval
-optionally uses a PostgreSQL pgvector store through DATABASE_URL.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -396,12 +387,6 @@ def sync_retrieval_chunks(force: bool = False) -> dict[str, Any]:
 
 
 def rebuild_hnsw_index() -> dict[str, Any]:
-    """
-    Drop and recreate the HNSW index on ask_retrieval_chunks.embedding.
-
-    Call AFTER a bulk insert to avoid per-row index maintenance overhead.
-    Safe to call on an already-indexed table.
-    """
     status = backend_status()
     if not status["available"]:
         return {**status, "status": "skipped"}

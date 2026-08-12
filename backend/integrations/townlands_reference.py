@@ -1,31 +1,3 @@
-"""
-coolattin/integrations/townlands_reference.py
-
-Wicklow townlands reference integration.
-
-Source: https://www.townlands.ie/wicklow/
-Treatment: Reconciliation authority for canonical Wicklow townland names,
-           barony, civil parish, and electoral division context.
-
-=================================================================
-THIS MODULE READS FROM A LOCAL SEED FILE, NOT FROM LIVE SCRAPING.
-=================================================================
-
-The seed file is at:
-  coolattin/data/seed/wicklow_townlands_reference.json
-
-It is populated once by running:
-  python -m coolattin.jobs.townlands_ingest
-
-After that, all calls to this module read locally.  The KG or web
-is only re-queried when the ingest job is run again manually.
-
-Why?
-  - townlands.ie does not provide a public JSON API.
-  - Scraping on every request is unreliable and rude to the host.
-  - The canonical townland list changes rarely.
-  - Caching locally avoids a single point of failure.
-"""
 from __future__ import annotations
 
 import json
@@ -36,17 +8,12 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-# Populated once by jobs/townlands_ingest.py
 REFERENCE_PATH = Path(__file__).resolve().parent.parent / "data" / "seed" / "wicklow_townlands_reference.json"
 
 
 @dataclass
 class TownlandReference:
-    """
-    A Wicklow townland as recorded in the townlands.ie reference.
-    This is the reconciliation canonical form.
-    """
-    name: str                           # canonical English name (townlands.ie)
+    name: str
     barony: Optional[str] = None
     civil_parish: Optional[str] = None
     electoral_division: Optional[str] = None
@@ -56,13 +23,6 @@ class TownlandReference:
 
 
 def load_wicklow_reference() -> list[TownlandReference]:
-    """
-    Load the local townlands.ie reference snapshot.
-
-    Returns an empty list (with a warning) if the seed file does not
-    exist yet.  Run `python -m coolattin.jobs.townlands_ingest` to
-    populate it.
-    """
     if not REFERENCE_PATH.exists():
         log.warning(
             "townlands_reference.seed_missing — no file at %s. "
@@ -95,13 +55,6 @@ def load_wicklow_reference() -> list[TownlandReference]:
 
 
 def build_name_index(refs: list[TownlandReference]) -> dict[str, TownlandReference]:
-    """
-    Build a lookup dict keyed by normalised canonical name.
-    Used by townland_service for O(1) reconciliation lookups.
-
-    Key is the output of townland_service.normalize_townland_name(),
-    so this dict is consistent with all normalisation done elsewhere.
-    """
     from backend.services.townland_service import normalize_townland_name
     index: dict[str, TownlandReference] = {}
     for ref in refs:

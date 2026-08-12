@@ -1,34 +1,3 @@
-"""
-backend/services/graphrag.py
-
-In-process property-graph GraphRAG engine for the Coolattin Ask pipeline.
-Replaces neo4j_graphrag.py; no external graph server required.
-
-The graph is materialised in graph_nodes / graph_edges tables (SQLite)
-and loaded into a NetworkX MultiDiGraph once at startup.
-
-Public API
-----------
-is_available() -> bool
-    True if the in-process graph is loaded and non-empty; never raises.
-
-vector_seed(question, *, top_k) -> list[str]
-    BGE embed of question → cosine ANN over node passport vectors → top-k node_ids.
-
-retrieve_subgraph(question, *, intent, entity_hints, k_hops) -> GraphRAGResult
-    Seed → k-hop traversal → prune → linearise + community summary.
-
-comparison_subgraph(template_id) -> GraphRAGResult
-    Graph-side corroboration for relational templates (COMPARATIVE intent).
-
-reload() -> None
-    Force re-load from SQLite (call after build_graph.py runs).
-
-Design rules (flow.md §5):
-  - Counts/aggregates always come from SQL; graph results are corroboration only.
-  - If the graph is empty/unavailable, pipeline answers as before — enrichment omitted.
-  - Never raise; always degrade gracefully.
-"""
 from __future__ import annotations
 
 import json
@@ -41,17 +10,12 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 _graph_lock = threading.Lock()
-_GRAPH: Any = None          # networkx.MultiDiGraph — process-lifetime cache
-_node_ids: list[str] = []   # parallel list of node_ids that have embeddings
-_node_matrix: Any = None    # numpy float32 matrix of passport embeddings (N × 1024)
+_GRAPH: Any = None
+_node_ids: list[str] = []
+_node_matrix: Any = None
 
-
-# ---------------------------------------------------------------------------
-# Graph loading
-# ---------------------------------------------------------------------------
 
 def _load_graph() -> None:
-    """Load graph_nodes / graph_edges from SQLite into the process-lifetime cache."""
     global _GRAPH, _node_ids, _node_matrix
     try:
         import networkx as nx
@@ -126,20 +90,14 @@ def _ensure_loaded() -> None:
 
 
 def reload() -> None:
-    """Force a reload from SQLite (call after build_graph.py runs)."""
     global _GRAPH
     with _graph_lock:
         _GRAPH = None
     _load_graph()
 
 
-# ---------------------------------------------------------------------------
-# Result dataclass
-# ---------------------------------------------------------------------------
-
 @dataclass
 class GraphRAGResult:
-    """Structured output of the in-process GraphRAG retrieval."""
     linearized: str = ""
     subgraph_nodes: list[dict[str, Any]] = field(default_factory=list)
     subgraph_rels: list[dict[str, Any]] = field(default_factory=list)
@@ -153,12 +111,7 @@ class GraphRAGResult:
     degradation_note: str = ""
 
 
-# ---------------------------------------------------------------------------
-# Availability
-# ---------------------------------------------------------------------------
-
 def is_available() -> bool:
-    """Return True if the in-process graph is loaded and non-empty; never raises."""
     try:
         from config import ActiveConfig
         if not getattr(ActiveConfig, "GRAPHRAG_ENABLED", True):
@@ -170,15 +123,7 @@ def is_available() -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Vector seed
-# ---------------------------------------------------------------------------
-
 def vector_seed(question: str, *, top_k: int | None = None) -> list[str]:
-    """
-    Embed question with BGE-large (query prefix) and run cosine ANN over
-    in-memory node passport vectors.  Returns node_ids, empty on error.
-    """
     try:
         from config import ActiveConfig
         if top_k is None:
@@ -199,17 +144,13 @@ def vector_seed(question: str, *, top_k: int | None = None) -> list[str]:
             return []
 
         q = np.array(vecs[0], dtype=np.float32)
-        scores = matrix @ q            # dot product == cosine (unit-norm vectors)
+        scores = matrix @ q
         top_idx = scores.argsort()[::-1][:top_k]
         return [ids[i] for i in top_idx]
     except Exception as exc:
         log.warning("graphrag.vector_seed_failed error=%s", exc)
         return []
 
-
-# ---------------------------------------------------------------------------
-# k-hop BFS traversal
-# ---------------------------------------------------------------------------
 
 _MAX_TRIPLES = 200
 
@@ -221,9 +162,6 @@ def _is_place_node(node_id: str) -> bool:
 
 
 def _seed_from_entity_hints(G: Any, entity_hints: dict[str, Any], top_k: int) -> tuple[list[str], list[str]]:
-    """
-    Resolve exact/local seed nodes from entity hints before any embedding call.
-    """
     seed_ids: list[str] = []
     seed_modes: list[str] = []
 
@@ -254,7 +192,6 @@ def _seed_from_entity_hints(G: Any, entity_hints: dict[str, Any], top_k: int) ->
 
 
 def _ego_edges(G: Any, seed_ids: list[str], k: int) -> tuple[list[dict], set[str]]:
-    """Collect all edges reachable within k hops from seed_ids."""
     valid_seeds = [n for n in seed_ids if G.has_node(n)]
     visited: set[str] = set(valid_seeds)
     frontier: set[str] = set(valid_seeds)
@@ -312,7 +249,6 @@ def _edge_priority(edge: dict[str, Any], question: str, seed_set: set[str]) -> t
     elif rel in {"LOCATED_IN", "IN_COMMUNITY"}:
         score -= 50
 
-    # Prefer shorter, more structural relations when scores tie.
     return score, -len(rel)
 
 
@@ -405,7 +341,6 @@ def _linearise(question: str, edges: list[dict], community_summaries: list[str],
         lines.extend(f"- {s}" for s in community_summaries)
         lines.append("")
 
-    # For place hierarchy questions, surface the hierarchy/sibling summary before raw triples.
     if edges and any(seed.startswith("townland:") for seed in seed_ids):
         within_lookup: dict[str, list[dict]] = {}
         for edge in edges:
@@ -475,10 +410,6 @@ def _linearise(question: str, edges: list[dict], community_summaries: list[str],
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Main retrieval entry point
-# ---------------------------------------------------------------------------
-
 def retrieve_subgraph(
     question: str,
     *,
@@ -486,16 +417,6 @@ def retrieve_subgraph(
     entity_hints: dict[str, Any] | None = None,
     k_hops: int | None = None,
 ) -> GraphRAGResult:
-    """
-    Full hybrid retrieval:
-      1. Vector seed over node passport embeddings.
-      2. k-hop BFS traversal from seed nodes.
-      3. Prune to _MAX_TRIPLES and linearise.
-      4. Attach community summaries.
-
-    Returns GraphRAGResult. On any failure returns a degraded result;
-    never raises.
-    """
     try:
         if not is_available():
             return GraphRAGResult(
@@ -569,5 +490,4 @@ def retrieve_subgraph(
 
 
 def comparison_subgraph(template_id: str) -> GraphRAGResult:
-    """Graph-side corroboration for relational templates (COMPARATIVE intent)."""
     return retrieve_subgraph(template_id, intent="comparative")

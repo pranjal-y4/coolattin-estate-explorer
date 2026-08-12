@@ -1,20 +1,3 @@
-"""
-coolattin/services/townland_service.py
-
-Townland service.
-
-Responsibilities:
-  - Name normalisation: NFC, type-qualifier stripping, locational-qualifier
-    preservation, alias resolution
-  - Entity resolution: external-ID-first matching, candidate blocking,
-    pairwise feature scoring, three-band decision, transitive-closure
-    clustering, field-level provenance
-  - Geometry validation (Shapely): ring closure, self-intersection repair,
-    representative_point centroid, within-polygon assertion
-  - Reconciliation with the townlands.ie reference snapshot
-  - DB-first townland retrieval
-  - Data quality reporting
-"""
 from __future__ import annotations
 
 import json
@@ -30,51 +13,24 @@ from backend.models.census_models import Townland
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
-# Qualifiers that are part of the place's identity — must NOT be stripped
 _LOCATIONAL_QUALIFIERS: frozenset[str] = frozenset(
     {"UPPER", "LOWER", "EAST", "WEST", "NORTH", "SOUTH", "BEG", "MORE"}
 )
 
-# Regex: TYPE qualifiers inside parentheses are removed entirely.
-# "(Upper)" is NOT a type qualifier; "(Civil Parish)" is.
 _TYPE_QUALIFIER_RE = re.compile(
     r"\(\s*(?:civil\s+parish|electoral\s+division|barony|county|townland)\s*\)",
     re.IGNORECASE,
 )
 
-MATCH_THRESHOLD_HIGH: float = 0.85   # auto-merge (requires corroboration)
-MATCH_THRESHOLD_LOW:  float = 0.40   # auto-reject
+MATCH_THRESHOLD_HIGH: float = 0.85
+MATCH_THRESHOLD_LOW:  float = 0.40
 
 _ALIAS_MAP: dict[str, str] = {}
 _ALIAS_MAP_LOADED: bool = False
 
 
-# ---------------------------------------------------------------------------
-# Name normalisation
-# ---------------------------------------------------------------------------
-
 def normalize_townland_name(name: str) -> str:
-    """
-    Convert a raw townland name to its canonical uppercase form.
-
-    Pipeline (in order):
-      1. Unicode NFC normalisation
-      2. Smart quotes → ASCII apostrophe
-      3. Strip and collapse whitespace
-      4. Remove "Townland of" prefix
-      5. Strip TYPE qualifiers inside parentheses (Civil Parish, Electoral
-         Division, etc.) — locational qualifiers (Upper, Lower, …) are kept
-      6. Strip remaining parenthesis characters, preserving their content
-      7. Remove punctuation except hyphens and apostrophes
-      8. Uppercase
-
-    BALLINACOR UPPER and BALLINACOR LOWER remain distinct canonical names.
-    Use extract_qualifier() to retrieve the locational qualifier separately.
-    """
     if not name or not isinstance(name, str):
         return ""
 
@@ -91,13 +47,6 @@ def normalize_townland_name(name: str) -> str:
 
 
 def extract_qualifier(raw: str) -> Optional[str]:
-    """
-    Return the locational qualifier from a parenthetical suffix, or None.
-
-    "Ballinacor (Upper)"      → "UPPER"
-    "Ballinacor (Civil Parish)"→ None   (type qualifier, not locational)
-    "Ballymanus"              → None
-    """
     m = re.search(r"\(\s*(\w+(?:\s+\w+)?)\s*\)", raw)
     if not m:
         return None
@@ -108,19 +57,13 @@ def extract_qualifier(raw: str) -> Optional[str]:
 
 
 def resolve_alias(name: str) -> str:
-    """Resolve a normalised name through the alias map."""
     _ensure_alias_map_loaded()
     return _ALIAS_MAP.get(name, name)
 
 
 def canonical_name(raw: str) -> str:
-    """Full pipeline: normalise → resolve alias."""
     return resolve_alias(normalize_townland_name(raw))
 
-
-# ---------------------------------------------------------------------------
-# Geometry validation (Shapely)
-# ---------------------------------------------------------------------------
 
 @dataclass
 class GeomResult:
@@ -132,18 +75,6 @@ class GeomResult:
 
 
 def validate_and_clean_geometry(wkt: Optional[str]) -> GeomResult:
-    """
-    Validate WKT geometry with Shapely; repair if invalid; compute centroid.
-
-    Checks:
-    - Ring closure and no self-intersection
-    - Attempts make_valid() then buffer(0) repair on invalid geometries
-    - Centroid via representative_point() (guaranteed within polygon)
-    - Asserts representative_point().within(polygon); flags if not
-    - Also checks geometric centroid is within polygon
-
-    Returns a GeomResult with cleaned WKT (if repaired), centroid, and flags.
-    """
     if not wkt:
         return GeomResult(None, None, None, [], False)
 
@@ -210,24 +141,18 @@ def validate_and_clean_geometry(wkt: Optional[str]) -> GeomResult:
         return GeomResult(clean_wkt, None, None, flags, False)
 
 
-# ---------------------------------------------------------------------------
-# Entity resolution — feature scoring
-# ---------------------------------------------------------------------------
-
 @dataclass
 class MatchFeatures:
-    """Feature vector for a candidate pair of townland records."""
     external_id_match: bool = False
-    jaro_winkler:      float = 0.0   # name similarity in [0, 1]
-    gaelic_similarity: float = 0.0   # Gaelic name similarity in [0, 1]
+    jaro_winkler:      float = 0.0
+    gaelic_similarity: float = 0.0
     same_civil_parish: bool  = False
     same_barony:       bool  = False
-    area_ratio:        float = 0.0   # min/max area in [0, 1]
-    polygon_iou:       float = 0.0   # Shapely IoU in [0, 1]
+    area_ratio:        float = 0.0
+    polygon_iou:       float = 0.0
 
     @property
     def score(self) -> float:
-        """Weighted combination; external-ID match is decisive (0.99)."""
         if self.external_id_match:
             return 0.99
         return (
@@ -241,11 +166,6 @@ class MatchFeatures:
 
     @property
     def has_corroboration(self) -> bool:
-        """
-        True when evidence beyond name similarity alone supports auto-merge.
-
-        Name similarity must never be the sole basis for a merge.
-        """
         return (
             self.external_id_match
             or self.polygon_iou >= 0.8
@@ -267,37 +187,26 @@ class MatchFeatures:
 
 
 def score_pair(a: dict, b: dict) -> MatchFeatures:
-    """
-    Compute a MatchFeatures vector for two townland record dicts.
-
-    Both dicts must have at least a 'name' key.  All other keys are optional.
-    External-ID comparison is attempted on: osm_id, osi_id, vrti_id, kg_uri,
-    logainm_id.  A shared non-null authority ID is a decisive match.
-    """
     from rapidfuzz.distance import JaroWinkler as _JW
 
     feats = MatchFeatures()
 
-    # 1. External-ID match — decisive; checked before any name comparison
     for id_key in ("osm_id", "osi_id", "vrti_id", "kg_uri", "logainm_id"):
         av, bv = a.get(id_key), b.get(id_key)
         if av and bv and av == bv:
             feats.external_id_match = True
             break
 
-    # 2. Name Jaro-Winkler similarity
     an = normalize_townland_name(a.get("name") or "")
     bn = normalize_townland_name(b.get("name") or "")
     if an and bn:
         feats.jaro_winkler = _JW.normalized_similarity(an, bn)
 
-    # 3. Gaelic name similarity
     ag = (a.get("name_gaelic") or "").strip().upper()
     bg = (b.get("name_gaelic") or "").strip().upper()
     if ag and bg:
         feats.gaelic_similarity = _JW.normalized_similarity(ag, bg)
 
-    # 4. Administrative hierarchy
     ap = (a.get("civil_parish") or "").strip().upper()
     bp = (b.get("civil_parish") or "").strip().upper()
     feats.same_civil_parish = bool(ap and ap == bp)
@@ -306,19 +215,16 @@ def score_pair(a: dict, b: dict) -> MatchFeatures:
     bb = (b.get("barony") or "").strip().upper()
     feats.same_barony = bool(ab and ab == bb)
 
-    # 5. Area ratio
     aa, ba_ = a.get("area_sqm"), b.get("area_sqm")
     if aa and ba_ and aa > 0 and ba_ > 0:
         feats.area_ratio = min(aa, ba_) / max(aa, ba_)
 
-    # 6. Polygon IoU
     feats.polygon_iou = _polygon_iou(a.get("wkt_geometry"), b.get("wkt_geometry"))
 
     return feats
 
 
 def _polygon_iou(wkt_a: Optional[str], wkt_b: Optional[str]) -> float:
-    """Shapely intersection-over-union of two WKT polygons; 0.0 on any error."""
     if not wkt_a or not wkt_b:
         return 0.0
     try:
@@ -333,22 +239,6 @@ def _polygon_iou(wkt_a: Optional[str], wkt_b: Optional[str]) -> float:
 
 
 def decide_match(features: MatchFeatures) -> str:
-    """
-    Three-band decision on a MatchFeatures vector.
-
-    Returns: 'merge' | 'review' | 'reject'
-
-    Merge paths (name similarity alone never triggers a merge):
-      1. Shared external authority ID — always decisive.
-      2. score >= HIGH_THRESHOLD AND any corroboration present.
-      3. Polygon IoU >= 0.8 AND Jaro-Winkler >= 0.80 — strong geometric evidence.
-      4. Same civil_parish AND barony AND area_ratio >= 0.90 AND JW >= 0.90 —
-         strong administrative + name evidence.
-
-    Paths 3 and 4 are listed explicitly because the score alone cannot reach
-    HIGH_THRESHOLD through administrative signals without geometry data.
-    """
-    # External ID: always decisive — a shared authority ID is a confirmed match
     if features.external_id_match:
         return "merge"
 
@@ -356,15 +246,12 @@ def decide_match(features: MatchFeatures) -> str:
     if s < MATCH_THRESHOLD_LOW:
         return "reject"
 
-    # General high-confidence path (covers cases with IoU contributing to score)
     if s >= MATCH_THRESHOLD_HIGH and features.has_corroboration:
         return "merge"
 
-    # Explicit geometric corroboration path
     if features.polygon_iou >= 0.8 and features.jaro_winkler >= 0.80:
         return "merge"
 
-    # Explicit administrative corroboration path
     if (
         features.same_civil_parish
         and features.same_barony
@@ -376,16 +263,7 @@ def decide_match(features: MatchFeatures) -> str:
     return "review"
 
 
-# ---------------------------------------------------------------------------
-# Entity resolution — candidate blocking
-# ---------------------------------------------------------------------------
-
 def _block_key(record: dict) -> str:
-    """
-    Blocking key: (county-prefix):(first-3-chars-of-normalised-name).
-
-    Records sharing a block key are candidate pairs for comparison.
-    """
     name   = normalize_townland_name(record.get("name") or "")
     prefix = name[:3] if len(name) >= 3 else name
     county = (record.get("county") or "").strip().upper()
@@ -394,27 +272,13 @@ def _block_key(record: dict) -> str:
 
 
 def build_candidate_blocks(records: list[dict]) -> dict[str, list[dict]]:
-    """
-    Group records into candidate blocks by (county, name-prefix).
-    Returns {block_key: [record, ...]} for all blocks with >= 2 records.
-    """
     raw: dict[str, list[dict]] = {}
     for rec in records:
         raw.setdefault(_block_key(rec), []).append(rec)
     return {k: v for k, v in raw.items() if len(v) >= 2}
 
 
-# ---------------------------------------------------------------------------
-# Entity resolution — transitive closure and canonical selection
-# ---------------------------------------------------------------------------
-
 def transitive_closure(pairs: list[tuple]) -> list[list]:
-    """
-    Union-find over (id_a, id_b) pairs.
-
-    Returns a list of connected components (clusters), where each cluster is
-    a list of ids that were transitively linked through the pair list.
-    """
     parent: dict = {}
 
     def _find(x):
@@ -438,11 +302,6 @@ def transitive_closure(pairs: list[tuple]) -> list[list]:
 
 
 def pick_canonical(cluster_records: list[dict]) -> dict:
-    """
-    Choose the canonical record from a matched cluster.
-
-    Preference: KG source > JSON source > other; then most fields populated.
-    """
     def _score(r: dict) -> tuple:
         src_rank = {"kg": 2, "json": 1}.get(r.get("source") or "", 0)
         populated = sum(
@@ -454,18 +313,7 @@ def pick_canonical(cluster_records: list[dict]) -> dict:
     return max(cluster_records, key=_score)
 
 
-# ---------------------------------------------------------------------------
-# Data quality report
-# ---------------------------------------------------------------------------
-
 def generate_quality_report() -> dict:
-    """
-    Return a data-quality summary dict covering:
-    - total townlands and those with no KG match
-    - pending and confirmed match_review entries
-    - rows with geometry or coordinate flags
-    - same-name-different-geometry collisions
-    """
     try:
         from backend.repositories import match_review_repository
         return match_review_repository.quality_summary()
@@ -474,40 +322,16 @@ def generate_quality_report() -> dict:
         return {"error": str(exc)}
 
 
-# ---------------------------------------------------------------------------
-# Reviewer feedback
-# ---------------------------------------------------------------------------
-
 def record_reviewer_decision(
     match_id: int,
     decision: str,
     note: str = "",
 ) -> None:
-    """
-    Apply a reviewer decision to a match_review entry.
-
-    decision: 'confirmed' | 'rejected'
-
-    A 'confirmed' decision additionally creates a townland_xref entry linking
-    the two records, seeding future ingest runs with the confirmed match.
-    """
     from backend.repositories import match_review_repository
     match_review_repository.apply_decision(match_id, decision, note)
 
 
-# ---------------------------------------------------------------------------
-# DB-first townland retrieval
-# ---------------------------------------------------------------------------
-
 def get_wicklow_townlands() -> dict:
-    """
-    Return all townlands from the local DB.
-
-    Flow:
-      1. Check local DB
-      2. If records exist, serve from DB (checking for staleness)
-      3. If DB empty, log and return empty (never silently seed)
-    """
     from backend.repositories import townland_repository, refresh_state_repository
     from config import ActiveConfig
     from datetime import datetime, timezone
@@ -550,19 +374,7 @@ def get_wicklow_townlands() -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Centroid computation from GeoJSON (Shapely-backed)
-# ---------------------------------------------------------------------------
-
 def build_centroids_from_geojson(geojson_path: Path) -> dict[str, tuple[float, float]]:
-    """
-    Compute lat/lon centroids for all townlands in a GeoJSON file.
-
-    Uses Shapely representative_point() which is guaranteed to lie within the
-    polygon.  Falls back to arithmetic ring-average if Shapely is unavailable.
-
-    Returns: normalised_name → (lat, lon)
-    """
     if not geojson_path.exists():
         log.warning("townland_service.geojson_missing | path=%s", geojson_path)
         return {}
@@ -616,17 +428,7 @@ def build_centroids_from_geojson(geojson_path: Path) -> dict[str, tuple[float, f
     return out
 
 
-# ---------------------------------------------------------------------------
-# Reconciliation helpers
-# ---------------------------------------------------------------------------
-
 def reconcile_with_reference(townlands: list[Townland]) -> list[Townland]:
-    """
-    Enrich a list of Townland objects with barony/parish context from the
-    townlands.ie reference file.
-
-    Unmatched townlands are logged to reconciliation_gaps.csv for review.
-    """
     from backend.integrations.townlands_reference import (
         load_wicklow_reference,
         build_name_index,
@@ -664,10 +466,6 @@ def reconcile_with_reference(townlands: list[Townland]) -> list[Townland]:
     return townlands
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
 def _ensure_alias_map_loaded() -> None:
     global _ALIAS_MAP, _ALIAS_MAP_LOADED
     if _ALIAS_MAP_LOADED:
@@ -680,7 +478,7 @@ def _ensure_alias_map_loaded() -> None:
             _ALIAS_MAP = {
                 normalize_townland_name(k): normalize_townland_name(v)
                 for k, v in raw.items()
-                if not k.startswith("_")  # skip any metadata/comment keys
+                if not k.startswith("_")
             }
             log.info("townland_service.alias_map_loaded | entries=%d", len(_ALIAS_MAP))
         except Exception as exc:

@@ -1,15 +1,3 @@
-"""
-extensions.py
-
-Flask extension singletons — imported by create_app and by modules
-that need db access without circular imports.
-
-Currently provides:
-  - init_db(): registers the SQLite database path
-  - get_db_conn(): returns a sqlite3 connection with row_factory set
-  - ensure_schema(): creates all tables if they do not exist and runs
-    any pending migrations
-"""
 from __future__ import annotations
 
 import logging
@@ -23,7 +11,6 @@ _DB_PATH: Path | None = None
 
 
 def init_db(db_path: Path) -> None:
-    """Call from create_app() to register the database path."""
     global _DB_PATH
     _DB_PATH = db_path
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -31,7 +18,6 @@ def init_db(db_path: Path) -> None:
 
 
 def get_db_conn() -> sqlite3.Connection:
-    """Return a sqlite3 connection.  Caller is responsible for closing it."""
     if _DB_PATH is None:
         raise RuntimeError("Database not initialised — call init_db() first via create_app()")
     conn = sqlite3.connect(str(_DB_PATH))
@@ -45,12 +31,6 @@ def get_db_conn() -> sqlite3.Connection:
     return conn
 
 
-# ---------------------------------------------------------------------------
-# Schema DDL strings
-# ---------------------------------------------------------------------------
-
-# Fresh-install townland table: entity_id is the surrogate identity; name has
-# no UNIQUE constraint so same-named townlands in different baronies can coexist.
 _TOWNLAND_CREATE = """
 CREATE TABLE townland (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,7 +64,6 @@ CREATE TABLE townland (
 )
 """
 
-# Columns added in the v2 migration — used when upgrading an existing DB
 _V2_MIGRATION_COLS: list[tuple[str, str]] = [
     ("entity_id",      "TEXT"),
     ("qualifier",      "TEXT"),
@@ -235,15 +214,8 @@ CREATE INDEX IF NOT EXISTS idx_ge_dst ON graph_edges(dst, rel_type);
 
 
 def ensure_schema() -> None:
-    """
-    Create all tables if they do not exist and apply pending migrations.
-    Safe to call on every startup.
-    """
     conn = get_db_conn()
     try:
-        # ----------------------------------------------------------------
-        # Stable tables — no migration needed
-        # ----------------------------------------------------------------
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS census_record (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -282,9 +254,6 @@ def ensure_schema() -> None:
         );
         """)
 
-        # ----------------------------------------------------------------
-        # Townland table — create fresh or migrate existing
-        # ----------------------------------------------------------------
         townland_exists = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='townland'"
         ).fetchone() is not None
@@ -300,7 +269,6 @@ def ensure_schema() -> None:
             if "entity_id" not in col_names:
                 _apply_v2_migration(conn)
             else:
-                # entity_id already present — just add any newer columns silently
                 for col_name, col_type in _V2_MIGRATION_COLS:
                     if col_name not in col_names:
                         try:
@@ -311,14 +279,8 @@ def ensure_schema() -> None:
                             pass
                 conn.commit()
 
-        # ----------------------------------------------------------------
-        # Resolution-engine support tables
-        # ----------------------------------------------------------------
         conn.executescript(_SUPPORT_TABLES)
 
-        # ----------------------------------------------------------------
-        # Indexes
-        # ----------------------------------------------------------------
         for stmt in [
             "CREATE INDEX IF NOT EXISTS idx_townland_civil_parish ON townland(civil_parish)",
             "CREATE INDEX IF NOT EXISTS idx_townland_barony       ON townland(barony)",
@@ -341,20 +303,6 @@ def ensure_schema() -> None:
 
 
 def _apply_v2_migration(conn: sqlite3.Connection) -> None:
-    """
-    Migrate an existing townland table to v2 schema.
-
-    Adds entity_id, qualifier, logainm_id, geometry_flag via ALTER TABLE.
-    The UNIQUE constraint on name cannot be dropped in SQLite without a full
-    table recreation.  Within the Coolattin estate dataset names are unique
-    in practice, so this constraint is tolerated.  If same-named townlands
-    from different baronies must coexist, run the manual migration:
-
-        ALTER TABLE townland RENAME TO townland_old;
-        CREATE TABLE townland ( ... );   -- from _TOWNLAND_CREATE, no UNIQUE
-        INSERT INTO townland SELECT * FROM townland_old;
-        DROP TABLE townland_old;
-    """
     col_names = {
         c["name"]
         for c in conn.execute("PRAGMA table_info(townland)").fetchall()
@@ -363,7 +311,6 @@ def _apply_v2_migration(conn: sqlite3.Connection) -> None:
         if col_name not in col_names:
             conn.execute(f"ALTER TABLE townland ADD COLUMN {col_name} {col_type}")
 
-    # Backfill entity_id for all existing rows
     rows = conn.execute("SELECT id FROM townland WHERE entity_id IS NULL").fetchall()
     for row in rows:
         conn.execute(

@@ -1,18 +1,3 @@
-"""
-scripts/generate_three_features_doc.py
-
-Generate a Word document describing the implementation of three features
-in the Coolattin Estate Records Explorer:
-  1. Workhouse Matching
-  2. Application Performance
-  3. RDF/KG Comparison
-
-Usage:
-    python3 scripts/generate_three_features_doc.py
-
-Output:
-    docs/Three_Feature_Implementation.docx
-"""
 from __future__ import annotations
 
 import datetime
@@ -30,7 +15,6 @@ from docx.oxml import OxmlElement
 
 OUT_PATH = ROOT / "docs" / "Three_Feature_Implementation.docx"
 
-# ── Colour palette ─────────────────────────────────────────────────────────
 DARK_NAVY   = RGBColor(0x0F, 0x17, 0x2A)
 ACCENT_BLUE = RGBColor(0x1D, 0x4E, 0xD8)
 DEEP_GREEN  = RGBColor(0x16, 0x6A, 0x34)
@@ -39,8 +23,6 @@ TABLE_ALT   = RGBColor(0xF0, 0xF4, 0xFF)
 CODE_BG     = RGBColor(0xF8, 0xFA, 0xFC)
 GREY_TEXT   = RGBColor(0x47, 0x54, 0x67)
 
-
-# ── Helpers ────────────────────────────────────────────────────────────────
 
 def set_cell_bg(cell, rgb: RGBColor):
     tc = cell._tc
@@ -107,7 +89,6 @@ def add_code(doc, text):
 def add_table(doc, headers, rows, col_widths=None):
     table = doc.add_table(rows=1 + len(rows), cols=len(headers))
     table.style = "Table Grid"
-    # Header row
     hdr_cells = table.rows[0].cells
     for i, h in enumerate(headers):
         hdr_cells[i].text = h
@@ -117,7 +98,6 @@ def add_table(doc, headers, rows, col_widths=None):
                 run.font.bold = True
                 run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
                 run.font.size = Pt(10)
-    # Data rows
     for ri, row_data in enumerate(rows):
         row_cells = table.rows[ri + 1].cells
         bg = TABLE_ALT if ri % 2 == 0 else RGBColor(0xFF, 0xFF, 0xFF)
@@ -149,20 +129,14 @@ def add_divider(doc):
     return p
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Document build
-# ══════════════════════════════════════════════════════════════════════════════
-
 doc = Document()
 
-# Page margins
 for section in doc.sections:
     section.top_margin    = Cm(2.5)
     section.bottom_margin = Cm(2.5)
     section.left_margin   = Cm(3.0)
     section.right_margin  = Cm(2.5)
 
-# ── Cover ──────────────────────────────────────────────────────────────────
 title_p = doc.add_paragraph()
 title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 tr = title_p.add_run("Coolattin Estate Records Explorer")
@@ -186,7 +160,6 @@ doc.add_paragraph()
 add_divider(doc)
 doc.add_paragraph()
 
-# ── Introduction ───────────────────────────────────────────────────────────
 add_heading(doc, "Overview", level=1)
 add_body(doc,
     "This document describes the design and implementation of three technical "
@@ -215,9 +188,6 @@ add_table(doc,
 
 add_divider(doc)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# FEATURE 1 — WORKHOUSE MATCHING
-# ══════════════════════════════════════════════════════════════════════════════
 add_heading(doc, "Feature 1: Workhouse Matching", level=1)
 
 add_heading(doc, "1.1  Problem Statement", level=2)
@@ -332,9 +302,6 @@ add_body(doc,
 
 add_divider(doc)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# FEATURE 2 — APPLICATION PERFORMANCE
-# ══════════════════════════════════════════════════════════════════════════════
 add_heading(doc, "Feature 2: Application Performance", level=1)
 
 add_heading(doc, "2.1  Scope", level=2)
@@ -423,9 +390,6 @@ add_body(doc,
 
 add_divider(doc)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# FEATURE 3 — RDF/KG COMPARISON
-# ══════════════════════════════════════════════════════════════════════════════
 add_heading(doc, "Feature 3: RDF/KG Comparison", level=1)
 
 add_heading(doc, "3.1  Purpose", level=2)
@@ -561,7 +525,6 @@ add_body(doc,
 
 add_divider(doc)
 
-# ── Summary ────────────────────────────────────────────────────────────────
 add_heading(doc, "Summary of Design Decisions", level=1)
 add_table(doc,
     headers=["Feature", "Key decision", "Rationale"],
@@ -599,7 +562,6 @@ fr.font.size = Pt(9)
 fr.font.color.rgb = GREY_TEXT
 fr.font.italic = True
 
-# ── Save ───────────────────────────────────────────────────────────────────
 OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 doc.save(str(OUT_PATH))
 print(f"Saved → {OUT_PATH}")

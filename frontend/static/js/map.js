@@ -1,30 +1,5 @@
-/**
- * coolattin/static/js/map.js
- *
- * Main map initialisation — shared across all map pages.
- *
- * Layer config is fetched from /api/map/layers (served by map_service.py).
- * Tile URLs are NEVER hardcoded here — always from the backend config.
- *
- * Exports:
- *   initLayerSwitcher(mapInstance, containerId)  — builds the basemap switcher UI
- *   buildLayerMap(layers)                        — returns { id: L.TileLayer }
- *   switchLayer(mapInstance, layerMap, layerId)  — swaps the active base layer
- */
 
-// ------------------------------------------------------------------ //
-// Layer switcher factory                                               //
-// Called from census.js and any other page that has a Leaflet map.   //
-// ------------------------------------------------------------------ //
 
-/**
- * Fetch layer config from backend, build Leaflet tile layers,
- * and render the layer switcher button group.
- *
- * @param {L.Map} mapInstance  — Leaflet map to attach layers to
- * @param {string} containerId — id of the HTML element to render buttons into
- * @returns {Promise<{ layerMap: Object, config: Object }>}
- */
 async function initLayerSwitcher(mapInstance, containerId) {
   let config;
   try {
@@ -38,13 +13,11 @@ async function initLayerSwitcher(mapInstance, containerId) {
   const layerMap = buildLayerMap(config.layers);
   const overlayMap = buildLayerMap(config.overlays || []);
 
-  // Add default base layer
   const defaultId = config.default || "standard";
   if (layerMap[defaultId]) {
     layerMap[defaultId].addTo(mapInstance);
   }
 
-  // Restore user preference from localStorage
   const savedLayer = localStorage.getItem("coolattin_map_layer");
   if (savedLayer && layerMap[savedLayer] && savedLayer !== defaultId) {
     if (layerMap[defaultId]) mapInstance.removeLayer(layerMap[defaultId]);
@@ -60,12 +33,6 @@ async function initLayerSwitcher(mapInstance, containerId) {
   return { layerMap, overlayMap, config };
 }
 
-/**
- * Build a map of { layerId: L.TileLayer } from a layers config array.
- *
- * @param {Array} layers — from /api/map/layers response
- * @returns {Object}
- */
 function buildLayerMap(layers) {
   const map = {};
   (layers || []).forEach(layer => {
@@ -77,13 +44,6 @@ function buildLayerMap(layers) {
   return map;
 }
 
-/**
- * Swap the active base layer.
- *
- * @param {L.Map} mapInstance
- * @param {Object} layerMap    — { layerId: L.TileLayer }
- * @param {string} layerId     — id of the layer to activate
- */
 function switchLayer(mapInstance, layerMap, layerId) {
   Object.values(layerMap).forEach(l => {
     if (mapInstance.hasLayer(l)) mapInstance.removeLayer(l);
@@ -94,9 +54,6 @@ function switchLayer(mapInstance, layerMap, layerId) {
   }
 }
 
-// ------------------------------------------------------------------ //
-// Internal helpers                                                     //
-// ------------------------------------------------------------------ //
 
 function _renderSwitcherUI(mapInstance, layerMap, overlayMap, config, containerId) {
   const container = document.getElementById(containerId);
@@ -119,7 +76,6 @@ function _renderSwitcherUI(mapInstance, layerMap, overlayMap, config, containerI
       btn.classList.add("active");
       switchLayer(mapInstance, layerMap, layer.id);
 
-      // Auto-toggle labels overlay when switching to satellite
       if (layer.id === "satellite" && overlayMap["labels_overlay"]) {
         overlayMap["labels_overlay"].addTo(mapInstance);
       } else if (overlayMap["labels_overlay"]) {
@@ -131,7 +87,6 @@ function _renderSwitcherUI(mapInstance, layerMap, overlayMap, config, containerI
   });
 }
 
-/** Fallback tile config used when /api/map/layers is unreachable. */
 function _fallbackLayerConfig() {
   return {
     default: "standard",
@@ -170,8 +125,3 @@ function _fallbackLayerConfig() {
   };
 }
 
-// ------------------------------------------------------------------ //
-// map.js is a utility library only — no map initialisation here.      //
-// The home page map (index.html) is managed exclusively by main.js.  //
-// The census page map uses initLayerSwitcher() from census.js.        //
-// ------------------------------------------------------------------ //

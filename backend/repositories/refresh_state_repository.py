@@ -1,12 +1,3 @@
-"""
-coolattin/repositories/refresh_state_repository.py
-
-Persistence for refresh state — tracks when datasets were last
-fetched from the VRTI KG so the service layer can implement
-DB-first / KG-second retrieval without repeated KG calls.
-
-This module is the ONLY place that reads/writes the `refresh_state` table.
-"""
 from __future__ import annotations
 
 import logging
@@ -18,17 +9,10 @@ from backend.models.census_models import RefreshState
 
 log = logging.getLogger(__name__)
 
-# Default staleness TTL in days — overridden per dataset in config
 DEFAULT_STALE_AFTER_DAYS = 7
 
 
 def get(dataset_key: str, stale_after_days: int = DEFAULT_STALE_AFTER_DAYS) -> Optional[RefreshState]:
-    """
-    Return the refresh state for a dataset, or None if never synced.
-
-    The `is_stale` field is computed here based on `last_synced_at`
-    vs the configured TTL — it is not stored in the DB.
-    """
     conn = get_db_conn()
     try:
         row = conn.execute(
@@ -62,10 +46,6 @@ def upsert(
     export_file: Optional[str] = None,
     query_hash: Optional[str] = None,
 ) -> None:
-    """
-    Insert or update refresh state for a dataset.
-    Call this immediately after a successful KG ingestion.
-    """
     now_iso = datetime.now(timezone.utc).isoformat()
     conn = get_db_conn()
     try:
@@ -106,7 +86,6 @@ def upsert(
 
 
 def _parse_dt(value: Optional[str]) -> Optional[datetime]:
-    """Parse an ISO datetime string into an aware datetime object."""
     if not value:
         return None
     try:

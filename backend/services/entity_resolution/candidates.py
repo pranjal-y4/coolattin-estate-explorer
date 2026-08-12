@@ -1,8 +1,3 @@
-"""
-backend/services/entity_resolution/candidates.py
-
-Candidate blocking and fuzzy candidate generation for workhouse mentions.
-"""
 from __future__ import annotations
 
 from collections import defaultdict
@@ -24,12 +19,6 @@ def _fuzzy_ratio(a: str, b: str) -> float:
 
 
 def build_unified_index(unified_records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """
-    Pre-build a blocking index keyed by phonetic surname.
-    Reduces generate_candidates from O(n_workhouse × n_unified) to
-    O(n_workhouse × avg_surname_bucket_size).
-    Also includes a '_place' bucket for place-matched lookups.
-    """
     idx: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for rec in unified_records:
         psn = rec.get("phonetic_surname") or ""
@@ -48,13 +37,6 @@ def generate_candidates(
     max_candidates: int = 25,
     unified_index: dict[str, list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
-    """
-    Generate candidate unified records for a workhouse mention.
-
-    Pass ``unified_index`` (built once via ``build_unified_index``) to avoid
-    scanning all 13 k unified records for every mention — typically reduces
-    the search space from 13,707 to a few dozen per mention.
-    """
     candidates: dict[str, dict[str, Any]] = {}
     m_name = mention.get("normalised_name") or ""
     m_surname = mention.get("surname") or ""
@@ -63,8 +45,6 @@ def generate_candidates(
     m_place = mention.get("normalised_place") or ""
     m_year = mention.get("event_year")
 
-    # When an index is available, restrict the search to relevant surname/place
-    # buckets instead of iterating the entire unified corpus.
     if unified_index is not None:
         pool: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
@@ -79,7 +59,6 @@ def generate_candidates(
                 if rid and rid not in seen_ids:
                     seen_ids.add(rid)
                     pool.append(rec)
-        # Fall back to full scan only when no index bucket produced any candidates
         if not pool:
             pool = unified_records
     else:

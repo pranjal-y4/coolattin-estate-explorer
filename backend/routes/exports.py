@@ -1,12 +1,3 @@
-"""
-coolattin/routes/exports.py
-
-Export download routes.
-
-Routes:
-  GET /api/exports/census/latest     — latest census export info
-  GET /api/exports/census/download   — download the export file
-"""
 from flask import Blueprint, jsonify, send_file, abort
 from pathlib import Path
 

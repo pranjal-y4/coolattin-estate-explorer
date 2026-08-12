@@ -1,17 +1,3 @@
-"""
-coolattin/routes/unified.py
-
-Unified records API routes.
-
-Routes:
-  GET /api/unified/records        — search unified estate database
-  GET /api/unified/stats          — record counts and field coverage
-  GET /api/unified/townlands      — list of townlands
-  GET /api/unified/surnames       — list of surnames
-  GET /api/unified/surname-suggest — autocomplete surnames
-  GET /api/centroids              — townland centroid lat/lon
-  GET /api/workhouse/match/<id>   — workhouse fuzzy matches for a record
-"""
 from flask import Blueprint, jsonify, request
 
 bp = Blueprint("unified_api", __name__)
@@ -33,9 +19,6 @@ def api_unified_records():
         year=year, estate=estate, limit=limit,
     )
 
-    # Use persisted entity-resolution links from the database.
-    # The legacy in-memory fuzzy index (get_match_index) is not used — it requires
-    # O(n×m) SequenceMatcher over 13k records and times out gunicorn workers.
     resolution_map: dict = {}
     try:
         from backend.services.workhouse_entity_resolution import (
@@ -93,7 +76,6 @@ def api_surname_suggest():
 
 @bp.get("/surnames-all")
 def api_surnames_all():
-    """Return all surnames across the entire dataset (not scoped to a townland)."""
     from backend.services.unified_service import suggest_surnames
     q = (request.args.get("q") or "").strip()
     return jsonify(suggest_surnames(q=q, townland=""))
@@ -101,7 +83,6 @@ def api_surnames_all():
 
 @bp.get("/workhouse-by-townland")
 def api_workhouse_by_townland():
-    """Return workhouse records (source_mentions) linked to a given townland via entity resolution."""
     townland = (request.args.get("townland") or "").strip()
     if not townland:
         return jsonify({"records": [], "linked": [], "unlinked": [], "error": "townland required"})
@@ -111,7 +92,6 @@ def api_workhouse_by_townland():
     try:
         tn = townland.upper().replace("'", "''")
 
-        # Workhouse records linked to estate records in this townland via entity resolution
         linked_rows = conn.execute(
             """
             SELECT sm.id AS mention_id, sm.raw_name, sm.forename AS wh_forename,
@@ -132,7 +112,6 @@ def api_workhouse_by_townland():
             (tn,)
         ).fetchall()
 
-        # Also find unlinked workhouse mentions that mention this townland by place name
         unlinked_rows = conn.execute(
             """
             SELECT sm.id AS mention_id, sm.raw_name, sm.forename, sm.surname,

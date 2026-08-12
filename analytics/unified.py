@@ -54,7 +54,6 @@ class UnifiedAnalytics:
         charts: list[Chart] = []
         notes: list[str] = []
 
-        # Year distribution
         if 'year' in df.columns:
             years = pd.to_numeric(df['year'], errors='coerce').dropna().astype(int)
             if len(years) > 0:
@@ -72,7 +71,6 @@ class UnifiedAnalytics:
                     )
                 )
 
-        # Top surnames
         if 'surname' in df.columns:
             top_surnames = df['surname'].dropna().value_counts().head(15)
             if len(top_surnames) > 0:
@@ -89,7 +87,6 @@ class UnifiedAnalytics:
                     )
                 )
 
-        # Top townlands
         if 'townland' in df.columns:
             top_townlands = df['townland'].dropna().value_counts().head(15)
             if len(top_townlands) > 0:
@@ -106,7 +103,6 @@ class UnifiedAnalytics:
                     )
                 )
 
-        # Estate distribution
         if 'estate' in df.columns:
             estates = df['estate'].dropna().value_counts()
             if len(estates) > 0:
@@ -123,7 +119,6 @@ class UnifiedAnalytics:
                     )
                 )
 
-        # Gender distribution
         if 'gender' in df.columns:
             genders = df['gender'].dropna().value_counts()
             if len(genders) > 0:

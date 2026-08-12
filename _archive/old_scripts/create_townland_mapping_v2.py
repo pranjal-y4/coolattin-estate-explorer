@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""
-Townland Mapping System - Complete Dataset Integration
-------------------------------------------------------
-Extracts townlands from all CSV files and matches them to GeoJSON with approval workflow.
-"""
 
 import json
 import pandas as pd
@@ -13,11 +8,9 @@ import glob
 import os
 
 def extract_townlands_from_csv(file_path, townland_columns=None):
-    """Extract unique townlands from a CSV file"""
     try:
         df = pd.read_csv(file_path)
         if townland_columns is None:
-            # Try to find townland columns
             townland_columns = [col for col in df.columns if 'townland' in col.lower()]
         
         townlands = set()
@@ -31,27 +24,25 @@ def extract_townlands_from_csv(file_path, townland_columns=None):
         return set(), 0
 
 def create_mapping_template():
-    """Create a blank mapping template for manual approval"""
     template = {
         'mapping_template': {
             'description': 'Use this template to manually map townlands between datasets',
             'columns': [
-                'source_file',           # Name of source file
-                'source_townland',       # Townland name from source
-                'source_townland_upper', # Uppercase version for matching
-                'target_townland',       # Matched townland from GeoJSON (manual fill)
-                'match_score',           # Fuzzy match score (0-100)
-                'exact_match',           # YES/NO (manual approval)
-                'notes',                 # Any notes about the mapping
-                'approved_by',           # Person who approved
-                'approval_date'          # Date of approval
+                'source_file',
+                'source_townland',
+                'source_townland_upper',
+                'target_townland',
+                'match_score',
+                'exact_match',
+                'notes',
+                'approved_by',
+                'approval_date'
             ]
         }
     }
     return template
 
 def create_blank_mapping_file(output_path):
-    """Create a blank CSV mapping file for manual mapping"""
     columns = [
         'source_file',
         'source_townland',
@@ -68,10 +59,8 @@ def create_blank_mapping_file(output_path):
     return output_path
 
 def main():
-    # Define data directory
     data_dir = '/Users/pranjal/Desktop/Masters/Dissertation/Coolattin-app/coolattin/static/data'
     
-    # Define all CSV files and their townland columns
     csv_files = {
         'unified_census.csv': ['Townland'],
         'aggregated_records.csv': ['townland_clean', 'townland_norm'],
@@ -80,7 +69,6 @@ def main():
         'workhouse_data_final.xlsx': ['Townland'],
     }
     
-    # Load GeoJSON townlands
     geojson_path = os.path.join(data_dir, 'townlands.json')
     with open(geojson_path, 'r') as f:
         geojson_data = json.load(f)
@@ -97,7 +85,6 @@ def main():
     print(f"\nGeoJSON townlands (first 20): {geojson_townlands[:20]}")
     print()
     
-    # Extract townlands from all CSV files
     all_mappings = []
     all_townlands_by_source = {}
     
@@ -119,17 +106,14 @@ def main():
         print(f"  Unique townlands: {len(townlands)}")
         print(f"  Columns used: {townland_cols}")
         
-        # Match each townland to GeoJSON
         for townland in townlands:
             townland_upper = townland.upper()
             
-            # Exact match in GeoJSON
             if townland_upper in geojson_townlands:
                 match_type = 'EXACT'
                 match_score = 100
                 matched_geojson = townland
             else:
-                # Fuzzy match
                 best_score = 0
                 best_match = None
                 for geo_town in geojson_townlands:
@@ -147,7 +131,6 @@ def main():
                     match_score = 0
                     matched_geojson = ''
             
-            # Determine approval status
             if match_type == 'EXACT':
                 approval = 'APPROVED'
             elif match_type == 'FUZZY':
@@ -171,10 +154,8 @@ def main():
         print(f"  NEEDS_REVIEW: {len([m for m in all_mappings if m['source_file'] == csv_file and m['approval_status'] == 'NEEDS_REVIEW'])}")
         print()
     
-    # Create comprehensive DataFrame
     df_mappings = pd.DataFrame(all_mappings)
     
-    # Add consolidated view (unique townlands across all files)
     unique_townlands = set()
     for source_data in all_townlands_by_source.values():
         unique_townlands.update(source_data['townlands'])
@@ -185,7 +166,6 @@ def main():
         sources = [f for f, data in all_townlands_by_source.items() 
                    if townland in data['townlands']]
         
-        # Match to GeoJSON
         if townland_upper in geojson_townlands:
             match_type = 'EXACT'
             match_score = 100
@@ -223,19 +203,15 @@ def main():
     
     df_consolidated = pd.DataFrame(consolidated_mappings)
     
-    # Create blank mapping template
     blank_template_path = os.path.join(data_dir, 'townland_mapping_blank_template.csv')
     create_blank_mapping_file(blank_template_path)
     
-    # Save detailed mappings
     detailed_output = os.path.join(data_dir, 'townland_mapping_detailed_all_sources.csv')
     df_mappings.to_csv(detailed_output, index=False)
     
-    # Save consolidated view
     consolidated_output = os.path.join(data_dir, 'townland_mapping_consolidated.csv')
     df_consolidated.to_csv(consolidated_output, index=False)
     
-    # Create summary report
     summary = {
         'generated_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'geojson_file': geojson_path,
@@ -260,7 +236,6 @@ def main():
     with open(summary_path, 'w') as f:
         json.dump(summary, f, indent=2)
     
-    # Print summary
     print("="*80)
     print("MAPPING SUMMARY")
     print("="*80)

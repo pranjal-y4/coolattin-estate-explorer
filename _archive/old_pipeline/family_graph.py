@@ -20,24 +20,11 @@ class GraphEdge:
 
 
 def build_family_graph(identity_key: str, links: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Build a small graph for one family (identity cluster).
-    Goal:
-      - show that emigrations connect to evictions/tenancies when they share same identity_key
-      - keep it deterministic and easy to render in browser
-
-    Graph shape:
-      - center node: identity_key
-      - one node per record link
-      - edges: identity -> each record node
-      - extra edges: tenancy -> eviction -> emigration (when years allow)
-    """
     center_id = f"fam:{identity_key}"
 
     nodes: List[GraphNode] = [GraphNode(id=center_id, kind="family", label=identity_key, year=None)]
     edges: List[GraphEdge] = []
 
-    # create nodes for each linked record
     rec_nodes: List[GraphNode] = []
     for i, l in enumerate(links):
         kind = str(l.get("kind") or "")
@@ -54,8 +41,6 @@ def build_family_graph(identity_key: str, links: List[Dict[str, Any]]) -> Dict[s
 
     nodes.extend(rec_nodes)
 
-    # extra “timeline-ish” edges between record kinds
-    # order by year when available
     def y(n: GraphNode) -> int:
         return int(n.year) if isinstance(n.year, int) else 999999
 
@@ -63,7 +48,6 @@ def build_family_graph(identity_key: str, links: List[Dict[str, Any]]) -> Dict[s
     ev  = sorted([n for n in rec_nodes if n.kind == "evictions"], key=y)
     em  = sorted([n for n in rec_nodes if n.kind == "emigrations"], key=y)
 
-    # connect earliest tenancy -> earliest eviction -> earliest emigration where present
     if ten and ev:
         edges.append(GraphEdge(source=ten[0].id, target=ev[0].id, relation="possible_transition"))
     if ev and em:

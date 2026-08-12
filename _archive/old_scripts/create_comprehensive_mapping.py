@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-Townland Mapping Analysis & Detailed Report Generator
------------------------------------------------------
-This script creates a comprehensive mapping file comparing townlands
-across all datasets in the Coolattin Estate project.
-"""
 
 import json
 import pandas as pd
@@ -13,44 +7,33 @@ import os
 from datetime import datetime
 
 def analyze_and_report():
-    """Generate comprehensive townland mapping report"""
-
-    # 1. Load all townland sources
     print("Loading data sources...")
 
-    # JSON Townlands
     json_path = '/Users/pranjal/Desktop/Masters/Dissertation/Coolattin-app/coolattin/static/data/townlands.json'
     with open(json_path, 'r') as f:
         json_data = json.load(f)
     json_townlands = [f['properties']['TL_ENGLISH'].strip() for f in json_data['features'] if f['properties'].get('TL_ENGLISH')]
 
-    # Aggregated CSV (source for 516 townlands in Map Explorer dropdown)
     csv_path = '/Users/pranjal/Desktop/Masters/Dissertation/Coolattin-app/coolattin/static/data/aggregated_records.csv'
     df_csv = pd.read_csv(csv_path)
     csv_townlands = [str(t).strip() for t in df_csv['townland_clean'].unique() if pd.notna(t)]
 
-    # Unified census data
     census_path = '/Users/pranjal/Desktop/Masters/Dissertation/Coolattin-app/coolattin/static/data/unified_census.csv'
     df_census = pd.read_csv(census_path)
     census_townlands = [str(t).strip().upper() for t in df_census['Townland'].unique() if pd.notna(t)]
 
-    # Other data sources for reference
     tenancies_path = '/Users/pranjal/Desktop/Masters/Dissertation/Coolattin-app/coolattin/static/data/tenancies.csv'
     wicklow_census_path = '/Users/pranjal/Desktop/Masters/Dissertation/Coolattin-app/coolattin/static/data/wicklow-census-data.csv'
 
-    # 2. Create comprehensive mapping
     mappings = []
 
-    # Normalize names for matching
     def normalize(name):
         return ' '.join(str(name).strip().upper().split())
 
-    # Create dictionaries
     json_dict = {normalize(t): t for t in json_townlands}
     csv_dict = {normalize(t): t for t in csv_townlands}
     census_dict = {normalize(t): t for t in census_townlands}
 
-    # 3. Match townlands across all datasets
     all_normalized = set(list(json_dict.keys()) + list(csv_dict.keys()) + list(census_dict.keys()))
 
     for norm_name in all_normalized:
@@ -58,12 +41,10 @@ def analyze_and_report():
         csv_name = csv_dict.get(norm_name)
         census_name = census_dict.get(norm_name)
 
-        # Determine matches
         json_match = "YES" if json_name else "NO"
         csv_match = "YES" if csv_name else "NO"
         census_match = "YES" if census_name else "NO"
 
-        # Find exact matches
         if json_name and csv_name and csv_name == json_name:
             csv_to_json_match = "EXACT"
         elif json_name and csv_name:
@@ -77,10 +58,8 @@ def analyze_and_report():
         else:
             csv_to_census_match = "NO MATCH"
 
-        # Get record counts
         record_count = len(df_csv[df_csv['townland_clean'].str.strip() == csv_name]) if csv_name else 0
 
-        # Determine approval status
         if json_match == "YES" and csv_match == "YES" and csv_to_json_match == "EXACT":
             approval = "APPROVED"
         elif json_match == "YES" and csv_match == "YES" and "FUZZY" in csv_to_json_match:
@@ -104,10 +83,8 @@ def analyze_and_report():
             'approval_status': approval
         })
 
-    # Create DataFrame
     df_mappings = pd.DataFrame(mappings)
 
-    # 4. Generate summary statistics
     summary = {
         'generated_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'sources': {
@@ -166,14 +143,11 @@ def analyze_and_report():
         }
     }
 
-    # 5. Save detailed report
     report_file = '/Users/pranjal/Desktop/Masters/Dissertation/Coolattin-app/coolattin/static/data/townland_mapping_detailed_report.csv'
     df_mappings.to_csv(report_file, index=False)
 
-    # 6. Save summary JSON
     summary_file = '/Users/pranjal/Desktop/Masters/Dissertation/Coolattin-app/coolattin/static/data/townland_mapping_summary.json'
     
-    # Convert numpy types to Python native types for JSON serialization
     summary['matches'] = {k: int(v) for k, v in summary['matches'].items()}
     summary['approval_summary'] = {k: int(v) for k, v in summary['approval_summary'].items()}
     summary['total_records'] = {k: int(v) for k, v in summary['total_records'].items()}
@@ -181,11 +155,9 @@ def analyze_and_report():
     with open(summary_file, 'w') as f:
         json.dump(summary, f, indent=2)
 
-    # 7. Create unmatched lists
     unmatched_json = df_mappings[df_mappings['in_json'] == 'YES']['normalized_name'].tolist()
     unmatched_csv = df_mappings[df_mappings['in_csv'] == 'YES']['normalized_name'].tolist()
 
-    # 8. Print comprehensive summary
     print("\n" + "="*70)
     print("TOWNLAND MAPPING DETAILED REPORT")
     print("="*70)
@@ -230,7 +202,6 @@ def analyze_and_report():
     print()
     print("="*70)
 
-    # 9. Show sample of mappings
     print("\nSAMPLE MAPPINGS (20 rows):")
     print("="*70)
     sample_cols = ['normalized_name', 'json_townland', 'csv_townland', 'census_townland', 
@@ -238,25 +209,21 @@ def analyze_and_report():
     print(df_mappings[sample_cols].head(20).to_string(index=False))
     print()
 
-    # 10. Show unmatched items
     print("\nUNMATCHED ITEMS:")
     print("-"*70)
     
-    # Unmatched JSON
     unmatched_json_list = df_mappings[(df_mappings['in_json'] == 'YES') & 
                                       (df_mappings['in_csv'] == 'NO')]['json_townland'].tolist()
     if unmatched_json_list:
         print(f"\nUnmatched JSON townlands ({len(unmatched_json_list)}):")
         print(", ".join(unmatched_json_list[:20]) + ("..." if len(unmatched_json_list) > 20 else ""))
 
-    # Unmatched Census
     unmatched_census_list = df_mappings[(df_mappings['in_census'] == 'YES') & 
                                         (df_mappings['in_csv'] == 'NO')]['census_townland'].tolist()
     if unmatched_census_list:
         print(f"\nUnmatched Census townlands ({len(unmatched_census_list)}):")
         print(", ".join(unmatched_census_list[:20]) + ("..." if len(unmatched_census_list) > 20 else ""))
 
-    # Show need review items
     print("\nNEEDS REVIEW ITEMS:")
     print("-"*70)
     needs_review = df_mappings[df_mappings['approval_status'] == 'NEEDS_REVIEW']

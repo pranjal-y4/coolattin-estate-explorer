@@ -11,7 +11,7 @@ def discover_modules() -> Dict[str, AnalyticsModule]:
     modules: Dict[str, AnalyticsModule] = {}
 
     analytics_dir = Path(__file__).parent
-    package_name = __package__  # "coolattin.analytics"
+    package_name = __package__
 
     for py_file in analytics_dir.glob("*.py"):
         name = py_file.stem

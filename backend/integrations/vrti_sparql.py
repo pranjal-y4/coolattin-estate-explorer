@@ -1,24 +1,3 @@
-"""
-coolattin/integrations/vrti_sparql.py
-
-VRTI Knowledge Graph SPARQL client.
-
-======================================================
-THIS IS THE ONLY MODULE THAT CONSTRUCTS SPARQL QUERIES
-======================================================
-
-All KG communication is centralised here so that:
-  - Prefixes are defined once and never scattered across the codebase.
-  - Routes and services never see SPARQL syntax.
-  - The endpoint URL lives in one place.
-  - Query timeouts are applied uniformly.
-  - Response parsing is normalised into typed DTOs.
-
-Endpoint: https://virtuoso.virtualtreasury.ie/sparql/
-
-How to extend:
-  Add a new typed method below.  Never add inline SPARQL anywhere else.
-"""
 from __future__ import annotations
 
 import logging
@@ -29,16 +8,9 @@ import requests
 
 log = logging.getLogger(__name__)
 
-# ------------------------------------------------------------------ #
-# Endpoint                                                             #
-# ------------------------------------------------------------------ #
 SPARQL_ENDPOINT = "https://virtuoso.virtualtreasury.ie/sparql/"
-REQUEST_TIMEOUT = 30  # seconds
+REQUEST_TIMEOUT = 30
 
-# ------------------------------------------------------------------ #
-# Centralised PREFIX block                                             #
-# All SPARQL queries produced by this module begin with this block.   #
-# ------------------------------------------------------------------ #
 PREFIXES = """
 PREFIX crm:  <http://erlangen-crm.org/current/>
 PREFIX vrti: <https://ont.virtualtreasury.ie/ontology#>
@@ -49,23 +21,16 @@ PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 """
 
-# KG named graphs
 PRESENT_DAY_PLACES_GRAPH = "https://kg.virtualtreasury.ie/graph/present-day-places-v1"
 
 
-# ------------------------------------------------------------------ #
-# DTOs (Data Transfer Objects)                                         #
-# Plain dataclasses — carry parsed KG data into the service layer.    #
-# ------------------------------------------------------------------ #
-
 @dataclass
 class TownlandDTO:
-    """A townland record as returned from the VRTI KG."""
     uri: str
     name: str
     name_gaelic: Optional[str] = None
-    wkt_geometry: Optional[str] = None   # WKT POLYGON boundary
-    centroid_wkt: Optional[str] = None   # WKT POINT centroid
+    wkt_geometry: Optional[str] = None
+    centroid_wkt: Optional[str] = None
     centroid_lat: Optional[float] = None
     centroid_lon: Optional[float] = None
     barony: Optional[str] = None
@@ -74,9 +39,9 @@ class TownlandDTO:
     osm_id: Optional[str] = None
     osi_id: Optional[str] = None
     vrti_id: Optional[str] = None
-    images: list = field(default_factory=list)    # image URLs from KG
-    links: list = field(default_factory=list)     # external links (logainm, townlands.ie)
-    centroid_flag: Optional[str] = None           # set when coordinate swap-check fails
+    images: list = field(default_factory=list)
+    links: list = field(default_factory=list)
+    centroid_flag: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -99,7 +64,6 @@ class TownlandDTO:
 
 @dataclass
 class CensusRecordDTO:
-    """A census record as returned from the VRTI KG."""
     townland_uri: str
     townland_name: str
     year: int
@@ -109,24 +73,9 @@ class CensusRecordDTO:
     uninhabited: Optional[int] = None
 
 
-# ------------------------------------------------------------------ #
-# Internal helpers                                                     #
-# ------------------------------------------------------------------ #
-
 def _parse_point_wkt(
     wkt: Optional[str],
 ) -> tuple[Optional[float], Optional[float], Optional[str]]:
-    """
-    Parse VRTI centroid WKT → (lat, lon, flag).
-
-    The VRTI KG stores centroids as POINT(lat lon) — empirically confirmed
-    as lat-first, which is non-standard GeoSPARQL (lon-first) order.
-
-    Returns (lat, lon, None) on success.
-    Returns (None, None, flag_reason) when both coordinate orderings fail
-    the Ireland sanity check; the caller should write the flag to geometry_flag
-    rather than silently discarding the centroid.
-    """
     if not wkt:
         return None, None, None
     try:
@@ -134,7 +83,6 @@ def _parse_point_wkt(
         parts = inner.split()
         if len(parts) == 2:
             a, b = float(parts[0]), float(parts[1])
-            # Ireland: 51–55.5°N, 5–11°W
             if 51.0 <= a <= 55.5 and -11.0 <= b <= -5.0:
                 return a, b, None
             if 51.0 <= b <= 55.5 and -11.0 <= a <= -5.0:
@@ -148,12 +96,6 @@ def _parse_point_wkt(
 
 
 def _execute(query: str) -> list[dict]:
-    """
-    Execute a SPARQL SELECT query against the VRTI endpoint.
-    Returns the raw bindings list or raises on HTTP/network error.
-
-    All queries are prefixed with the centralised PREFIX block.
-    """
     full_query = PREFIXES + "\n" + query
     log.debug("vrti_sparql.execute | preview: %s", full_query[:300].replace("\n", " "))
     try:
@@ -178,12 +120,10 @@ def _execute(query: str) -> list[dict]:
 
 
 def _val(binding: dict, key: str) -> Optional[str]:
-    """Safely extract a string value from a SPARQL binding dict."""
     return binding.get(key, {}).get("value") or None
 
 
 def _int_val(binding: dict, key: str) -> Optional[int]:
-    """Safely extract an integer from a SPARQL binding."""
     raw = _val(binding, key)
     if raw is None:
         return None
@@ -193,33 +133,10 @@ def _int_val(binding: dict, key: str) -> Optional[int]:
         return None
 
 
-# ------------------------------------------------------------------ #
-# Public API — called only by services, never by routes               #
-# ------------------------------------------------------------------ #
-
 def get_townlands(
     county: Optional[str] = None,
     limit: int = 2000,
 ) -> list[TownlandDTO]:
-    """
-    Fetch townlands from the VRTI present-day-places graph,
-    including parish, barony, and county via the place hierarchy.
-
-    Parameters
-    ----------
-    county : str or None
-        If provided, restrict results to that county (e.g. "Wicklow").
-        If None, all townlands available in the KG are returned.
-    limit : int
-        Maximum number of SPARQL result rows (before deduplication).
-
-    Returns an empty list if the KG is unreachable.
-
-    Called by: townland_service (on cache miss or forced refresh)
-               jobs/townlands_ingest.py (batch ingestion)
-    NOT called by: routes, templates, or frontend
-    """
-    # Build county filter only when a county is requested
     county_filter = f'FILTER(STR(?County) = "{county}")' if county else ""
 
     query = f"""
@@ -267,7 +184,6 @@ def get_townlands(
         log.warning("vrti_sparql.get_townlands county=%s failed — returning empty list", county)
         return []
 
-    # Deduplicate by URI — multiple rows when a townland has multiple parishes/baronies
     seen: dict[str, TownlandDTO] = {}
     for b in bindings:
         uri = _val(b, "Place")
@@ -285,7 +201,6 @@ def get_townlands(
                 county=_val(b, "County"),
             )
         else:
-            # Fill in missing fields from duplicate rows
             dto = seen[uri]
             if not dto.name_gaelic:
                 dto.name_gaelic = _val(b, "NameGaelic")
@@ -302,7 +217,6 @@ def get_townlands(
 
 
 def get_wicklow_townlands(limit: int = 2000) -> list[TownlandDTO]:
-    """Backward-compatible wrapper — fetches Wicklow townlands only."""
     return get_townlands(county="Wicklow", limit=limit)
 
 
@@ -310,28 +224,6 @@ def get_townland_details_by_name(
     name: str,
     county: Optional[str] = None,
 ) -> Optional[TownlandDTO]:
-    """
-    Fetch complete KG detail for a single townland by English name.
-
-    Returns the best match with all available fields:
-      - Gaelic name, parish, barony, county
-      - Centroid lat/lon and boundary WKT polygon
-      - Historic images and external links
-      - OSM, OSI, VRTI identifiers
-
-    If `county` is provided, prefers the URI that belongs to that county.
-    If `county` is None, returns the first matching URI regardless of county.
-
-    Returns None if not found or KG is unreachable.
-    Called by: census_service (townland detail enrichment)
-    """
-    # Use case-insensitive matching so ALL-CAPS GeoJSON names (e.g. "BALLARD")
-    # and mixed-case names with connectors (e.g. "COOLBAWN or COOLBALLINTAGGART")
-    # both resolve correctly regardless of how the KG stores the label.
-    #
-    # Also handle reversed "X or Y" ↔ "Y or X" variants — the KG sometimes stores
-    # the alternate-name form in opposite order from the GeoJSON label.
-    # e.g. GeoJSON "COOLBAWN or COOLBALLINTAGGART" ↔ KG "Coolballintaggart or Coolbawn"
     name_lower = name.strip().lower().replace('"', '\\"')
     or_parts = [p.strip() for p in name_lower.split(" or ") if p.strip()]
     if len(or_parts) == 2:
@@ -401,7 +293,6 @@ def get_townland_details_by_name(
     if not bindings:
         return None
 
-    # Group all rows by URI — collect images/links as sets
     by_uri: dict[str, dict] = {}
     for b in bindings:
         uri = _val(b, "Place")
@@ -413,7 +304,7 @@ def get_townland_details_by_name(
                 "name_gaelic": None,
                 "barony": None,
                 "civil_parish": None,
-                "counties": set(),   # collect ALL counties for this URI
+                "counties": set(),
                 "centroid_wkt": None,
                 "boundary_wkt": None,
                 "osm_id": None,
@@ -438,8 +329,6 @@ def get_townland_details_by_name(
         lnk = _val(b, "Link")
         if lnk:  d["links"].add(lnk)
 
-    # If a county was requested, prefer the URI that belongs to it.
-    # If no county requested (None), just take the first URI.
     chosen = None
     if county:
         county_lower = county.lower()
@@ -449,7 +338,6 @@ def get_townland_details_by_name(
                 break
     if chosen is None:
         chosen = next(iter(by_uri.values()))
-    # Resolve the display county
     if county and any(c.lower() == county.lower() for c in chosen["counties"]):
         chosen_county = county
     else:
@@ -486,16 +374,6 @@ def get_census_records_for_townland(
     townland_uri: str,
     years: list[int] | None = None,
 ) -> list[CensusRecordDTO]:
-    """
-    Fetch census records for a specific townland URI.
-    Optionally filtered to specific census years.
-
-    NOTE: Census property names (vrti:censusYear etc.) are inferred from the
-    VRTI ontology pattern.  If the KG uses different predicates, update the
-    query here.  The service layer will fall back to CSV seed on empty result.
-
-    Called by: census_service (per-townland cache miss)
-    """
     year_filter = ""
     if years:
         year_vals = ", ".join(str(y) for y in years)
@@ -545,24 +423,8 @@ def get_census_records_for_county(
     county: Optional[str] = None,
     year: int | None = None,
 ) -> list[CensusRecordDTO]:
-    """
-    Fetch all census records for all townlands, optionally filtered by county and/or year.
-
-    Parameters
-    ----------
-    county : str or None
-        If provided, restrict to townlands in that county via the place hierarchy
-        (Townland → Parish → Barony → County).  If None, all available census
-        records in the KG are returned.
-    year : int or None
-        If provided, restrict to a single census year.
-
-    Called by: census_service (on full census cache miss)
-               jobs/census_ingest.py (batch ingestion)
-    """
     year_filter = f"FILTER(?Year = {year})" if year else ""
 
-    # County filter: join through the place hierarchy only when needed
     if county:
         county_join = f"""
         GRAPH <{PRESENT_DAY_PLACES_GRAPH}> {{
@@ -628,22 +490,6 @@ def get_parish_names(
     county: Optional[str] = None,
     limit: int = 200,
 ) -> list[str]:
-    """
-    Fetch a list of civil parish names (lightweight — no geometry or centroids).
-
-    Significantly faster than get_townlands() because it skips geometry triples
-    and returns only the parish label.  Use this when you only need parish names
-    for context or counting, not full townland records.
-
-    Parameters
-    ----------
-    county : str or None
-        If provided, restrict to parishes whose parent barony belongs to that county.
-    limit : int
-        Maximum number of parish names to return.
-
-    Called by: ask_service (VRTI parish context, cached)
-    """
     county_filter = f'FILTER(STR(?County) = "{county}")' if county else ""
     query = f"""
     SELECT DISTINCT ?Parish
@@ -676,14 +522,6 @@ def get_parish_names(
 
 
 def get_place_hierarchy(entity_uri: str) -> dict:
-    """
-    Fetch the administrative hierarchy for a single townland URI.
-
-    Returns {townland_name, parish, barony, county} — any value may be None
-    if the KG does not contain that level for this entity.
-
-    Used by: subgraph_engine (Phase 3 hierarchy traversal)
-    """
     query = f"""
     SELECT ?townlandName ?parish ?barony ?county
     WHERE {{
@@ -730,14 +568,6 @@ def get_place_hierarchy(entity_uri: str) -> dict:
 
 
 def get_sibling_townlands(entity_uri: str, limit: int = 20) -> list[dict]:
-    """
-    Fetch townlands that share the same civil parish as entity_uri.
-    This is a 2-hop traversal: townland → parish ← sibling.
-
-    Returns [{name, uri}] sorted alphabetically.
-
-    Used by: subgraph_engine (Phase 3 — same-parish neighbourhood)
-    """
     query = f"""
     SELECT DISTINCT ?sibling ?siblingName
     WHERE {{
@@ -766,14 +596,6 @@ def get_sibling_townlands(entity_uri: str, limit: int = 20) -> list[dict]:
 
 
 def get_external_links(entity_uri: str) -> dict:
-    """
-    Fetch external identifiers and reference links for an entity URI.
-
-    Returns {osm_id, osi_id, vrti_id, links: list[str]}.
-    All values default to None / [] if not found.
-
-    Used by: subgraph_engine (Phase 3 — external provenance)
-    """
     query = f"""
     SELECT ?pred ?obj
     WHERE {{
@@ -813,12 +635,6 @@ def get_external_links(entity_uri: str) -> dict:
 
 
 def probe_endpoint() -> bool:
-    """
-    Simple connectivity check.  Returns True if the SPARQL endpoint
-    responds to a minimal query, False otherwise.
-
-    Used by health check endpoints and ingest jobs to fail fast.
-    """
     try:
         bindings = _execute("SELECT (1 AS ?ping) WHERE {}")
         return len(bindings) > 0

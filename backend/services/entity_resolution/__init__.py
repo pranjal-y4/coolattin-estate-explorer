@@ -1,6 +1,3 @@
-"""
-Entity-resolution helpers for persisted workhouse-to-unified-record linking.
-"""
 
 from .candidates import build_unified_index, generate_candidates
 from .normalise import (

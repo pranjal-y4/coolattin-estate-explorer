@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 import pandas as pd
 
-# Add current dir to path
 sys.path.append(os.getcwd())
 
 from coolattin.app import create_app

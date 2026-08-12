@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Post-edit hook: check Python syntax immediately after any .py file is written.
-Receives tool input/output as JSON on stdin. Exits 1 (blocking) on syntax error.
-"""
 import json
 import subprocess
 import sys
@@ -12,7 +8,7 @@ def main() -> None:
     try:
         data = json.load(sys.stdin)
     except Exception:
-        return  # no stdin or malformed — don't block
+        return
 
     file_path = data.get("file_path", "")
     if not file_path.endswith(".py"):

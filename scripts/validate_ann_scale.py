@@ -1,19 +1,3 @@
-"""
-scripts/validate_ann_scale.py
-
-Task 6 — ANN-at-scale validation after full corpus ingest.
-
-Covers:
-  1. EXPLAIN ANALYZE — confirm planner auto-selects HNSW
-  2. recall@10 — ANN (index) vs exact (seqscan) for 3 queries
-  3. Relevance/correctness — ground-truth queries rank #1
-  4. Latency — with vs without index
-
-Run from project root after bulk_ingest_local.py completes:
-    DATABASE_URL=postgresql://postgres:pw@localhost:5432/postgres \
-    EMBEDDING_PROVIDER=local \
-    python scripts/validate_ann_scale.py
-"""
 from __future__ import annotations
 
 import os
@@ -29,7 +13,6 @@ warnings.filterwarnings("ignore")
 
 import psycopg
 
-# ─── helpers ─────────────────────────────────────────────────────────────────
 
 DSN = "postgresql://postgres:pw@localhost:5432/postgres"
 
@@ -79,8 +62,6 @@ def _exact_query(cur, vec_lit: str, top_k: int = 10) -> list[tuple]:
     return rows
 
 
-# ─── main ────────────────────────────────────────────────────────────────────
-
 def main() -> None:
     print("\n" + "═" * 70)
     print("TASK 6 — ANN-at-scale validation")
@@ -90,12 +71,10 @@ def main() -> None:
     conn.autocommit = True
     cur = conn.cursor()
 
-    # Row count
     cur.execute("SELECT COUNT(*) FROM ask_retrieval_chunks")
     total_rows = cur.fetchone()[0]
     print(f"\nTotal rows in ask_retrieval_chunks: {total_rows:,}")
 
-    # ── 1. EXPLAIN ANALYZE ────────────────────────────────────────────────────
     print("\n─── 1. EXPLAIN ANALYZE (auto HNSW selection) ───")
     sample_vec_lit = _vec_literal([0.01] * 1024)
     cur.execute(
@@ -106,7 +85,6 @@ def main() -> None:
     for r in plan_rows:
         print(r[0])
 
-    # ── 2. recall@10: ANN vs exact for 3 queries ─────────────────────────────
     print("\n─── 2. Recall@10: ANN (HNSW) vs Exact (seqscan) ───")
 
     eval_queries = [
@@ -123,11 +101,9 @@ def main() -> None:
         vec = _embed_query(query_text)
         vec_lit = _vec_literal(vec)
 
-        # Exact top-10
         exact_rows = _exact_query(cur, vec_lit, top_k=10)
         exact_ids = [r[0] for r in exact_rows]
 
-        # ANN top-10 with different ef values
         best_recall = 0.0
         best_ef = 40
         for ef in ef_values:
@@ -144,7 +120,6 @@ def main() -> None:
                 final_ef = max(final_ef, ef)
                 break
 
-        # Report top-5 ANN at best_ef
         cur.execute(f"SET hnsw.ef_search = {best_ef}")
         top5 = _ann_query(cur, vec_lit, top_k=5)
         print(f"    Top-5 ANN (ef={best_ef}):")
@@ -152,7 +127,6 @@ def main() -> None:
             marker = " ← EXPECTED" if cid == expected_id else ""
             print(f"      #{rank} sim={sim:.4f}  {cid!r}  {title!r}{marker}")
 
-        # Relevance check
         ann_top5_ids = [r[0] for r in top5]
         if ann_top5_ids[0] == expected_id:
             print(f"    ✓ Expected chunk ranks #1")
@@ -162,7 +136,6 @@ def main() -> None:
 
     print(f"\n  Final ef_search value used: {final_ef}")
 
-    # ── 3. Latency: with index vs without ────────────────────────────────────
     print("\n─── 3. Latency: HNSW index vs seqscan (indicative) ───")
     bench_vec = _embed_query("How many people were evicted from Aghowle?")
     bench_lit = _vec_literal(bench_vec)
@@ -171,7 +144,7 @@ def main() -> None:
     t0 = time.perf_counter()
     for _ in range(5):
         _ann_query(cur, bench_lit, top_k=10)
-    ann_ms = (time.perf_counter() - t0) * 200  # avg per query
+    ann_ms = (time.perf_counter() - t0) * 200
 
     t0 = time.perf_counter()
     for _ in range(5):
@@ -182,7 +155,6 @@ def main() -> None:
     print(f"  Seqscan exact avg: {exact_ms:.1f} ms/query")
     print(f"  Speedup: {exact_ms/ann_ms:.1f}×  (local container, indicative)")
 
-    # ── 4. Final index definition ─────────────────────────────────────────────
     print("\n─── 4. Final HNSW index definition ───")
     cur.execute(
         "SELECT indexname, indexdef FROM pg_indexes "

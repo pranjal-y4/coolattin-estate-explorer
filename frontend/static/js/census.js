@@ -1,25 +1,9 @@
-/**
- * coolattin/static/js/census.js
- *
- * Census explorer — map choropleth, year slider, townland detail panel,
- * data-source status indicator, and basemap layer switcher.
- *
- * Architecture:
- *   - All data fetched from /api/census/* (never from KG directly)
- *   - Layer config fetched from /api/map/layers (never hardcoded)
- *   - map.js provides: initLayerSwitcher, buildLayerMap, switchLayer
- *   - meta.source / meta.cache_status from API drives the status badge
- */
 document.addEventListener("DOMContentLoaded", async () => {
   const $ = (id) => document.getElementById(id);
   const CENSUS_YEARS  = [1841, 1851, 1861, 1871, 1881, 1891];
-  // Estate survey years recorded in the Coolattin GeoJSON (total population only)
   const SURVEY_YEARS  = [1827, 1839, 1848, 1850, 1860, 1868];
-  const ALL_DATA_YEARS = [...SURVEY_YEARS, ...CENSUS_YEARS]; // sorted chronologically
+  const ALL_DATA_YEARS = [...SURVEY_YEARS, ...CENSUS_YEARS];
 
-  // ---------------------------------------------------------------- //
-  // State                                                              //
-  // ---------------------------------------------------------------- //
   const state = {
     year: 1841,
     selectedTownland: null,
@@ -30,19 +14,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     summaryByYear: {},
     geoLayer: null,
     geoFeatureByName: {},
-    // Maps short GeoJSON name → full canonical DB name
-    // e.g. "newtown" → "newtown ed powerscourt"
     geoNameToCanonical: {},
-    // satellite sub-map (shown in detail panel)
     satelliteMap: null,
     satelliteOverlay: null,
-    // main map layer handles (populated by initLayerSwitcher)
     layerMap: {},
   };
 
-  // ---------------------------------------------------------------- //
-  // Helpers                                                            //
-  // ---------------------------------------------------------------- //
   function key(townland, year) { return `${townland.toLowerCase()}|${year}`; }
   function valueOrDash(v) {
     return v === null || v === undefined || Number.isNaN(v) ? "-" : String(v);
@@ -59,7 +36,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   function getRecord(townland, year) {
     const exact = state.recordsByTownlandYear[key(townland, year)];
     if (exact) return exact;
-    // Fall back to canonical alias (handles GeoJSON short names like "Newtown")
     const canonical = state.geoNameToCanonical[townland.toLowerCase()];
     if (canonical) {
       const aliased = state.recordsByTownlandYear[key(canonical, year)];
@@ -68,13 +44,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     return null;
   }
 
-  // Return the best record for a townland near the chosen year.
-  // For townlands with only estate survey data (1827–1868), picks the
-  // closest available year so the choropleth isn't always pale.
   function getBestRecord(townland, preferredYear) {
     const direct = getRecord(townland, preferredYear);
     if (direct) return direct;
-    // Search all loaded years for this townland, pick closest to preferredYear
     let best = null, bestDist = Infinity;
     for (const y of ALL_DATA_YEARS) {
       const r = getRecord(townland, y);
@@ -86,10 +58,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     return best;
   }
 
-  // ---------------------------------------------------------------- //
-  // Data-source status badge                                           //
-  // Shows whether data came from DB cache, KG refresh, or CSV seed.  //
-  // ---------------------------------------------------------------- //
   function updateDataSourceBadge(meta) {
     const badge = $("census-data-source");
     const label = $("census-source-label");
@@ -116,37 +84,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  // ---------------------------------------------------------------- //
-  // Main census map                                                    //
-  // ---------------------------------------------------------------- //
   const map = L.map("censusMap", { minZoom: 8, maxZoom: 15 }).setView([52.95, -6.4], 10);
 
-  // Layer switcher — fetches config from /api/map/layers
   const { layerMap } = await initLayerSwitcher(map, "census-map-layer-switcher");
   state.layerMap = layerMap;
 
-  // ---------------------------------------------------------------- //
-  // Load townlands.json first — this is the authoritative reference   //
-  // of which townlands belong to the Coolattin / Wicklow estate.      //
-  // Census data is then filtered to only these townlands.             //
-  // ---------------------------------------------------------------- //
   const geoRes = await fetch("/static/data/townlands.json");
   const geo = geoRes.ok ? await geoRes.json() : { features: [] };
 
-  // Build the valid-townland set from the GeoJSON reference file
   const validTownlandNames = new Set(
     (geo.features || [])
       .map(f => String(f?.properties?.TL_ENGLISH || "").trim().toLowerCase())
       .filter(Boolean)
   );
 
-  // ---------------------------------------------------------------- //
-  // Fetch census data — load ALL years upfront (census + estate       //
-  // survey). Estate survey years (1827–1868) are only totals with     //
-  // no male/female breakdown. Both sets are stored together in        //
-  // state.recordsByTownlandYear so the timeline can render them.      //
-  // Only records whose townland appears in townlands.json are kept.   //
-  // ---------------------------------------------------------------- //
   let responseMeta = null;
 
   for (const y of ALL_DATA_YEARS) {
@@ -154,12 +105,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!res.ok) continue;
     const payload = await res.json();
     const yRows = Array.isArray(payload) ? payload : (payload.data || []);
-    // Capture meta from the first standard census year for the status badge
     if (y === CENSUS_YEARS[0] && !Array.isArray(payload)) {
       responseMeta = payload.meta || null;
     }
     yRows.forEach(r => {
-      // Only index records that correspond to a known estate townland
       const tl = String(r.townland || "").trim().toLowerCase();
       if (tl && validTownlandNames.has(tl)) {
         state.recordsByTownlandYear[key(r.townland, r.year)] = r;
@@ -167,30 +116,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  // Show data source status badge
   updateDataSourceBadge(responseMeta);
 
-  // Fetch summaries per year
   for (const y of CENSUS_YEARS) {
     const sRes = await fetch(`/api/census/summary?year=${y}`);
     if (sRes.ok) state.summaryByYear[y] = await sRes.json();
   }
 
-  // ---------------------------------------------------------------- //
-  // Build alias map: GeoJSON short name → canonical DB name           //
-  // Fixes cases like "Newtown" (GeoJSON) → "NEWTOWN ED POWERSCOURT"  //
-  // (DB). Built from all loaded census record keys.                   //
-  // ---------------------------------------------------------------- //
   const allDbNames = new Set();
   for (const k of Object.keys(state.recordsByTownlandYear)) {
-    allDbNames.add(k.split("|")[0]); // e.g. "newtown ed powerscourt"
+    allDbNames.add(k.split("|")[0]);
   }
 
   (geo.features || []).forEach(f => {
     const nm = String(f?.properties?.TL_ENGLISH || "").trim().toLowerCase();
     if (nm) {
       state.geoFeatureByName[nm] = f;
-      // If no exact census record exists, find first DB name with this as prefix
       const hasExact = CENSUS_YEARS.some(y => state.recordsByTownlandYear[key(nm, y)]);
       if (!hasExact) {
         for (const dbName of allDbNames) {
@@ -233,9 +174,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   map.fitBounds(state.geoLayer.getBounds());
 
-  // ---------------------------------------------------------------- //
-  // Year slider                                                        //
-  // ---------------------------------------------------------------- //
   const slider = $("yearSlider");
   const yearValue = $("yearValue");
   if (slider) {
@@ -247,14 +185,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  // Re-render on language change
   window.addEventListener("languageChanged", () => renderTownlandPanel(state.selectedTownland));
 
   renderTownlandPanel(null);
 
-  // ---------------------------------------------------------------- //
-  // Choropleth colour scale                                            //
-  // ---------------------------------------------------------------- //
   function getColor(total) {
     const v = Number(total || 0);
     if (v > 350) return "#7f1d1d";
@@ -282,7 +216,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       const rec = getBestRecord(nm, state.year);
       return choroplethStyle(rec?.total, state.selectedTownland === nm);
     });
-    // Refresh hover tooltips to show the newly selected census year
     state.geoLayer.eachLayer(layer => {
       const nm = String(layer.feature?.properties?.TL_ENGLISH || "").trim();
       const r = getBestRecord(nm, state.year);
@@ -292,15 +225,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  // ---------------------------------------------------------------- //
-  // Townland detail panel                                              //
-  // ---------------------------------------------------------------- //
   async function fetchTownlandDetails(townlandName) {
     try {
       const res = await fetch(`/api/census/townland?name=${encodeURIComponent(townlandName)}`);
       if (res.ok) {
         const payload = await res.json();
-        return payload.data || payload;  // handle both old and new response shape
+        return payload.data || payload;
       }
     } catch (e) {
       console.error("census.js: fetchTownlandDetails error", e);
@@ -427,25 +357,19 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    // Use the canonical DB townland name (from detail API) for census record lookups
-    // This resolves mismatches like GeoJSON "Newtown" → DB "NEWTOWN ED POWERSCOURT"
     const d = state.townlandDetails || {};
     const canonicalName = d.townland ? d.townland.toLowerCase() : townland.toLowerCase();
-    // Primary record for selected census year; fall back to nearest available year
-    // so townlands with only estate survey data (1827-1868) still populate KPI cards.
     const rec        = state.recordsByTownlandYear[key(canonicalName, state.year)]
                     || getRecord(townland, state.year);
     const bestRec    = rec || getBestRecord(townland, state.year);
     const kpiYear    = bestRec?.year ?? state.year;
     const kpiIsApprox = !rec && bestRec;
 
-    // Title: show English + Gaelic name
     if (title) {
       title.textContent = townland;
       if (d.gaelic_name) title.innerHTML = `${townland} <span style="font-size:0.7em;font-style:italic;color:var(--moss);font-weight:400;">${d.gaelic_name}</span>`;
     }
 
-    // Meta line + link to home page map explorer for this townland
     const exploreUrl = `/?townland=${encodeURIComponent(townland)}`;
     if (meta) {
       meta.innerHTML = `
@@ -457,20 +381,17 @@ document.addEventListener("DOMContentLoaded", async () => {
         </a>`;
     }
 
-    // Satellite sub-map
     if (picContainer) {
       picContainer.style.display = "flex";
       const feature = state.geoFeatureByName[townland.trim().toLowerCase()];
       updateSatelliteView(feature, townland, rec?.total);
     }
 
-    // ---- Full KG information panel ----
     if (detailContainer) {
       let html = "";
       const kgUri = d.uri || d.kg_uri || null;
       const hasKg = Boolean(kgUri);
 
-      // ── KG source card ──────────────────────────────────────────────
       if (hasKg) {
         html += `
         <div style="margin-bottom:14px;padding:10px 14px;background:#fff7ed;border-radius:10px;border:1px solid #fed7aa;">
@@ -486,7 +407,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         </div>`;
       }
 
-      // ── Gaelic name ──────────────────────────────────────────────────
       if (d.gaelic_name) {
         html += `
         <div style="margin-bottom:12px;padding:8px 12px;background:#f0fdf4;border-radius:8px;border-left:3px solid #16a34a;">
@@ -498,7 +418,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         </div>`;
       }
 
-      // ── Administrative location ──────────────────────────────────────
       const parish = d.kg_civil_parish || d.civil_parish;
       const barony = d.kg_barony || d.barony;
       const county = d.county;
@@ -524,7 +443,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         </div>`;
       }
 
-      // ── Coordinates ──────────────────────────────────────────────────
       if (d.centroid_lat && d.centroid_lon) {
         const lat = Number(d.centroid_lat).toFixed(6);
         const lon = Number(d.centroid_lon).toFixed(6);
@@ -541,7 +459,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         </div>`;
       }
 
-      // ── Placename description (from DB/CSV) ───────────────────────────
       if (d.description) {
         html += `
         <div style="margin-bottom:12px;padding:10px 14px;background:#fefce8;border-radius:10px;border:1px solid #fde68a;">
@@ -553,7 +470,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         </div>`;
       }
 
-      // ── Identifiers ────────────────────────────────────────────────────
       const idItems = [];
       if (d.vrti_id) idItems.push(`<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;">
         <span style="font-size:11px;color:#374151;">VRTI Identifier</span>
@@ -576,7 +492,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         </div>`;
       }
 
-      // ── Estate records summary ───────────────────────────────────────────
       const us = state.unifiedSummary;
       if (us && us.total > 0) {
         const exploreUrl = `/?townland=${encodeURIComponent(townland)}`;
@@ -597,7 +512,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         </div>`;
       }
 
-      // ── External links ──────────────────────────────────────────────────
       if (d.links && d.links.length) {
         const logainm    = d.links.find(l => l.includes("logainm.ie"));
         const townlandsIe = d.links.find(l => l.includes("townlands.ie"));
@@ -622,7 +536,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
       }
 
-      // ── Historic images ──────────────────────────────────────────────
       if (d.images && d.images.length) {
         html += `
         <div style="margin-bottom:12px;">
@@ -646,12 +559,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       detailContainer.innerHTML = html;
     }
 
-    // Workhouse records — rendered into separate container below KG detail
     if (workhouseContainer) {
       workhouseContainer.innerHTML = renderWorkhouseSection(state.workhouseData);
     }
 
-    // KPI cards for selected year (or nearest available year for estate-survey townlands)
     if (kpis) {
       const kpiIsEstate = bestRec && bestRec.source === "json";
 
@@ -683,17 +594,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       ].join("");
     }
 
-    // Population & clearances timeline
     if (timeline) {
-      // Collect every year that has a record for this townland
-      // (covers both estate survey years loaded upfront and standard census years)
       const allYearsWithData = ALL_DATA_YEARS.filter(y => {
         const r = state.recordsByTownlandYear[key(canonicalName, y)]
                || getRecord(townland, y);
         return r && r.total != null;
       });
 
-      // Clearance data from GeoJSON feature properties
       const geoFeature = state.geoFeatureByName[townland.trim().toLowerCase()];
       const geoProps   = geoFeature?.properties || {};
       const totalClearances = geoProps.Total_Clearances;
@@ -702,7 +609,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         .filter(c => c.count > 0);
 
       if (allYearsWithData.length === 0) {
-        // No population data at all — explain why and show clearances if any
         let clearanceNote = "";
         if (totalClearances > 0) {
           const breakdown = clearanceYears.map(c => `${c.year}: ${c.count}`).join(" · ");
@@ -736,7 +642,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
 
-      // Determine data source mix using actual record source field
       const hasCensusData = allYearsWithData.some(y => {
         const r = state.recordsByTownlandYear[key(canonicalName, y)] || getRecord(townland, y);
         return r && (r.source === "csv_seed" || r.source === "kg");
@@ -800,7 +705,6 @@ document.addEventListener("DOMContentLoaded", async () => {
           </tbody>
         </table>`;
 
-      // Clearances strip
       if (totalClearances > 0) {
         const breakdown = clearanceYears.map(c => `${c.year}: ${c.count}`).join(" · ");
         html += `
@@ -817,7 +721,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       timeline.innerHTML = html;
 
-      // Clicking a row in the table changes the selected year (census years only)
       timeline.querySelectorAll("tr[data-year]").forEach(row => {
         row.addEventListener("click", () => {
           const y = Number(row.getAttribute("data-year"));
@@ -833,9 +736,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  // ---------------------------------------------------------------- //
-  // Satellite sub-map (detail panel)                                   //
-  // ---------------------------------------------------------------- //
   function initSatelliteMap() {
     if (state.satelliteMap) return;
     const container = $("townlandSatelliteMap");
@@ -884,15 +784,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  // ---------------------------------------------------------------- //
-  // URL-param auto-select                                              //
-  // If census page was opened via ?townland= (e.g. from the home page //
-  // story panel "View Census Data" link), auto-click that townland.   //
-  // ---------------------------------------------------------------- //
   const urlParams = new URLSearchParams(window.location.search);
   const tlParam = urlParams.get("townland");
   if (tlParam) {
-    // Find the matching GeoJSON feature (case-insensitive)
     const matchedFeature = (geo.features || []).find(f => {
       const nm = String(f?.properties?.TL_ENGLISH || "").trim();
       return nm.toLowerCase() === tlParam.toLowerCase();
@@ -901,12 +795,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (matchedFeature) {
       const nm = String(matchedFeature.properties.TL_ENGLISH || "").trim();
       state.selectedTownland = nm;
-      // Strip the param so a page refresh doesn't re-select the townland
       window.history.replaceState({}, "", window.location.pathname);
       state.townlandDetails = await fetchTownlandDetails(nm);
       recolorMap();
       renderTownlandPanel(nm);
-      // Zoom the map to the selected townland
       try {
         map.fitBounds(L.geoJSON(matchedFeature).getBounds(), { padding: [40, 40], maxZoom: 14 });
       } catch (_) {}

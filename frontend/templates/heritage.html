@@ -2,7 +2,6 @@
 
 {% block content %}
 <style>
-/* ── Historic Landscape page — scoped hp- prefix ───────────────────────────── */
 
 .hp-band-back {
   display: inline-flex;
@@ -27,7 +26,6 @@
     linear-gradient(180deg, #fbfaf7 0%, #f2ede3 100%);
 }
 
-/* LEFT PANEL */
 .hp-left {
   background: var(--surface);
   border-right: 1px solid var(--line-soft);
@@ -60,7 +58,6 @@
   border-color: var(--forest);
 }
 
-/* MAP CENTER */
 .hp-map-wrap {
   position: relative;
   min-width: 0;
@@ -94,7 +91,6 @@
   backdrop-filter: blur(8px);
 }
 
-/* RIGHT PANEL */
 .hp-right {
   background: var(--surface);
   border-left: 1px solid var(--line-soft);
@@ -102,14 +98,12 @@
   padding: 1.25rem 1rem;
 }
 
-/* PHOTOS SECTION — below the 3-col layout */
 .hp-photos-section {
   background: var(--bg);
   border-top: 1px solid var(--line-soft);
   padding: 1.5rem;
 }
 
-/* ── Left panel internals ─────────────────────────────────────────────── */
 
 .hp-townland-name {
   font-family: 'Cormorant Garamond', Georgia, serif;
@@ -196,7 +190,6 @@
   font-weight: 700;
 }
 
-/* ── Right panel internals ────────────────────────────────────────────── */
 
 .hp-empty-state {
   display: flex;
@@ -301,7 +294,6 @@
 }
 .hp-feature-links { display: flex; flex-direction: column; gap: 6px; }
 
-/* ── Photos section ────────────────────────────────────────────────────── */
 
 .hp-photos-grid {
   display: grid;
@@ -339,7 +331,6 @@
   line-height: 1.4;
 }
 
-/* ── Loading overlay ─────────────────────────────────────────────────── */
 .hp-loading-overlay {
   position: absolute;
   inset: 0;
@@ -374,7 +365,6 @@
   animation: hp-spin .7s linear infinite;
 }
 
-/* ── No-selection state ───────────────────────────────────────────────── */
 .hp-no-sel {
   display: flex;
   flex-direction: column;
@@ -393,7 +383,6 @@
   opacity: .5;
 }
 
-/* ── Responsive ───────────────────────────────────────────────────────── */
 @media (max-width: 960px) {
   .hp-layout {
     grid-template-columns: 1fr;
@@ -404,7 +393,6 @@
 }
 </style>
 
-<!-- BAND HEADER -->
 <section class="band" style="padding: 2rem 0 1.75rem;">
   <div class="container">
     <a id="hp-back-link" href="/" class="hp-band-back">← Back to Townland Records</a>
@@ -413,13 +401,10 @@
   </div>
 </section>
 
-<!-- 3-COLUMN LAYOUT -->
 <div class="hp-layout">
 
-  <!-- ── LEFT: Filters & Controls ──────────────────────────────────── -->
   <aside class="hp-left" aria-label="Filters and controls">
 
-    <!-- Townland summary -->
     <div class="hp-control-card">
       <div class="panel-title">Selected Townland</div>
       <label for="hp-townland-select" class="note" style="display:block;margin:6px 0 0;">
@@ -436,7 +421,6 @@
       <a href="/" class="btn ghost" style="width:100%;text-align:center;margin-top:4px;font-size:13px;">← Return to Home</a>
     </div>
 
-    <!-- Radius selector -->
     <div id="hp-radius-section" class="hp-control-card" style="display:none;" aria-label="Nearby radius">
       <div class="panel-title">Nearby Radius</div>
       <div class="hp-radius-group" role="radiogroup" aria-label="Select search radius">
@@ -455,7 +439,6 @@
       </div>
     </div>
 
-    <!-- Layer toggles -->
     <div id="hp-layers-section" class="hp-control-card" style="display:none;" aria-label="Heritage layers">
       <div class="panel-title">Heritage Layers</div>
       <div class="hp-layer-toggles">
@@ -478,7 +461,6 @@
       <button id="hp-reset-btn" class="btn ghost" style="width:100%;margin-top:10px;font-size:13px;">Reset Filters</button>
     </div>
 
-    <!-- Google Maps links for selected townland -->
     <div id="hp-gmaps-section" class="hp-control-card" style="display:none;" aria-label="Open in Google Maps">
       <div class="panel-title">Open in Google Maps</div>
       <div id="hp-coordinate-readout" class="hp-coordinate-readout"></div>
@@ -500,7 +482,6 @@
 
   </aside>
 
-  <!-- ── CENTER: Map ────────────────────────────────────────────────── -->
   <div class="hp-map-wrap" aria-label="Historic landscape map">
     <div id="heritageMap"></div>
     <div id="hp-layer-switcher-container"></div>
@@ -513,7 +494,6 @@
         Loading heritage data…
       </div>
     </div>
-    <!-- Legacy no-townland state; kept hidden because the page now starts in all-townlands mode. -->
     <div id="hp-map-no-sel" class="hp-no-sel" style="display:none;position:absolute;inset:0;background:rgba(247,244,238,.88);z-index:500;">
       <div class="hp-no-sel-icon" aria-hidden="true">🗺</div>
       <p style="font-size:15px;font-weight:600;color:var(--ink);margin:0;">No townland selected</p>
@@ -523,17 +503,14 @@
     </div>
   </div>
 
-  <!-- ── RIGHT: Contextual panel ───────────────────────────────────── -->
   <aside class="hp-right" aria-label="Heritage context" aria-live="polite">
 
-    <!-- Default empty state -->
     <div id="hp-right-empty" class="hp-empty-state">
       <div class="hp-empty-icon" aria-hidden="true">🏛</div>
       <p style="font-size:14px;font-weight:600;color:var(--ink);margin:0;">Historic Landscape</p>
       <p class="note" style="margin:0;">Select a townland to see heritage context for this place.</p>
     </div>
 
-    <!-- Townland summary (shown when townland is selected, no feature clicked) -->
     <div id="hp-right-townland" style="display:none;">
       <div class="panel-title" id="hp-right-tl-title">Townland Overview</div>
       <div id="hp-right-tl-name" class="hp-townland-name" style="margin-bottom:6px;"></div>
@@ -546,7 +523,6 @@
       </div>
     </div>
 
-    <!-- Feature detail (shown when a heritage marker is clicked) -->
     <div id="hp-right-feature" style="display:none;">
       <button id="hp-feature-back" class="btn ghost" style="font-size:12px;margin-bottom:12px;padding:5px 10px;">← Back to Townland</button>
       <div id="hp-feature-content"></div>
@@ -555,7 +531,6 @@
   </aside>
 </div>
 
-<!-- PHOTOS SECTION -->
 <div id="hp-photos-section" class="hp-photos-section" style="display:none;">
   <div class="container" style="max-width:1400px;">
     <div class="panel-title" style="margin-bottom:4px;">Area Photos</div>

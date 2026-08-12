@@ -1,15 +1,3 @@
-"""
-backend/routes/ask.py
-
-Routes
-------
-POST /api/ask/query          — stream SSE pipeline events, then final result
-POST /api/ask/feedback       — thumbs up/down feedback + query memory persistence
-GET  /api/ask/llm-status     — LLM provider health/config check
-GET  /api/ask/townland-suggest — fuzzy townland suggestions
-GET  /api/ask/ollama-status  — backward-compatible status alias
-GET  /api/ask/pdf/<name>     — download generated PDF report
-"""
 from __future__ import annotations
 
 import logging
@@ -26,7 +14,6 @@ _MAX_TOWNLAND_HINT_LEN = 120
 
 
 def _sanitize_input(raw: str, max_len: int) -> str:
-    """Strip control characters and cap length.  User content only — never applied to system strings."""
     import unicodedata
     cleaned = "".join(
         ch for ch in (raw or "")
@@ -46,7 +33,6 @@ def ask_query():
     if not question:
         return jsonify({"error": "question is required"}), 400
 
-    # Audit log: IP + question length (not full text) for abuse detection.
     _ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
     log.info("ask_api.query ip=%s q_len=%d townland_hint=%s", _ip, len(question), bool(townland_hint))
 
@@ -72,7 +58,7 @@ def ask_query():
         content_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",   # disable nginx / gunicorn buffering
+            "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         },
     )
@@ -131,7 +117,6 @@ def townland_suggest():
 
 @bp.get("/townland-catalog")
 def townland_catalog():
-    """All Wicklow townlands with metadata — fetched once on page load for client-side filtering."""
     from backend.services.ask_service import _townland_catalog
     items = [
         {"name": i["name"], "civil_parish": i.get("civil_parish"), "name_gaelic": i.get("name_gaelic")}
@@ -153,7 +138,6 @@ def ollama_status():
 
 @bp.get("/estate-overview")
 def estate_overview():
-    """Geographic + estate statistics for County Wicklow — used by the All-Townlands panel."""
     from extensions import get_db_conn
     try:
         conn = get_db_conn()
@@ -170,7 +154,6 @@ def estate_overview():
 
         W = "UPPER(county)='WICKLOW'"
 
-        # ── County Wicklow geographic hierarchy ───────────────────────────────
         townland_count    = one(f"SELECT COUNT(*) FROM townland WHERE {W}") or 0
         parish_count      = one(f"SELECT COUNT(DISTINCT civil_parish) FROM townland WHERE {W} AND civil_parish IS NOT NULL") or 0
         barony_count      = one(f"SELECT COUNT(DISTINCT barony) FROM townland WHERE {W} AND barony IS NOT NULL") or 0
@@ -179,18 +162,14 @@ def estate_overview():
         with_area         = one(f"SELECT COUNT(*) FROM townland WHERE {W} AND area_sqm IS NOT NULL AND area_sqm>0") or 0
         total_area_sqkm   = one(f"SELECT ROUND(SUM(area_sqm)/1000000.0,1) FROM townland WHERE {W} AND area_sqm IS NOT NULL")
 
-        # Largest townland by area
         row = many(f"SELECT name, ROUND(area_sqm/1000000.0,2) FROM townland WHERE {W} AND area_sqm IS NOT NULL ORDER BY area_sqm DESC LIMIT 1")
         largest_townland  = {"name": row[0][0], "area_sqkm": row[0][1]} if row else None
 
-        # Smallest townland by area (above 0)
         row = many(f"SELECT name, ROUND(area_sqm/1000000.0,4) FROM townland WHERE {W} AND area_sqm > 0 ORDER BY area_sqm ASC LIMIT 1")
         smallest_townland = {"name": row[0][0], "area_sqkm": row[0][1]} if row else None
 
-        # All baronies
         baronies = [r[0] for r in many(f"SELECT DISTINCT barony FROM townland WHERE {W} AND barony IS NOT NULL ORDER BY barony")]
 
-        # Parishes by townland count (top 5)
         top_parishes_by_townlands = [
             {"parish": r[0], "townland_count": r[1]}
             for r in many(f"""
@@ -200,7 +179,6 @@ def estate_overview():
             """)
         ]
 
-        # ── Census: most populated townlands in 1841 ─────────────────────────
         top_pop_1841 = [
             {"name": r[0], "population": r[1]}
             for r in many(f"""
@@ -211,7 +189,6 @@ def estate_overview():
             """)
         ]
 
-        # Most populated civil parish in 1841 (aggregate)
         top_parish_pop_1841 = [
             {"parish": r[0], "population": r[1]}
             for r in many(f"""
@@ -222,7 +199,6 @@ def estate_overview():
             """)
         ]
 
-        # Population change 1841→1851 across Wicklow (famine decade)
         pop_1841 = one(f"""
             SELECT SUM(cr.total) FROM census_record cr
             JOIN townland t ON t.id=cr.townland_id WHERE {W} AND cr.year=1841
@@ -233,7 +209,6 @@ def estate_overview():
         """) or 0
         pop_decline_pct = round((pop_1841 - pop_1851) / pop_1841 * 100, 1) if pop_1841 else None
 
-        # ── Coolattin estate records ──────────────────────────────────────────
         total_records  = one("SELECT COUNT(DISTINCT record_id) FROM unified_record") or 0
         emigrant_count = one("SELECT COUNT(DISTINCT record_id) FROM unified_record WHERE has_emigration_record=1") or 0
         eviction_count = one("SELECT COUNT(DISTINCT record_id) FROM unified_record WHERE has_eviction_record=1") or 0
@@ -263,7 +238,6 @@ def estate_overview():
         ]
 
         return jsonify({
-            # County Wicklow geography
             "townland_count":           townland_count,
             "parish_count":             parish_count,
             "barony_count":             barony_count,
@@ -275,13 +249,11 @@ def estate_overview():
             "smallest_townland":        smallest_townland,
             "baronies":                 baronies,
             "top_parishes_by_townlands": top_parishes_by_townlands,
-            # Census
             "pop_1841":                 int(pop_1841) if pop_1841 else None,
             "pop_1851":                 int(pop_1851) if pop_1851 else None,
             "pop_decline_pct":          pop_decline_pct,
             "top_pop_1841":             top_pop_1841,
             "top_parish_pop_1841":      top_parish_pop_1841,
-            # Estate records
             "total_records":            total_records,
             "emigrant_count":           emigrant_count,
             "eviction_count":           eviction_count,

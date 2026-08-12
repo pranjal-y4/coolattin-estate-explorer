@@ -1,27 +1,3 @@
-"""
-coolattin/services/export_service.py
-
-Excel export service.
-
-Responsibilities:
-  - Convert normalised census/townland data to .xlsx
-  - Store exports in coolattin/exports/census/ or exports/townlands/
-  - Add a metadata sheet to every export (source, generated_at, query scope)
-  - Track the path to the most recent export in refresh_state
-
-When exports are generated:
-  - Immediately after any successful KG ingestion (triggered by census_service)
-  - On explicit POST /api/census/export/regenerate (reads from DB, no KG call)
-
-When exports are NOT generated:
-  - On normal page loads (uses existing export path from refresh_state)
-  - When serving stale data from DB cache
-
-File naming convention:
-  census_wicklow_all_YYYYMMDD_HHMMSS.xlsx   — full dataset, all years
-  census_wicklow_1841_YYYYMMDD_HHMMSS.xlsx  — single year filtered
-  townlands_wicklow_YYYYMMDD_HHMMSS.xlsx    — townland reference dump
-"""
 from __future__ import annotations
 
 import logging
@@ -37,19 +13,6 @@ def export_census(
     scope,
     extra_meta: Optional[dict] = None,
 ) -> str:
-    """
-    Export a list of census records (dicts or CensusRecord objects) to Excel.
-
-    Parameters
-    ----------
-    records : list of CensusRecord or dict
-    scope   : CensusFilters or dict describing the query scope
-    extra_meta : optional additional metadata to include in the metadata sheet
-
-    Returns
-    -------
-    str — relative path to the generated file (stored in refresh_state)
-    """
     try:
         import openpyxl
     except ImportError:
@@ -62,7 +25,6 @@ def export_census(
     exports_dir = ActiveConfig.EXPORTS_DIR / "census"
     exports_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build filename
     year_part = f"_{scope.year}" if hasattr(scope, "year") and scope.year else "_all"
     if isinstance(scope, dict) and scope.get("year"):
         year_part = f"_{scope['year']}"
@@ -72,7 +34,6 @@ def export_census(
 
     wb = openpyxl.Workbook()
 
-    # ---- Sheet 1: Census records ----
     ws = wb.active
     ws.title = "Census Records"
     headers = [
@@ -81,7 +42,6 @@ def export_census(
     ]
     ws.append(headers)
 
-    # Bold header row
     from openpyxl.styles import Font, PatternFill, Alignment
     for cell in ws[1]:
         cell.font = Font(bold=True)
@@ -106,12 +66,10 @@ def export_census(
             r.get("kg_uri", "") or "",
         ])
 
-    # Auto-width columns
     for col in ws.columns:
         max_len = max(len(str(cell.value or "")) for cell in col)
         ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 50)
 
-    # ---- Sheet 2: Metadata ----
     meta_ws = wb.create_sheet("Export Metadata")
     meta_ws.column_dimensions["A"].width = 28
     meta_ws.column_dimensions["B"].width = 60
@@ -147,10 +105,6 @@ def export_census(
 
 
 def export_townlands(townlands: list, extra_meta: Optional[dict] = None) -> str:
-    """
-    Export normalised townland reference data to Excel.
-    Called by jobs/townlands_ingest.py after ingestion.
-    """
     try:
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment
@@ -219,11 +173,6 @@ def export_townlands(townlands: list, extra_meta: Optional[dict] = None) -> str:
 
 
 def get_latest_census_export() -> dict:
-    """
-    Return info about the most recent census export without triggering
-    a new KG call or re-export.
-    Called by GET /api/census/export/latest.
-    """
     from backend.repositories import refresh_state_repository
     state = refresh_state_repository.get("wicklow_census")
     if not state or not state.export_file:
@@ -239,10 +188,6 @@ def get_latest_census_export() -> dict:
 
 
 def regenerate_from_db(year: Optional[int] = None) -> str:
-    """
-    Re-generate an Excel export from the local DB without any KG call.
-    Called by POST /api/census/export/regenerate.
-    """
     from backend.repositories import census_repository
     from backend.models.census_models import CensusFilters
 

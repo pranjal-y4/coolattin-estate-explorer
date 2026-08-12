@@ -7,8 +7,8 @@ from .base import AnalyticsResult, KPI, Chart
 
 
 def find_data_file(filename: str) -> Path:
-    project_root = Path(__file__).resolve().parents[2]  # Coolattin-app/
-    package_root = Path(__file__).resolve().parents[1]  # Coolattin-app/coolattin/
+    project_root = Path(__file__).resolve().parents[2]
+    package_root = Path(__file__).resolve().parents[1]
 
     candidates = [
         project_root / "data" / filename,
@@ -19,7 +19,7 @@ def find_data_file(filename: str) -> Path:
     for p in candidates:
         if p.exists():
             return p
-    return package_root / "data" / filename  # most likely in your repo
+    return package_root / "data" / filename
 
 
 DATA_PATH = find_data_file("tenancies.csv")
@@ -69,7 +69,6 @@ class TenanciesAnalytics:
         charts: list[Chart] = []
         notes: list[str] = []
 
-        # Top townlands
         if townland_col:
             top_townlands = df.groupby(townland_col)[count_col].sum().sort_values(ascending=False).head(10)
             charts.append(
@@ -87,7 +86,6 @@ class TenanciesAnalytics:
         else:
             notes.append("No townland column detected; add `townland` to enable spatial analytics.")
 
-        # Trend over time
         if year_col:
             years = pd.to_numeric(df[year_col], errors="coerce").dropna().astype(int)
             df2 = df.loc[years.index].copy()
@@ -111,7 +109,6 @@ class TenanciesAnalytics:
         else:
             notes.append("No year column detected; add `year` to enable timeline chart.")
 
-        # Top surnames
         if surname_col:
             s = df[surname_col].astype(str).fillna("").str.strip()
             s2 = s.apply(lambda x: x.split()[-1] if " " in x else x).replace("", pd.NA).dropna()

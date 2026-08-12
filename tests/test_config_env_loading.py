@@ -1,15 +1,9 @@
-"""
-tests/test_config_env_loading.py
-
-Regression tests for config env-file loading.
-"""
 from __future__ import annotations
 
 import os
 import sys
 from pathlib import Path
 
-# Ensure project root is on sys.path for direct module imports in tests.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import config

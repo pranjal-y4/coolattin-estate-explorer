@@ -1,21 +1,3 @@
-"""
-scripts/cohere_sample_validate.py
-
-Task 4 — Cohere provider swap validation.
-
-Embeds a targeted 15-chunk sample (Edward Dagg ground-truth + hard-negative +
-decoys) with Cohere, upserts into the local pgvec container, then runs the
-query and reports the top-5 results.
-
-Usage:
-    COHERE_API_KEY=<key> DATABASE_URL=postgresql://postgres:pw@localhost:5432/postgres \\
-        python3 scripts/cohere_sample_validate.py
-
-The script truncates ask_retrieval_chunks before inserting so that all rows
-share the same Cohere embedding space (required for valid cosine comparisons).
-This is intentional for a targeted validation run — it does NOT run the full
-~41,600-chunk ingest.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -24,11 +6,9 @@ import os
 import sys
 import time
 
-# ── path setup ────────────────────────────────────────────────────────────────
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-# Load .env.local if present (same logic as ask_service)
 for env_file in (".env.local", ".env"):
     path = os.path.join(ROOT, env_file)
     if os.path.exists(path):
@@ -48,7 +28,6 @@ if not COHERE_API_KEY:
 
 os.environ["DATABASE_URL"] = DATABASE_URL
 
-# ── imports ───────────────────────────────────────────────────────────────────
 import sqlite3
 import psycopg  # type: ignore
 
@@ -61,7 +40,6 @@ from backend.services.voyage_embeddings import (
     COHERE_OUTPUT_DIMENSION,
 )
 
-# ── chunk construction helpers (inline, no Flask context needed) ──────────────
 
 def _source_type(row: dict) -> str:
     if row.get("has_emigration_record"):
@@ -120,14 +98,10 @@ def _vector_literal(values: list[float]) -> str:
     return "[" + ",".join(f"{float(v):.8f}" for v in values) + "]"
 
 
-# ── fetch target records from SQLite ─────────────────────────────────────────
-
 TARGET_IDS = [
-    "CL8037",   # Edward Dagg emigration — ground truth
-    "CL53",     # Edward Dagg estate survey — hard negative (same name, different townland/type)
-    # Dagg family on Dunbrody (related, some signal)
+    "CL8037",
+    "CL53",
     "CL8038", "CL8039", "CL8040",
-    # Unrelated decoys — mix of townlands and years
     "CL8767", "CL13027", "CL13208", "CL8602", "CL11127",
     "CL11229", "CL8058", "CL7783", "CL9722", "CL409",
 ]
@@ -189,7 +163,6 @@ print(f"\nBuilt {len(chunks)} chunks from SQLite:")
 for c in chunks:
     print(f"  {c['chunk_id']:40s}  {c['title'][:60]}")
 
-# ── embed with Cohere ─────────────────────────────────────────────────────────
 
 print(f"\nEmbedding {len(chunks)} chunks via Cohere (input_type=search_document)...")
 reset_api_call_count()
@@ -214,20 +187,17 @@ if len(embeddings) != len(chunks):
     print(f"ERROR: Embedding count mismatch: chunks={len(chunks)} embeddings={len(embeddings)}")
     sys.exit(1)
 
-# Verify dimension
 for i, emb in enumerate(embeddings):
     if emb and len(emb) != 1024:
         print(f"ERROR: Dimension mismatch at index {i}: expected 1024, got {len(emb)}")
         sys.exit(1)
 print(f"  Dimension check: all embeddings are {len([e for e in embeddings if e][0])}-dim ✓")
 
-# ── upsert into pgvec ─────────────────────────────────────────────────────────
 
 print(f"\nConnecting to pgvec: {DATABASE_URL}")
 pg = psycopg.connect(DATABASE_URL, autocommit=True)
 cur = pg.cursor()
 
-# Ensure schema
 cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
 cur.execute(
     """
@@ -255,7 +225,6 @@ cur.execute(
     """
 )
 
-# Verify schema is unchanged before truncating
 cur.execute(
     """
     SELECT column_name, data_type, udt_name
@@ -278,7 +247,6 @@ if idx_info:
     print(f"  HNSW index: {idx_info[0]}")
     print(f"  Definition: {idx_info[1]}")
 
-# Truncate and re-insert targeted sample
 print(f"\nTruncating ask_retrieval_chunks for clean Cohere-only embedding space...")
 cur.execute("TRUNCATE ask_retrieval_chunks")
 print("  Truncated.")
@@ -320,7 +288,6 @@ for chunk, embedding in zip(chunks, embeddings):
 
 print(f"  Upserted {upserted} chunks into pgvec.")
 
-# ── query validation ──────────────────────────────────────────────────────────
 
 QUERY = "Who is Edward Dagg from Aghowle who emigrated on the Dunbrody in 1853?"
 print(f"\nEmbedding query (input_type=search_query):\n  \"{QUERY}\"")
@@ -357,7 +324,6 @@ for rank, row in enumerate(results, 1):
     )
     print(f"  {rank:<5} {float(row[3]):<8.4f} {row[0]:<40} {row[2][:50]}{marker}")
 
-# Score gap analysis
 if results:
     rank1_score = float(results[0][3])
     rank2_score = float(results[1][3]) if len(results) > 1 else 0.0

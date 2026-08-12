@@ -9,7 +9,6 @@ h1, h2, h3, h4 {
   font-family: 'Playfair Display', serif;
 }
 
-/* HERO */
 .hero {
   height: 80vh;
   background: url('https://images.unsplash.com/photo-1501785888041-af3ef285b470') center/cover no-repeat;
@@ -27,7 +26,6 @@ h1, h2, h3, h4 {
   padding: 2rem;
 }
 
-/* SEARCH */
 .search-section {
   padding: 4rem;
   display: flex;
@@ -57,7 +55,6 @@ h1, h2, h3, h4 {
   cursor: pointer;
 }
 
-/* MAP */
 .map-section {
   text-align: center;
   padding: 4rem;
@@ -68,7 +65,6 @@ h1, h2, h3, h4 {
   border: 8px solid #b89b5e;
 }
 
-/* CONTEXT */
 .context-section {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -82,7 +78,6 @@ h1, h2, h3, h4 {
   border-left: 5px solid #b89b5e;
 }
 
-/* STORIES */
 .stories-section {
   padding: 4rem;
   background: #eee6d8;
@@ -110,7 +105,6 @@ h1, h2, h3, h4 {
 .eviction { background: #b84c4c; color: #fff; }
 .emigration { background: #1f2a44; color: #fff; }
 
-/* FOOTER */
 footer {
   background: #1f2a44;
   color: #f6f1e7;

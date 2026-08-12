@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""
-Build persisted workhouse-to-unified-record entity-resolution links.
-"""
 from __future__ import annotations
 
 import argparse

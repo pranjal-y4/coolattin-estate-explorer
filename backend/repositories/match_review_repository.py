@@ -1,13 +1,3 @@
-"""
-coolattin/repositories/match_review_repository.py
-
-Database access for the resolution-engine support tables:
-  - match_review   — uncertain candidate pairs awaiting human decision
-  - townland_xref  — confirmed (source, source_record_id) → entity_id mappings
-  - field_provenance — which source contributed each field value and why
-
-No SQL lives outside this module for these tables.
-"""
 from __future__ import annotations
 
 import json
@@ -20,20 +10,12 @@ from extensions import get_db_conn
 log = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# match_review
-# ---------------------------------------------------------------------------
-
 def enqueue(
     townland_id_a: int,
     townland_id_b: int,
     score: float,
     features: dict,
 ) -> int:
-    """
-    Write a candidate pair to match_review with status 'pending'.
-    Returns the new row id.
-    """
     conn = get_db_conn()
     try:
         cursor = conn.execute(
@@ -51,7 +33,6 @@ def enqueue(
 
 
 def get_pending() -> list[dict]:
-    """Return all pending match_review rows as dicts."""
     conn = get_db_conn()
     try:
         rows = conn.execute(
@@ -63,14 +44,6 @@ def get_pending() -> list[dict]:
 
 
 def apply_decision(match_id: int, decision: str, note: str = "") -> None:
-    """
-    Record a reviewer decision on a match_review entry.
-
-    decision: 'confirmed' | 'rejected'
-
-    For a 'confirmed' decision, also creates a townland_xref entry linking
-    both records under the same entity_id, seeding future ingest runs.
-    """
     valid = {"confirmed", "rejected"}
     if decision not in valid:
         raise ValueError(f"decision must be one of {valid}, got {decision!r}")
@@ -105,10 +78,6 @@ def apply_decision(match_id: int, decision: str, note: str = "") -> None:
 
 
 def _link_confirmed_pair(conn, id_a: int, id_b: int) -> None:
-    """
-    Assign the same entity_id to both townland rows and write xref entries.
-    Uses townland A's entity_id as the canonical one.
-    """
     rows = conn.execute(
         "SELECT id, entity_id, td_id, kg_uri, source FROM townland WHERE id IN (?, ?)",
         (id_a, id_b),
@@ -119,7 +88,6 @@ def _link_confirmed_pair(conn, id_a: int, id_b: int) -> None:
     by_id = {r["id"]: r for r in rows}
     ra, rb = by_id[id_a], by_id[id_b]
 
-    # Canonical entity_id = A's (or generate one if missing)
     canonical_eid = ra["entity_id"] or rb["entity_id"] or _new_uuid()
 
     for r in (ra, rb):
@@ -143,10 +111,6 @@ def _link_confirmed_pair(conn, id_a: int, id_b: int) -> None:
             log.debug("match_review_repository._link xref insert skipped | %s", exc)
 
 
-# ---------------------------------------------------------------------------
-# townland_xref
-# ---------------------------------------------------------------------------
-
 def add_xref(
     entity_id: str,
     source: str,
@@ -154,7 +118,6 @@ def add_xref(
     confidence: float = 1.0,
     match_method: str = "exact_id",
 ) -> None:
-    """Insert a cross-reference entry; ignores duplicates."""
     conn = get_db_conn()
     try:
         conn.execute(
@@ -171,7 +134,6 @@ def add_xref(
 
 
 def get_xrefs_for_entity(entity_id: str) -> list[dict]:
-    """Return all xref rows for a given entity_id."""
     conn = get_db_conn()
     try:
         rows = conn.execute(
@@ -182,10 +144,6 @@ def get_xrefs_for_entity(entity_id: str) -> list[dict]:
         conn.close()
 
 
-# ---------------------------------------------------------------------------
-# field_provenance
-# ---------------------------------------------------------------------------
-
 def record_provenance(
     entity_id: str,
     field_name: str,
@@ -194,10 +152,6 @@ def record_provenance(
     source_record_id: Optional[str] = None,
     rule: Optional[str] = None,
 ) -> None:
-    """
-    Record which source contributed a field value and why.
-    Updates the existing row if one exists for (entity_id, field_name).
-    """
     conn = get_db_conn()
     try:
         conn.execute(
@@ -219,18 +173,7 @@ def record_provenance(
         conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Quality report
-# ---------------------------------------------------------------------------
-
 def quality_summary() -> dict:
-    """
-    Return a data-quality summary dict.
-
-    Covers: total townlands, unmatched (no kg_uri), geometry flags,
-    missing centroids, match_review status breakdown, same-name-different-
-    geometry collisions.
-    """
     conn = get_db_conn()
     try:
         total = conn.execute("SELECT COUNT(*) FROM townland").fetchone()[0]
@@ -253,8 +196,6 @@ def quality_summary() -> dict:
         ).fetchall()
         review_by_status = {r["status"]: r["n"] for r in review_rows}
 
-        # Same canonical name appearing in 2+ rows with non-null wkt_geometry
-        # indicates potential same-name-different-geometry collision
         collisions = conn.execute(
             """
             SELECT COUNT(*) FROM (
@@ -276,10 +217,6 @@ def quality_summary() -> dict:
     finally:
         conn.close()
 
-
-# ---------------------------------------------------------------------------
-# Internal
-# ---------------------------------------------------------------------------
 
 def _new_uuid() -> str:
     import uuid

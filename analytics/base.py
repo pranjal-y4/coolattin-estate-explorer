@@ -15,7 +15,7 @@ class KPI:
 class Chart:
     chart_id: str
     title: str
-    type: str  # "bar" | "line" | "doughnut"
+    type: str
     data: Dict[str, Any]
     options: Dict[str, Any] | None = None
 

@@ -1,20 +1,3 @@
-"""
-backend/services/ask_service.py
-
-Natural-language Q&A over local SQLite using LLM-generated SQL.
-
-Design
-------
-- Verified SQL templates handle high-risk research questions where statistical accuracy matters most.
-- The configured LLM generates read-only SQL only after receiving live schema, sampled categories, and approved query memory.
-- Approved thumbs-up feedback can store trusted SQL for future reuse.
-- Any failed or semantically invalid SQL is repaired or rejected before results are shown.
-- The configured LLM rewrites the verified data answer for readability.
-- VRTI parish data is cached in-process (TTL 1 h).
-- SSE streaming: each pipeline stage emits a progress event as it starts and completes.
-- Read-only SQL guardrails before execution.
-- PDF export of all relevant entries.
-"""
 from __future__ import annotations
 
 import concurrent.futures
@@ -42,7 +25,6 @@ from extensions import get_db_conn
 
 log = logging.getLogger(__name__)
 
-# ── LLM providers ─────────────────────────────────────────────────────────────
 ASK_LLM_PROVIDER = os.environ.get("ASK_LLM_PROVIDER", "auto").strip().lower()
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
@@ -64,30 +46,21 @@ ASK_ALLOW_HEURISTIC_FALLBACK = os.environ.get(
     "ASK_ALLOW_HEURISTIC_FALLBACK", ""
 ).strip().lower() in {"1", "true", "yes", "on"}
 
-# When false, skip paid-API calls (Anthropic, Grok) and fall back to free OpenRouter models.
 LLM_ALLOW_PAID = os.environ.get("LLM_ALLOW_PAID", "true").strip().lower() not in {"0", "false", "no", "off"}
 
-# Feature flag: routed architecture (entity_resolver → intent_router → semantic/subgraph).
-# Default TRUE so the newer orchestrated pipeline is the standard runtime path.
-# Set ASK_USE_NEW_PIPELINE=false to force the legacy pipeline only. The old pipeline
-# remains both the explicit flag-off behaviour and the FALLBACK lane inside the
-# new orchestrator.
 ASK_USE_NEW_PIPELINE = os.environ.get(
     "ASK_USE_NEW_PIPELINE", "true"
 ).strip().lower() in {"1", "true", "yes", "on"}
 
-# ── Claude (Anthropic) — Part D ───────────────────────────────────────────────
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6").strip()
 ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
 ANTHROPIC_API_VERSION = "2023-06-01"
 
-# ── Grok (xAI) — Part D ───────────────────────────────────────────────────────
 GROK_API_KEY = os.environ.get("GROK_API_KEY", "").strip()
 GROK_MODEL = os.environ.get("GROK_MODEL", "grok-3-mini").strip()
 GROK_BASE_URL = os.environ.get("GROK_BASE_URL", "https://api.x.ai/v1").rstrip("/")
 
-# Which model handles final answer synthesis: "claude" | "grok" | "openrouter" | "ollama"
 ASK_SYNTHESIS_MODEL = os.environ.get("ASK_SYNTHESIS_MODEL", "claude").strip().lower()
 
 _OPENROUTER_FREE_MODELS = [
@@ -113,7 +86,6 @@ _OPENROUTER_FREE_MODELS = [
     "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
 ]
 
-# ── Ollama fallback ───────────────────────────────────────────────────────────
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "").strip()
 OLLAMA_REQUEST_TIMEOUT = int(os.environ.get("OLLAMA_REQUEST_TIMEOUT", "180"))
@@ -122,7 +94,6 @@ OLLAMA_MAX_RETRIES = max(1, int(os.environ.get("OLLAMA_MAX_RETRIES", "2")))
 OLLAMA_MODEL_CACHE_TTL = max(5, int(os.environ.get("OLLAMA_MODEL_CACHE_TTL", "120")))
 OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "10m")
 
-# ── CSV seed ──────────────────────────────────────────────────────────────────
 UNIFIED_SEED_KEY = "ask_unified_seed"
 UNIFIED_CSV_PATH = ActiveConfig.STATIC_DATA_DIR / "unified_processed.csv"
 UNIFIED_SEED_SCHEMA_VERSION = "v2"
@@ -131,20 +102,17 @@ HOLYWELLS_GEOJSON_PATH = ActiveConfig.STATIC_DATA_DIR / "holywells_wicklow.geojs
 ASI_GEOJSON_PATH = ActiveConfig.STATIC_DATA_DIR / "asi_wicklow.geojson"
 HERITAGE_SEED_SCHEMA_VERSION = "v1"
 
-# ── SQL safety ────────────────────────────────────────────────────────────────
 FORBIDDEN_SQL = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|ATTACH|DETACH|PRAGMA|REINDEX|VACUUM|TRUNCATE|REPLACE)\b",
     flags=re.IGNORECASE,
 )
 
-# ── VRTI parish cache ─────────────────────────────────────────────────────────
 _vrti_cache_lock: threading.Lock = threading.Lock()
 _VRTI_PARISH_CACHE: dict[str, Any] = {}
-_VRTI_CACHE_TTL = 3600  # seconds
+_VRTI_CACHE_TTL = 3600
 _VRTI_STATUS_CACHE: dict[str, Any] = {"down_until": 0.0}
-_VRTI_UNAVAILABLE_COOLDOWN = 300  # seconds
+_VRTI_UNAVAILABLE_COOLDOWN = 300
 
-# ── Ollama cache ─────────────────────────────────────────────────────────────
 _openrouter_status_cache_lock: threading.Lock = threading.Lock()
 _OPENROUTER_STATUS_CACHE: dict[str, Any] = {
     "expires_at": 0.0,
@@ -158,7 +126,6 @@ _OLLAMA_MODEL_CACHE: dict[str, Any] = {
     "resolved_model": None,
 }
 
-# ── Schema compatibility cache ───────────────────────────────────────────────
 _schema_cache_lock: threading.Lock = threading.Lock()
 _SCHEMA_COMPAT_CACHE: dict[str, Any] = {"clearances_count_column": None}
 
@@ -174,9 +141,7 @@ QUERY_MEMORY_SCHEMA_VERSION = "v1"
 QUERY_MEMORY_TABLE = "ask_query_memory"
 QUERY_FEEDBACK_TABLE = "ask_query_feedback"
 
-# ── Per-provider rate limiter (sliding window) ────────────────────────────────
 class _RateLimiter:
-    """Sliding-window rate limiter for outbound LLM API calls."""
     def __init__(self, max_calls: int, window_seconds: float):
         self._max = max_calls
         self._window = window_seconds
@@ -201,7 +166,6 @@ class _RateLimiter:
             return max(0.0, self._window - (now - expired[0]))
 
 
-# Rate limits: conservative defaults, tunable via env vars
 _RATE_LIMIT_CLAUDE = _RateLimiter(
     int(os.environ.get("RATE_LIMIT_CLAUDE_RPM", "20")), 60.0
 )
@@ -212,7 +176,6 @@ _RATE_LIMIT_OPENROUTER = _RateLimiter(
     int(os.environ.get("RATE_LIMIT_OPENROUTER_RPM", "30")), 60.0
 )
 
-# Default townland when question requires one but none was provided
 _DEFAULT_TOWNLAND = os.environ.get("DEFAULT_TOWNLAND", "COOLBOY").strip().upper()
 
 VERIFIED_ANALYSIS_TEMPLATE_IDS: set[str] = {
@@ -259,7 +222,6 @@ _PROMPT_CATEGORY_COLUMNS: dict[str, list[str]] = {
     "source_mentions": ["source_table", "event_year"],
 }
 
-# ── Townland catalog cache ───────────────────────────────────────────────────
 _townland_catalog_lock: threading.Lock = threading.Lock()
 _TOWNLAND_CATALOG_CACHE: dict[str, Any] = {
     "loaded_at": 0.0,
@@ -278,7 +240,6 @@ _TOWNLAND_STOPWORDS = {
     "year", "years",
 }
 
-# ── Annotated schema for LLM prompt ──────────────────────────────────────────
 _ANNOTATED_SCHEMA = """
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TABLE: unified_record  ← PRIMARY TABLE: people/events (emigration, eviction, tenancy)
@@ -500,18 +461,8 @@ Table: vrti_census — census data from VRTI KG
 """.strip()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 100-question template library
-# ─────────────────────────────────────────────────────────────────────────────
-# Each template:
-#   required_keywords — ALL must appear in the lowercased question
-#   optional_keywords — boost the score when present
-#   sql_template      — SQL with optional {townland_norm}, {year}, {surname} placeholders
-#   requires_townland / requires_year / requires_surname — skip if entity unavailable
-
 QUESTION_TEMPLATES: list[dict[str, Any]] = [
 
-    # ── EMIGRATION ────────────────────────────────────────────────────────────
 
     {"id": "emigration_total",
      "category": "emigration", "description": "Total emigrated people",
@@ -621,7 +572,6 @@ QUESTION_TEMPLATES: list[dict[str, Any]] = [
      "sql_template": "SELECT COUNT(DISTINCT record_id) AS emigrated FROM unified_record WHERE has_emigration_record=1 AND townland_norm='{townland_norm}' AND year={year}",
      "requires_townland": True, "requires_year": True},
 
-    # ── EVICTION / CLEARANCES ─────────────────────────────────────────────────
 
     {"id": "eviction_total",
      "category": "eviction", "description": "Total evictions recorded",
@@ -680,7 +630,6 @@ QUESTION_TEMPLATES: list[dict[str, Any]] = [
      "optional_keywords": ["total", "how many", "count"],
      "sql_template": "SELECT COUNT(*) AS total_clearance_records, SUM(eviction_count) AS total_evictions FROM clearances_record"},
 
-    # ── CENSUS / POPULATION ───────────────────────────────────────────────────
 
     {"id": "census_population_townland_year",
      "category": "census", "description": "Population of a townland in a specific year",
@@ -757,7 +706,6 @@ QUESTION_TEMPLATES: list[dict[str, Any]] = [
      "optional_keywords": ["population", "census", "people", "famine"],
      "sql_template": "SELECT t.name AS townland, c.total AS population_1851, c.male, c.female FROM census_record c JOIN townland t ON c.townland_id=t.id WHERE c.year=1851 ORDER BY c.total DESC LIMIT 50"},
 
-    # ── TOWNLAND / GEOGRAPHY ──────────────────────────────────────────────────
 
     {"id": "townlands_total_count",
      "category": "geography", "description": "Total number of townlands in the estate",
@@ -823,7 +771,6 @@ QUESTION_TEMPLATES: list[dict[str, Any]] = [
      "optional_keywords": ["list", "all", "how many", "which"],
      "sql_template": "SELECT DISTINCT barony, COUNT(*) AS townland_count FROM townland WHERE barony IS NOT NULL GROUP BY barony ORDER BY barony"},
 
-    # ── PEOPLE / NAMES ────────────────────────────────────────────────────────
 
     {"id": "people_all_in_townland",
      "category": "people", "description": "All people recorded in a townland",
@@ -877,7 +824,6 @@ QUESTION_TEMPLATES: list[dict[str, Any]] = [
      "sql_template": "SELECT DISTINCT COALESCE(NULLIF(TRIM(canonical_name),''),TRIM(COALESCE(forename,'')||' '||COALESCE(surname,''))) AS person_name,role,has_emigration_record,has_eviction_record FROM unified_record WHERE townland_norm='{townland_norm}' AND year={year} ORDER BY person_name LIMIT 200",
      "requires_townland": True, "requires_year": True},
 
-    # ── TENANCY ───────────────────────────────────────────────────────────────
 
     {"id": "tenants_total",
      "category": "tenancy", "description": "Total tenants in the records",
@@ -904,7 +850,6 @@ QUESTION_TEMPLATES: list[dict[str, Any]] = [
      "optional_keywords": ["per", "by", "each", "breakdown", "count"],
      "sql_template": "SELECT townland, COUNT(DISTINCT record_id) AS tenant_count FROM unified_record WHERE has_tenancy_record=1 GROUP BY townland ORDER BY tenant_count DESC LIMIT 50"},
 
-    # ── RECORDS OVERVIEW ──────────────────────────────────────────────────────
 
     {"id": "records_overview",
      "category": "overview", "description": "Overview of all record types in the database",
@@ -924,7 +869,6 @@ QUESTION_TEMPLATES: list[dict[str, Any]] = [
      "optional_keywords": ["per", "by", "each", "count", "how many"],
      "sql_template": "SELECT townland, COUNT(DISTINCT record_id) AS records FROM unified_record WHERE townland IS NOT NULL GROUP BY townland ORDER BY records DESC LIMIT 50"},
 
-    # ── COMBINED QUESTIONS ────────────────────────────────────────────────────
 
     {"id": "famine_impact",
      "category": "overview", "description": "Famine impact: evictions, emigration and population decline",
@@ -1100,7 +1044,6 @@ def _load_db_forenames() -> list[str]:
 
 
 def _fuzzy_match_forename(raw: str) -> tuple[str, float] | None:
-    """Return (canonical_forename, score) if raw fuzzy-matches a known DB forename."""
     raw_upper = raw.upper().strip()
     if not raw_upper or len(raw_upper) < 2:
         return None
@@ -1125,7 +1068,6 @@ def _fuzzy_match_forename(raw: str) -> tuple[str, float] | None:
 
 
 def _extract_surname(question: str) -> str | None:
-    # Specific phrasing patterns (highest confidence — checked first)
     specific_patterns = [
         r"\bsurname[s]?\s+(?:of\s+|is\s+)?['\"]?(\w+)['\"]?",
         r"\b([A-Za-z][A-Za-z'-]{2,})\s+family\b",
@@ -1133,11 +1075,8 @@ def _extract_surname(question: str) -> str | None:
         r"\b(?:about|for|on)\s+([A-Za-z][A-Za-z'-]{2,})\s+(?:family|surname|people|records)\b",
         r"\bnamed?\s+['\"]?(\w+)['\"]?",
         r"\bby\s+the\s+name\s+(?:of\s+)?['\"]?(\w+)['\"]?",
-        # "the Byrnes", "the Kavanaghs"
         r"\bthe\s+([A-Z][a-z]{2,}(?:'[A-Za-z]{2,})?)s?\b",
-        # "Kavanaghs emigrated / evicted / were …"
         r"\b([A-Z][a-z]{2,}(?:'[A-Za-z]{2,})?)s?\s+(?:emigrated|evicted|were|lived|had|people|tenants|family|emigrants)\b",
-        # "records for Byrne" / "people called Nolan"
         r"\b(?:records|people|persons|emigrants|tenants)\s+(?:for|of|called|named|with surname)\s+([A-Za-z][A-Za-z'-]{2,})\b",
     ]
     for p in specific_patterns:
@@ -1147,8 +1086,6 @@ def _extract_surname(question: str) -> str | None:
             if candidate not in _SURNAME_STOPWORDS and len(candidate) >= 3:
                 return candidate
 
-    # Broad fallback: any capitalized proper-looking word not in stopwords,
-    # verified by fuzzy-matching against actual DB surnames.
     for m in re.finditer(r"\b([A-Z][a-z]{2,}(?:'[a-z]{2,})?)\b", question):
         candidate = m.group(1).upper()
         if candidate in _SURNAME_STOPWORDS:
@@ -1164,16 +1101,12 @@ def _extract_surname(question: str) -> str | None:
 
 
 def _extract_forename(question: str, surname: str | None) -> str | None:
-    """Extract a forename from the question, optionally adjacent to the given surname."""
-    # Pattern: "FirstName Surname" or "Surname, FirstName"
     if surname:
-        # Word immediately before the surname (or its misspelling)
         m = re.search(rf"\b([A-Z][a-z]{{2,}})\s+\w*{re.escape(surname[:4])}", question, re.I)
         if m:
             candidate = m.group(1).upper()
             if candidate not in _SURNAME_STOPWORDS and len(candidate) >= 2:
                 return candidate
-    # Explicit forename patterns
     for p in [
         r"\bforename[s]?\s+(?:is\s+|of\s+)?['\"]?(\w+)['\"]?",
         r"\bfirst\s+name\s+(?:is\s+|of\s+)?['\"]?(\w+)['\"]?",
@@ -1188,10 +1121,6 @@ def _extract_forename(question: str, surname: str | None) -> str | None:
 
 
 def _resolve_person_names(question: str) -> dict[str, Any]:
-    """
-    Extract and fuzzy-correct surname and forename from the question.
-    Returns: {surname, forename, surname_raw, forename_raw, name_correction_warnings}
-    """
     raw_surname = _extract_surname(question)
     surname = raw_surname
     surname_corrected = False
@@ -1361,12 +1290,6 @@ def _analyse_question(question: str, townland_hint: str | None) -> dict[str, Any
 
 
 def _same_parish_sql(question: str, analysis: dict[str, Any], townland_hint: str | None) -> str | None:
-    """
-    Deterministic SQL for "same parish as <townland>" questions.
-
-    This bypasses the heavier relational enrichment path for questions that can
-    be answered directly from SQLite's townland hierarchy.
-    """
     q = (question or "").lower()
     hint = _norm_townland(townland_hint) or _norm_townland(analysis.get("townland_norm"))
     if not hint:
@@ -1424,12 +1347,6 @@ def _analysis_prompt_block(analysis: dict[str, Any]) -> str:
 
 
 def _live_sqlite_schema_prompt_block() -> str:
-    """
-    Build a comprehensive plain-text data dictionary sent verbatim to the LLM.
-    Cached for _PROMPT_SCHEMA_CACHE_TTL seconds (default 300 s).
-    Covers every column with type, null count, distinct count, and
-    ALL distinct values for low-cardinality columns (< 120 distinct values).
-    """
     now = time.time()
     with _prompt_schema_cache_lock:
         cached = _PROMPT_SCHEMA_CACHE.get("value")
@@ -1441,7 +1358,6 @@ def _live_sqlite_schema_prompt_block() -> str:
     try:
         lines: list[str] = []
 
-        # ── Helper: all distinct values for a column (if ≤ max_distinct) ────
         def _all_values(table: str, col: str, max_distinct: int = 120) -> list[str] | None:
             try:
                 n = conn.execute(
@@ -1504,9 +1420,6 @@ def _live_sqlite_schema_prompt_block() -> str:
             except Exception:
                 return []
 
-        # ═══════════════════════════════════════════════════════════════════
-        #  TABLE 1: unified_record  (primary people / event table)
-        # ═══════════════════════════════════════════════════════════════════
         ur_count = conn.execute("SELECT COUNT(*) FROM unified_record").fetchone()[0]
         ur_distinct = conn.execute(
             "SELECT COUNT(DISTINCT record_id) FROM unified_record"
@@ -1516,27 +1429,23 @@ def _live_sqlite_schema_prompt_block() -> str:
         lines.append("  Count people ALWAYS with COUNT(DISTINCT record_id).")
         lines.append("COLUMNS:")
 
-        # record_id
         lines.append("  record_id TEXT PRIMARY KEY — unique estate record identifier")
         sample_ids = [r[0] for r in conn.execute(
             "SELECT record_id FROM unified_record WHERE record_id IS NOT NULL LIMIT 5"
         ).fetchall()]
         lines.append(f"    sample: {', '.join(sample_ids)}")
 
-        # year
         yr_stats = _num_stats("unified_record", "year")
         lines.append(f"  year INTEGER — event year | {yr_stats}")
         yr_vals = _all_values("unified_record", "year", max_distinct=120)
         if yr_vals:
             lines.append(f"    all years: {', '.join(yr_vals)}")
 
-        # month
         mo_vals = _all_values("unified_record", "month")
         lines.append(f"  month TEXT — {_null_info('unified_record', 'month')}")
         if mo_vals:
             lines.append(f"    all values: {', '.join(mo_vals)}")
 
-        # surname / forename
         lines.append(f"  surname TEXT — family surname | {_null_info('unified_record', 'surname')}")
         top_sur = _top_values("unified_record", "surname", 20)
         if top_sur:
@@ -1549,20 +1458,17 @@ def _live_sqlite_schema_prompt_block() -> str:
 
         lines.append("  canonical_name TEXT — preferred display name (COALESCE with forename+surname)")
 
-        # townland
         lines.append(f"  townland TEXT — raw townland name | {_null_info('unified_record', 'townland')}")
         lines.append("  townland_norm TEXT — UPPERCASE normalised townland for WHERE filters")
         tl_vals = _top_values("unified_record", "townland_norm", 30)
         if tl_vals:
             lines.append(f"    top-30 townland_norm: {', '.join(tl_vals)}")
 
-        # parish
         lines.append(f"  parish TEXT — civil parish | {_null_info('unified_record', 'parish')}")
         par_vals = _all_values("unified_record", "parish")
         if par_vals:
             lines.append(f"    all values: {', '.join(par_vals)}")
 
-        # estate
         est_vals = _all_values("unified_record", "estate")
         lines.append(f"  estate TEXT — sub-estate / landholding name | {_null_info('unified_record', 'estate')}")
         if est_vals:
@@ -1570,13 +1476,11 @@ def _live_sqlite_schema_prompt_block() -> str:
         else:
             lines.append("    (no values found)")
 
-        # role
         role_vals = _all_values("unified_record", "role")
         lines.append(f"  role TEXT — {_null_info('unified_record', 'role')} — column is entirely NULL; do NOT filter on role")
         if role_vals:
             lines.append(f"    all values: {', '.join(role_vals)}")
 
-        # gender
         gen_vals = _all_values("unified_record", "gender")
         lines.append(f"  gender TEXT — {_null_info('unified_record', 'gender')}")
         if gen_vals:
@@ -1585,23 +1489,19 @@ def _live_sqlite_schema_prompt_block() -> str:
         else:
             lines.append("    values: 'M'=male, 'F'=female")
 
-        # age
         age_stats = _num_stats("unified_record", "age")
         lines.append(f"  age INTEGER — {age_stats}")
 
-        # occupation
         lines.append(f"  occupation TEXT — {_null_info('unified_record', 'occupation')}")
         occ_vals = _top_values("unified_record", "occupation", 25)
         if occ_vals:
             lines.append(f"    top-25: {', '.join(occ_vals)}")
 
-        # acreage
         lines.append(f"  acres REAL — holding size from source | {_num_stats('unified_record', 'acres')}")
         lines.append(f"  holding_acres REAL — PREFERRED acreage column | {_num_stats('unified_record', 'holding_acres')}")
         lines.append("  acres_irish REAL — Irish acres (when present)")
         lines.append("  acres_english REAL — English acres (when present)")
 
-        # family columns
         sons_stats = _num_stats("unified_record", "sons")
         dau_stats  = _num_stats("unified_record", "daughters")
         cc_stats   = _num_stats("unified_record", "children_count")
@@ -1610,7 +1510,6 @@ def _live_sqlite_schema_prompt_block() -> str:
         lines.append(f"  children_count INTEGER — derived sons+daughters | {cc_stats}")
         lines.append(f"  family_size_estimate INTEGER — {_num_stats('unified_record', 'family_size_estimate')}")
 
-        # flags
         flag_rows = conn.execute("""
             SELECT has_emigration_record, has_eviction_record, has_tenancy_record, COUNT(*) AS c
             FROM unified_record
@@ -1637,7 +1536,6 @@ def _live_sqlite_schema_prompt_block() -> str:
         ]
         lines.append(f"    flag combinations: {' | '.join(combo_lines)}")
 
-        # derived flags
         widow_count = conn.execute(
             "SELECT COUNT(DISTINCT record_id) FROM unified_record WHERE is_widow=1"
         ).fetchone()[0]
@@ -1647,7 +1545,6 @@ def _live_sqlite_schema_prompt_block() -> str:
         lines.append(f"  is_widow INTEGER — 1=widow | {widow_count} records are widows")
         lines.append(f"  is_canada_destination INTEGER — 1=Canada arrival | {canada_count} records")
 
-        # ship / departure / arrival
         lines.append(f"  ship_name TEXT — {_null_info('unified_record', 'ship_name')}")
         ships = _top_values("unified_record", "ship_name", 20)
         if ships:
@@ -1663,7 +1560,6 @@ def _live_sqlite_schema_prompt_block() -> str:
         if arr_vals:
             lines.append(f"    top-15: {', '.join(arr_vals)}")
 
-        # legal_action
         la_vals = _all_values("unified_record", "legal_action")
         if la_vals:
             lines.append(f"  legal_action TEXT — all values: {', '.join(la_vals)}")
@@ -1674,9 +1570,6 @@ def _live_sqlite_schema_prompt_block() -> str:
         lines.append("  family_key TEXT — family grouping key")
         lines.append("")
 
-        # ═══════════════════════════════════════════════════════════════════
-        #  TABLE 2: townland  (geographic reference)
-        # ═══════════════════════════════════════════════════════════════════
         tl_count = conn.execute("SELECT COUNT(*) FROM townland").fetchone()[0]
         lines.append(f"TABLE townland  [{tl_count} rows]")
         lines.append("PURPOSE: Geographic reference — one row per townland with coordinates.")
@@ -1714,9 +1607,6 @@ def _live_sqlite_schema_prompt_block() -> str:
         lines.append("  kg_uri TEXT — VRTI Knowledge Graph URI")
         lines.append("")
 
-        # ═══════════════════════════════════════════════════════════════════
-        #  TABLE 3: census_record
-        # ═══════════════════════════════════════════════════════════════════
         cr_count = conn.execute("SELECT COUNT(*) FROM census_record").fetchone()[0]
         lines.append(f"TABLE census_record  [{cr_count} rows]")
         lines.append("PURPOSE: Population per townland per census year.")
@@ -1736,9 +1626,6 @@ def _live_sqlite_schema_prompt_block() -> str:
         lines.append("  uninhabited INTEGER — uninhabited houses")
         lines.append("")
 
-        # ═══════════════════════════════════════════════════════════════════
-        #  TABLE 4: clearances_record
-        # ═══════════════════════════════════════════════════════════════════
         clr_count = conn.execute("SELECT COUNT(*) FROM clearances_record").fetchone()[0]
         lines.append(f"TABLE clearances_record  [{clr_count} rows]")
         lines.append(f"PURPOSE: Estate eviction/clearance counts per townland per year.")
@@ -1755,9 +1642,6 @@ def _live_sqlite_schema_prompt_block() -> str:
         lines.append(f"  {clear_col} INTEGER — number of eviction events (the active metric column)")
         lines.append("")
 
-        # ═══════════════════════════════════════════════════════════════════
-        #  TABLE 5: heritage_feature
-        # ═══════════════════════════════════════════════════════════════════
         hf_count = conn.execute("SELECT COUNT(*) FROM heritage_feature").fetchone()[0]
         lines.append(f"TABLE heritage_feature  [{hf_count} rows]")
         lines.append("PURPOSE: Archaeological heritage sites (holy wells, ring forts, etc.)")
@@ -1779,9 +1663,6 @@ def _live_sqlite_schema_prompt_block() -> str:
             lines.append(f"    all source_datasets: {', '.join(sd_vals)}")
         lines.append("")
 
-        # ═══════════════════════════════════════════════════════════════════
-        #  TABLE 6: source_mentions  (workhouse records — SEPARATE dataset)
-        # ═══════════════════════════════════════════════════════════════════
         try:
             sm_count = conn.execute("SELECT COUNT(*) FROM source_mentions").fetchone()[0]
             lines.append(f"TABLE source_mentions  [{sm_count} rows]")
@@ -1805,9 +1686,6 @@ def _live_sqlite_schema_prompt_block() -> str:
         except Exception:
             pass
 
-        # ═══════════════════════════════════════════════════════════════════
-        #  JOINS & RELATIONSHIPS
-        # ═══════════════════════════════════════════════════════════════════
         lines.append("━━━ JOIN RELATIONSHIPS ━━━")
         lines.append("unified_record → townland:")
         lines.append("  JOIN townland t ON UPPER(t.name) = unified_record.townland_norm")
@@ -1823,9 +1701,6 @@ def _live_sqlite_schema_prompt_block() -> str:
         lines.append("  JOIN heritage_feature hf ON hf.townland_norm = unified_record.townland_norm")
         lines.append("")
 
-        # ═══════════════════════════════════════════════════════════════════
-        #  CUSTOM FUNCTION
-        # ═══════════════════════════════════════════════════════════════════
         lines.append("━━━ CUSTOM FUNCTION ━━━")
         lines.append("distance_km(lat1, lon1, lat2, lon2) → REAL  (great-circle kilometres)")
         lines.append("Radius query pattern:")
@@ -1840,9 +1715,6 @@ def _live_sqlite_schema_prompt_block() -> str:
         lines.append("  SELECT ...")
         lines.append("")
 
-        # ═══════════════════════════════════════════════════════════════════
-        #  SAMPLE ROWS (so LLM can see real data)
-        # ═══════════════════════════════════════════════════════════════════
         lines.append("━━━ SAMPLE ROWS ━━━")
 
         ur_sample = conn.execute("""
@@ -1905,7 +1777,6 @@ def _prompt_category_examples(
     column_names: list[str],
     limit: int = 20,
 ) -> dict[str, list[str]]:
-    """Return all distinct values (capped at limit) for configured categorical columns."""
     available = set(column_names)
     out: dict[str, list[str]] = {}
     for column in _PROMPT_CATEGORY_COLUMNS.get(table, []):
@@ -1963,21 +1834,10 @@ def _match_and_build_template(
     question: str,
     canonical_townland: str | None,
 ) -> tuple[dict | None, str | None]:
-    """
-    Score every template against the question.
-    Returns (template_dict, built_sql) for the best match, or (None, None).
-
-    Minimum score threshold is 3 (= one required keyword × 2 + at least one
-    optional match).  This prevents false positives where a single ambiguous
-    substring (e.g. "ring" inside "during") matches a highly specific template.
-    """
     q = question.lower()
     year = _extract_year(question)
     surname = _extract_surname(question)
 
-    # ── Out-of-scope exclusions ────────────────────────────────────────────
-    # Topics with no template coverage: return early so these questions reach
-    # the LLM-fallback path rather than a semantically wrong template.
     _excluded_phrases = (
         "workhouse",
         "died of",
@@ -1997,10 +1857,8 @@ def _match_and_build_template(
     )
     if any(phrase in q for phrase in _excluded_phrases):
         return None, None
-    # Age filter + person count questions must go to the LLM; geography templates cannot answer them
     if re.search(r'\bage\s*\d|\d+\s*(?:years?|yrs?)?\s*(?:old|of age)', q):
         return None, None
-    # Widows-who-emigrated intersection: no template covers both conditions.
     if "widow" in q and "emigra" in q:
         return None, None
 
@@ -2026,15 +1884,9 @@ def _match_and_build_template(
             best_score = score
             best_tmpl = tmpl
 
-    # Require score ≥ 2: at least one required keyword (2 pts), or a template
-    # with no required keywords that matched at least two optional terms.
-    # The out-of-scope exclusion guards above are the primary false-positive
-    # defence; the score threshold catches residual substring coincidences
-    # (e.g. "in" inside a proper noun, "estate" in a narrative question).
     if not best_tmpl or best_score < 2:
         return None, None
 
-    # Substitute placeholders
     sql = best_tmpl["sql_template"]
     if "{townland_norm}" in sql:
         sql = sql.replace("{townland_norm}", _sql_escape(canonical_townland or ""))
@@ -2051,7 +1903,6 @@ def _match_and_build_template_by_id(
     question: str,
     canonical_townland: str | None,
 ) -> tuple[dict | None, str | None]:
-    """Build SQL for a specific template ID; returns (None, None) if entity requirements unmet."""
     year = _extract_year(question)
     surname = _extract_surname(question)
     for tmpl in QUESTION_TEMPLATES:
@@ -2079,19 +1930,6 @@ def _phase4_retrieve(
     canonical_townland: str | None,
     approved_memory: list[dict[str, Any]],
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    """
-    Phase 4 hybrid retrieval: dense TF-IDF cosine + sparse keyword overlap → RRF.
-
-    Returns:
-      (template_fast_lane, embedding_ranked_memory)
-
-    template_fast_lane: dict with keys 'template', 'sql', 'cosine_score',
-      'rrf_score', 'template_id' when a high-confidence template hit exists;
-      None otherwise.
-
-    embedding_ranked_memory: approved_memory rows re-ranked by embedding
-      similarity, with 'match_score' set for downstream _approved_query_examples_block.
-    """
     try:
         from backend.services.embedding_index import (
             get_index,
@@ -2110,7 +1948,6 @@ def _phase4_retrieve(
             memory_rows=approved_memory,
         )
 
-        # ── Template fast lane ────────────────────────────────────────────────
         template_fast_lane: dict[str, Any] | None = None
         q_lower = question.lower()
         for hit in hits:
@@ -2118,7 +1955,6 @@ def _phase4_retrieve(
                 continue
             if hit.cosine_score < TEMPLATE_FAST_LANE_THRESHOLD:
                 continue
-            # required_keywords is the HARD gate — must all be present
             if hit.required_keywords and not all(kw in q_lower for kw in hit.required_keywords):
                 continue
             if hit.source == "template":
@@ -2134,7 +1970,6 @@ def _phase4_retrieve(
                     }
                     break
 
-        # ── Re-rank memory rows by embedding similarity ───────────────────────
         memory_scores: dict[str, tuple[float, float]] = {
             hit.key: (hit.cosine_score, hit.rrf_score)
             for hit in hits
@@ -2161,19 +1996,12 @@ def _phase4_retrieve(
         return None, approved_memory
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Verified analysis layer
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _try_verified_analysis(
     question: str,
     canonical_townland: str | None,
     analysis: dict[str, Any],
 ) -> dict[str, Any] | None:
     q_lo = (question or "").lower()
-    # Guard: topics with no verified-analysis coverage must not be forced onto
-    # a curated SQL path.  Return None so the question falls through to
-    # template matching (which has its own exclusions) or the LLM fallback.
     _va_excluded = (
         "workhouse", "died of", "religion", "political",
         "approach",
@@ -2237,10 +2065,6 @@ def _try_verified_analysis(
         }
     return None
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Approved query memory + feedback
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -2714,16 +2538,11 @@ def _memory_matches_for_display(matches: list[dict[str, Any]]) -> list[dict[str,
     return out
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SSE streaming entry point
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _sse(type_: str, **kw: Any) -> str:
     return f"data: {json.dumps({'type': type_, **kw})}\n\n"
 
 
 def _extract_tables(sql: str) -> list[str]:
-    """Return deduplicated table names referenced in a SQL query."""
     raw = re.findall(r'(?:FROM|JOIN)\s+([a-z_][a-z_0-9]*)', sql, re.IGNORECASE)
     return list(dict.fromkeys(t.lower() for t in raw))
 
@@ -2734,10 +2553,6 @@ def answer_question(
     include_sql: bool = False,
     force_llm: bool = False,
 ) -> dict[str, Any]:
-    """
-    Compatibility wrapper for non-stream consumers.
-    Executes the streaming pipeline and returns the final result payload.
-    """
     final_payload: dict[str, Any] | None = None
     for raw in answer_question_stream(
         question=question,
@@ -2768,37 +2583,6 @@ def _orchestrated_pipeline_stream(
     include_sql: bool,
     force_llm: bool,
 ) -> Generator[str, None, None]:
-    """
-    Default pipeline — active when ASK_USE_NEW_PIPELINE=true (the default).
-
-    Actual execution order (what this function really does):
-      1. Phase 1  — entity resolution via _resolve_townland_context (townland fuzzy
-                    match + optional person identity); sql_id + kg_uri shared downstream.
-      2. SQL      — direct LLM SQL generation via _generate_sql(); no intent routing,
-                    no semantic-layer fast lanes, no memory reuse in this path.
-                    intent_route is set to "direct" and never changes.
-      3. GraphRAG — if canonical_townland resolved: load in-process NetworkX graph,
-                    seed from exact townland node → k-hop BFS → prune → linearise.
-                    Result injected into kg_context["subgraph_linearized"] later.
-      4. Townland summary — 5 hardcoded SQL queries (emigration/eviction/tenancy/
-                    census/workhouse counts) for synthesis context.
-      5. Stage 2  — SQL safety validation (_sanitize_and_validate_sql).
-      6. Stage 3  — SQLite execution (_execute_with_recovery; repairs on failure).
-      7. Stage 4  — VRTI SPARQL (_kg_context); townland/parish metadata enrichment.
-      8. Phase 3 context injection — _phase3_result is always None here (subgraph
-                    engine is NOT called in this pipeline); no-op.
-      9. GraphRAG injection — appends GraphRAG linearized block to kg_context.
-     10. Stage 4.5 — GraphDB SPARQL: DEAD in this pipeline because intent_route is
-                    always "direct", never "relational"/"comparative".
-     11. Phase 6  — fusion & reconciliation (_fuse_lanes).
-     12. Phase 7  — multi-model LLM synthesis (Claude → Grok → OpenRouter/Ollama cascade).
-
-    NOTE: The semantic layer (Phase 2), embedding index (Phase 4), intent router
-    (Phase 5), and subgraph engine (Phase 3) are all inactive in this pipeline.
-    They exist only in the legacy pipeline (answer_question_stream when
-    ASK_USE_NEW_PIPELINE=false).
-    """
-    # ── Setup ─────────────────────────────────────────────────────────────────
     try:
         _ensure_unified_table_seeded()
         _ensure_heritage_feature_seeded()
@@ -2807,10 +2591,6 @@ def _orchestrated_pipeline_stream(
         yield _sse("error", message=f"Database not ready: {exc}")
         return
 
-    # ── Phase 1: Entity resolution ────────────────────────────────────────────
-    # entity_resolver is called exactly once, inside _townland_resolution_payload,
-    # and enriches the returned dict with sql_id + kg_uri so every downstream lane
-    # references the same resolved entity without re-deriving it.
     yield _sse(
         "progress", stage="resolving_identity", status="started",
         label="Resolving Entities", detail="Identifying entities in the question…",
@@ -2824,7 +2604,6 @@ def _orchestrated_pipeline_stream(
     for _ncw in (analysis.get("name_correction_warnings") or []):
         warnings.append(_ncw)
 
-    # Warn when question implies a specific place but none was provided
     _q_lower = question.lower()
     _needs_townland = (
         not canonical_townland
@@ -2843,7 +2622,6 @@ def _orchestrated_pipeline_stream(
         )
     warnings.extend(_question_data_coverage_warnings(question))
 
-    # Part A: Person identity resolution for surname questions
     _person_identity_result: dict[str, Any] = {}
     if analysis.get("surname"):
         try:
@@ -2885,10 +2663,6 @@ def _orchestrated_pipeline_stream(
         ),
     )
 
-    # ── SQL generation — always LLM + full schema (no routing) ─────────────
-    # Townland is already resolved by Phase 1 with fuzzy matching. The LLM receives
-    # the full question and annotated schema to generate SQL. The KG is queried
-    # only for townland metadata (Stage 4), not for the full question.
     _ANALYTICAL = "analytical"
     _RELATIONAL = "relational"
     _COMPARATIVE = "comparative"
@@ -2972,7 +2746,6 @@ def _orchestrated_pipeline_stream(
             duration_ms=ms,
         )
 
-    # ── GraphRAG: property-graph townland context ─────────────────────────────
     if canonical_townland:
         try:
             from backend.services.graphrag import (
@@ -3015,7 +2788,6 @@ def _orchestrated_pipeline_stream(
             log.warning("direct_pipeline.graphrag_failed error=%s", _gr_exc)
             query_provenance["graphrag"] = {"available": False, "error": str(_gr_exc)}
 
-    # ── Townland summary: key counts for synthesis context ────────────────────
     _fallback_multi_sql_results: dict[str, Any] = {}
     if canonical_townland:
         try:
@@ -3069,7 +2841,6 @@ def _orchestrated_pipeline_stream(
             log.warning("direct_pipeline.townland_summary_failed error=%s", _ts_exc)
 
 
-    # ── Stage 2 — Framing Query (FORBIDDEN_SQL guardrail) ────────────────────
     t0 = time.perf_counter()
     yield _sse("progress", stage="framing_query", status="started",
                label="Framing Query", detail="Validating SQL for safety…")
@@ -3092,7 +2863,6 @@ def _orchestrated_pipeline_stream(
     yield _sse("progress", stage="framing_query", status="completed",
                label="Framing Query", detail="Read-only query validated", duration_ms=ms)
 
-    # ── Stage 3 — Querying Database ───────────────────────────────────────────
     t0 = time.perf_counter()
     yield _sse("progress", stage="querying_database", status="started",
                label="Querying SQLite", detail="Running SQL against local SQLite database…")
@@ -3130,7 +2900,6 @@ def _orchestrated_pipeline_stream(
         duration_ms=sql_execution_ms,
     )
 
-    # ── Stage 4 — Querying VRTI Graph ─────────────────────────────────────────
     t0 = time.perf_counter()
     yield _sse("progress", stage="querying_vrti_graph", status="started",
                label="Querying VRTI Graph",
@@ -3146,9 +2915,6 @@ def _orchestrated_pipeline_stream(
     yield _sse("progress", stage="querying_vrti_graph", status="completed",
                label="Querying VRTI Graph", detail=_vrti_detail, duration_ms=ms)
 
-    # ── Phase 3 subgraph context injection ────────────────────────────────────
-    # Inject linearized subgraph into kg_context so the LLM rewrite can synthesise
-    # both qualitative KG context and quantitative SQL results.
     if _phase3_result and _phase3_result.linearized:
         if kg_context is None:
             kg_context = {}
@@ -3160,8 +2926,6 @@ def _orchestrated_pipeline_stream(
                 "relational context. Synthesise both in your answer."
             )
 
-    # ── In-process GraphRAG context injection (flow.md §5) ────────────────────
-    # Property-graph subgraph supplements the RDF subgraph (additive, not replacing).
     if _graphrag_result and _graphrag_result.available and _graphrag_result.linearized:
         if kg_context is None:
             kg_context = {}
@@ -3177,7 +2941,6 @@ def _orchestrated_pipeline_stream(
                 "SQL owns the authoritative counts. Surface any discrepancies explicitly."
             )
 
-    # ── Stage 4.5 — Querying GraphDB (non-fatal) ─────────────────────────────
     from backend.integrations import graphdb_sparql as _gdb
     graph_comparison: dict[str, Any] = {
         "sparql_query": "", "sql_query": safe_sql,
@@ -3266,10 +3029,7 @@ def _orchestrated_pipeline_stream(
         yield _sse("progress", stage="querying_graphdb", status="completed",
                    label="Querying GraphDB", detail=_gdb_detail, duration_ms=_gdb_total_ms)
 
-    # Neo4j Cypher comparison removed — RQ6 now uses SQL vs SPARQL (two paradigms).
-    # The in-process graph supplies qualitative corroboration, not count comparison.
 
-    # ── Phase 6 — Fusion & reconciliation ─────────────────────────────────────
     t0 = time.perf_counter()
     yield _sse("progress", stage="querying_fusion", status="started",
                label="Reconciling Sources",
@@ -3299,7 +3059,6 @@ def _orchestrated_pipeline_stream(
     yield _sse("progress", stage="querying_fusion", status="completed",
                label="Reconciling Sources", detail=_f_detail, duration_ms=ms)
 
-    # ── Stage 5 — Preparing Output ────────────────────────────────────────────
     t0 = time.perf_counter()
     yield _sse("progress", stage="preparing_output", status="started",
                label="Preparing Output",
@@ -3349,9 +3108,6 @@ def _orchestrated_pipeline_stream(
             label="Synthesising Answer",
             detail="Combining SQL, graph, and retrieval context into the final answer…",
         )
-        # Part F — Claude synthesis when new pipeline is active
-        # Builds a structured payload so the answer leads with the direct result,
-        # cites provenance, surfaces disambiguation, and ends with next steps.
         _chunk_summary = " ".join(c.get("text", "")[:300] for c in _chunk_context[:3]) if _chunk_context else ""
         _graph_ctx_str = (kg_context or {}).get("subgraph_linearized", "") or _chunk_summary
         _resolved_entities: list[dict[str, Any]] = []
@@ -3377,11 +3133,6 @@ def _orchestrated_pipeline_stream(
             "row_count": len(rows),
             "sql_used": safe_sql,
         }
-        # Pre-compute per-column totals and derived values for numeric columns so
-        # the synthesis LLM can mention aggregated totals and computed changes without
-        # triggering the numeric-consistency gate.  The gate only allows numbers that
-        # appear in the input; without pre-computed values the LLM computes differences
-        # (e.g. 405-158=247) that are not literally present in the rows.
         if rows and len(rows) > 1:
             _col_totals: dict[str, Any] = {}
             _col_derived: dict[str, Any] = {}
@@ -3391,8 +3142,6 @@ def _orchestrated_pipeline_stream(
                     _col_totals[_col] = int(sum(_vals)) if all(isinstance(v, int) for v in _vals) else sum(_vals)
                 if len(_vals) >= 2:
                     _ints = [int(v) for v in _vals]
-                    # All pairwise absolute differences so the gate permits change values
-                    # the LLM computes between any two years/rows (e.g. 405-158=247).
                     _all_diffs = sorted({
                         abs(_ints[i] - _ints[j])
                         for i in range(len(_ints))
@@ -3409,7 +3158,6 @@ def _orchestrated_pipeline_stream(
                 _sql_result_for_synthesis["column_totals"] = _col_totals
             if _col_derived:
                 _sql_result_for_synthesis["derived_values"] = _col_derived
-        # When query returns nothing, add diagnostics so LLM can explain WHY
         if len(rows) == 0 and safe_sql:
             try:
                 _sql_result_for_synthesis["zero_result_diagnostics"] = (
@@ -3417,9 +3165,6 @@ def _orchestrated_pipeline_stream(
                 )
             except Exception:
                 pass
-        # For FALLBACK intent, augment the SQL result with the pre-computed
-        # townland summary queries (emigration, eviction, census, workhouse, gender).
-        # These provide a rich multi-angle view of the townland to the synthesiser.
         if _fallback_multi_sql_results:
             _sql_result_for_synthesis["townland_summary"] = {
                 k: v for k, v in _fallback_multi_sql_results.items()
@@ -3446,7 +3191,6 @@ def _orchestrated_pipeline_stream(
             },
             townland_context=supporting_context.get("townland_detail"),
         )
-        # ── Numeric gate outcome ──────────────────────────────────────────────
         _gate_outcome = llm_rewrite_meta.get("gate_outcome", "not_applied")
         query_provenance["numeric_gate_outcome"] = _gate_outcome
         if _gate_outcome == "fallback":
@@ -3464,7 +3208,6 @@ def _orchestrated_pipeline_stream(
                 "Numeric-consistency gate: the first synthesis attempt contained unsupported "
                 "numbers and was regenerated."
             )
-        # Provider switch: primary failed gate, backup succeeded
         if llm_rewrite_meta.get("provider_switched_from"):
             _from = llm_rewrite_meta["provider_switched_from"]
             _to = llm_rewrite_meta.get("provider", "backup provider")
@@ -3476,7 +3219,6 @@ def _orchestrated_pipeline_stream(
             llm_rephrased_answer = _strip_answer_formatting(llm_rephrased_answer)
             summary_block["llm_rephrased_text"] = llm_rephrased_answer
 
-        # ── Cross-verifier (all LLM-generated answers) ───────────────────────
         _strategy = query_provenance.get("strategy", "")
         _is_llm_fallback = any(
             s in _strategy
@@ -3576,7 +3318,6 @@ def _orchestrated_pipeline_stream(
     yield _sse("progress", stage="done", status="completed",
                label="Done", detail="Ask response ready.")
 
-    # ── Final result ──────────────────────────────────────────────────────────
     payload: dict[str, Any] = {
         "question": question,
         "answer": actual_answer,
@@ -3590,7 +3331,6 @@ def _orchestrated_pipeline_stream(
         "vrti_query_generation": vrti_query_meta,
         "townland_context": canonical_townland,
         "townland_resolution": townland_resolution,
-        # Phase 1 — entity_resolver ran once; sql_id + kg_uri shared by all lanes
         "entity_resolution": townland_resolution.get("entity_resolution"),
         "kg_context": kg_context,
         "availability": availability,
@@ -3644,24 +3384,11 @@ def answer_question_stream(
     include_sql: bool = False,
     force_llm: bool = False,
 ) -> Generator[str, None, None]:
-    """
-    Streaming pipeline — yields SSE-formatted strings.
-
-    Events
-    ------
-    {"type":"progress","stage":"...","status":"started"|"completed","label":"...","detail":"...","duration_ms":N}
-    {"type":"result", ...full payload...}
-    {"type":"error", "message":"..."}
-    """
     clean_q = (question or "").strip()
     if len(clean_q) < 3:
         yield _sse("error", message="Please enter a longer question.")
         return
 
-    # ── Feature flag: routed architecture ─────────────────────────────────────
-    # When ASK_USE_NEW_PIPELINE=true (default), delegate to the new orchestrator.
-    # When false, run the legacy pipeline below (semantic layer, fast lanes,
-    # intent router, subgraph engine — none of which run in the new pipeline).
     if ASK_USE_NEW_PIPELINE:
         yield from _orchestrated_pipeline_stream(clean_q, townland_hint, include_sql, force_llm)
         return
@@ -3682,7 +3409,6 @@ def answer_question_stream(
         warnings.append(str(townland_resolution["warning"]))
     warnings.extend(_question_data_coverage_warnings(clean_q))
 
-    # Phase 2 — try semantic layer (deterministic rule-based fast lane)
     _semantic_slot_fill = None
     try:
         from backend.services.semantic_layer import (
@@ -3701,15 +3427,9 @@ def answer_question_stream(
     approved_matches = _find_similar_approved_queries(clean_q, analysis, canonical_townland)
     direct_memory_match = approved_matches[0] if _can_reuse_memory_directly(clean_q, analysis, canonical_townland, approved_matches[0] if approved_matches else None) else None
 
-    # Phase 4 — hybrid semantic retrieval: dense cosine + sparse keyword → RRF.
-    # Runs over all templates + approved memory in parallel with the checks above.
-    # _p4_template: high-confidence template fast lane (may be None)
-    # _p4_memory:   approved memory rows re-ranked by embedding similarity;
-    #               used as few-shot examples for Phase 7 LLM fallback.
     _raw_memory = _load_approved_query_memory()
     _p4_template, _p4_memory = _phase4_retrieve(clean_q, canonical_townland, _raw_memory)
 
-    # ── Stage 1 — Contacting LLM / Query memory match ─────────────────────
     t0 = time.perf_counter()
     yield _sse("progress", stage="contacting_llm", status="started", label="Contacting LLM",
                detail="Checking approved query memory and preparing schema-aware SQL…")
@@ -3728,9 +3448,6 @@ def answer_question_stream(
         "approved_query_candidates": _memory_matches_for_display(approved_matches),
     }
 
-    # Phase 2 — semantic layer takes priority for analytical questions.
-    # Falls through to verified_analysis → memory → LLM if fill is absent or
-    # confidence is below threshold.
     _sl_confidence_threshold = 0.80
     if (
         _semantic_slot_fill is not None
@@ -3759,9 +3476,6 @@ def answer_question_stream(
                     ),
                     duration_ms=ms,
                 )
-                # Jump directly to SQL execution — skip all other routing branches.
-                # The variable 'sql' is set; we proceed to Stage 2 (framing query).
-                # Use a sentinel to skip the if/elif/else chain below.
                 _semantic_routed = True
             else:
                 _semantic_routed = False
@@ -3771,15 +3485,12 @@ def answer_question_stream(
     else:
         _semantic_routed = False
 
-    # Phase 5 routing state — initialized here so they are visible after the chain.
     _intent_route: str = "fallback"
     _force_subgraph: bool = False
 
     if _semantic_routed:
-        pass  # sql, llm_meta, vrti_postgres_sql all set above
+        pass
     elif _p4_template and not force_llm:
-        # Phase 4 template fast lane — high-confidence embedding match short-circuits LLM.
-        # required_keywords hard filter was already applied inside _phase4_retrieve.
         _p4_tmpl = _p4_template["template"]
         sql = str(_p4_template["sql"])
         _p4_tid = _p4_template["template_id"]
@@ -3843,10 +3554,6 @@ def answer_question_stream(
         yield _sse("progress", stage="contacting_llm", status="completed", label="Contacting LLM",
                    detail=f"Reused approved query memory (similarity {direct_memory_match.get('match_score')})", duration_ms=ms)
     else:
-        # ── Phase 5 — Intent router ───────────────────────────────────────────
-        # Classify before any LLM call so the right handler is chosen upfront.
-        # Fast-lane paths above (Phase 4, verified analysis, memory reuse, high-
-        # confidence semantic slot fill) bypass this block entirely.
         try:
             from backend.services.intent_router import (
                 classify_intent as _classify_intent_fn,
@@ -3860,7 +3567,6 @@ def answer_question_stream(
             _intent_route = "fallback"
 
         query_provenance["intent_route"] = _intent_route
-        # RELATIONAL and COMPARATIVE both require Phase 3 subgraph activation.
         _force_subgraph = _intent_route in {"relational", "comparative"}
         if _intent_route == "comparative":
             query_provenance["phase6_fusion"] = True
@@ -3872,7 +3578,6 @@ def answer_question_stream(
         try:
             _llm_slot_sql: str | None = None
 
-            # ANALYTICAL route — Phase 2: try LLM slot-fill for structured SQL.
             if _intent_route == "analytical" and _semantic_slot_fill is not None:
                 try:
                     _sf_prompt = _build_slot_fill_prompt(clean_q, analysis, townland_resolution)
@@ -3897,9 +3602,6 @@ def answer_question_stream(
                     log.debug("ask_service.llm_slot_fill_failed error=%s", _sf_exc)
 
             if not _llm_slot_sql:
-                # RELATIONAL → Phase 3 handles KG context; use Phase 7 free-form SQL.
-                # COMPARATIVE → Phase 7 SQL + Phase 3 KG, fused in Phase 6 rewrite.
-                # ANALYTICAL (slot-fill miss) / FALLBACK → Phase 7 free-form SQL.
                 _few_shot = _p4_memory if _p4_memory else approved_matches
                 sql, llm_meta = _generate_sql(
                     clean_q,
@@ -3945,7 +3647,6 @@ def answer_question_stream(
             yield _sse("progress", stage="contacting_llm", status="completed", label="Contacting LLM",
                        detail=detail, duration_ms=ms)
 
-    # ── Stage 2 — Framing Query ───────────────────────────────────────────
     t0 = time.perf_counter()
     yield _sse("progress", stage="framing_query", status="started", label="Framing Query",
                detail="Validating SQL for safety…")
@@ -3969,7 +3670,6 @@ def answer_question_stream(
     yield _sse("progress", stage="framing_query", status="completed", label="Framing Query",
                detail="Read-only query validated", duration_ms=ms)
 
-    # ── Stage 3 — Querying Database ───────────────────────────────────────
     t0 = time.perf_counter()
     yield _sse("progress", stage="querying_database", status="started", label="Querying SQLite",
                detail="Running SQL against local SQLite database…")
@@ -4000,7 +3700,6 @@ def answer_question_stream(
                detail=f"{len(rows)} row{'s' if len(rows)!=1 else ''} returned · {sql_execution_ms} ms",
                duration_ms=sql_execution_ms)
 
-    # ── Stage 4 — Querying VRTI Graph ─────────────────────────────────────
     t0 = time.perf_counter()
     yield _sse("progress", stage="querying_vrti_graph", status="started", label="Querying VRTI Graph",
                detail="Fetching townland + parish data from VRTI Knowledge Graph…")
@@ -4015,11 +3714,6 @@ def answer_question_stream(
     yield _sse("progress", stage="querying_vrti_graph", status="completed", label="Querying VRTI Graph",
                detail=vrti_detail, duration_ms=ms)
 
-    # ── Phase 3 — Subgraph retrieval (relational / multi-hop / heritage) ─────
-    # Activates when Phase 5 router classified the question as RELATIONAL or
-    # COMPARATIVE (_force_subgraph=True), or when is_subgraph_question() detects
-    # relational/heritage signals independently (existing fast-lane paths).
-    # Core Rule 1: never used to answer count/aggregate questions.
     _phase3_result = None
     try:
         from backend.services.subgraph_engine import (
@@ -4056,9 +3750,6 @@ def answer_question_stream(
     except Exception as _p3_exc:
         log.debug("ask_service.phase3_failed error=%s", _p3_exc)
 
-    # ── Phase 6 — Fusion annotation for COMPARATIVE questions ────────────────
-    # When the router flagged a COMPARATIVE intent and Phase 3 produced subgraph
-    # context, annotate kg_context so the LLM rewrite synthesises both sources.
     if _intent_route == "comparative" and _phase3_result and _phase3_result.linearized:
         if kg_context is None:
             kg_context = {}
@@ -4068,7 +3759,6 @@ def answer_question_stream(
             "relational context. Synthesise both in your answer."
         )
 
-    # ── Stage 4.5 — Querying GraphDB (RDF/KG comparison) ─────────────────
     from backend.integrations import graphdb_sparql as _gdb
     graph_comparison: dict[str, Any] = {
         "sparql_query": "",
@@ -4092,7 +3782,6 @@ def answer_question_stream(
         yield _sse("progress", stage="querying_graphdb", status="started", label="Querying GraphDB",
                    detail="Generating SPARQL query via LLM…")
 
-        # Sub-step 1: LLM generates the SPARQL
         t0 = time.perf_counter()
         sparql_text = ""
         try:
@@ -4103,7 +3792,6 @@ def answer_question_stream(
             log.warning("ask_service.graphdb_sparql_gen_failed error=%s", exc)
         graph_comparison["timing"]["sparql_gen_ms"] = int((time.perf_counter() - t0) * 1000)
 
-        # Sub-step 2: probe + execute against GraphDB
         if sparql_text:
             yield _sse("progress", stage="querying_graphdb", status="started", label="Querying GraphDB",
                        detail="Executing SPARQL against local RDF graph…")
@@ -4129,9 +3817,6 @@ def answer_question_stream(
                 log.warning("ask_service.graphdb_execute_failed error=%s", exc)
             graph_comparison["timing"]["graphdb_ms"] = int((time.perf_counter() - t0) * 1000)
 
-        # Generate mismatch explanation when GraphDB has data but results differ.
-        # Checks row-count difference AND single-row value difference (e.g. two
-        # COUNT queries returning 1 row each but with different totals).
         graph_comparison["mismatch_explanation"] = None
         _gdb_available = graph_comparison["graphdb_available"]
         _gdb_loaded    = graph_comparison["data_loaded"]
@@ -4173,11 +3858,6 @@ def answer_question_stream(
         yield _sse("progress", stage="querying_graphdb", status="completed", label="Querying GraphDB",
                    detail=gdb_detail, duration_ms=total_ms)
 
-    # ── Phase 6 — Fusion & reconciliation ────────────────────────────────────
-    # Align SQLite, GraphDB, and VRTI results on the resolved entity; detect
-    # agreement vs. discrepancy on shared metrics; annotate rows with source
-    # provenance. Directly serves the dissertation objective of comparing the
-    # purpose-built co: estate graph against VRTI's general-purpose place graph.
     t0 = time.perf_counter()
     yield _sse("progress", stage="querying_fusion", status="started",
                label="Reconciling Sources",
@@ -4208,7 +3888,6 @@ def answer_question_stream(
     yield _sse("progress", stage="querying_fusion", status="completed",
                label="Reconciling Sources", detail=_f_detail, duration_ms=ms)
 
-    # ── Stage 5 — Preparing Output ────────────────────────────────────────
     t0 = time.perf_counter()
     yield _sse("progress", stage="preparing_output", status="started", label="Preparing Output",
                detail="Building data tables, LLM rewrite, and PDF report...")
@@ -4260,7 +3939,6 @@ def answer_question_stream(
         local_columns=columns, local_rows=rows,
         vrti_columns=vrti_columns, vrti_rows=vrti_rows,
     )
-    # Inject zero-result diagnostics so LLM can explain data gaps
     if len(rows) == 0 and safe_sql:
         try:
             llm_data_context.setdefault("local_database", {})["zero_result_diagnostics"] = (
@@ -4338,7 +4016,6 @@ def answer_question_stream(
     yield _sse("progress", stage="preparing_output", status="completed", label="Preparing Output",
                detail="PDF generated", duration_ms=ms)
 
-    # ── Final result ──────────────────────────────────────────────────────
     payload: dict[str, Any] = {
         "question": clean_q,
         "answer": actual_answer,
@@ -4352,7 +4029,6 @@ def answer_question_stream(
         "vrti_query_generation": vrti_query_meta,
         "townland_context": canonical_townland,
         "townland_resolution": townland_resolution,
-        # Phase 1 — shared entity resolution (sql_id + kg_uri available to all lanes)
         "entity_resolution": townland_resolution.get("entity_resolution"),
         "kg_context": kg_context,
         "availability": availability,
@@ -4365,7 +4041,6 @@ def answer_question_stream(
         "warnings": warnings,
         "source_tables": _extract_tables(safe_sql) if safe_sql else [],
         "graph_comparison": graph_comparison,
-        # Phase 6 — fusion & reconciliation
         "discrepancies": fusion_result["discrepancies"],
         "fusion": {
             "discrepancy_count": fusion_result["discrepancy_count"],
@@ -4392,14 +4067,7 @@ def answer_question_stream(
     yield _sse("result", **payload)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LLM status / health check
-# ─────────────────────────────────────────────────────────────────────────────
-
 def check_llm_status() -> dict[str, Any]:
-    """Return the currently usable LLM provider for the Ask page.
-    Priority: Claude → Grok → OpenRouter → Ollama.
-    """
     provider = (ASK_LLM_PROVIDER or "auto").lower()
 
     if provider in {"off", "none", "disabled"}:
@@ -4438,7 +4106,6 @@ def check_llm_status() -> dict[str, Any]:
         status["configured_provider"] = provider
         return status
 
-    # Auto mode: report the highest-priority available provider
     if ANTHROPIC_API_KEY and LLM_ALLOW_PAID:
         return {
             "available": True,
@@ -4600,7 +4267,6 @@ def _friendly_openrouter_connection_issue(exc: Exception) -> tuple[str, str, str
 
 
 def check_ollama_status() -> dict[str, Any]:
-    """Return a structured status dict for the /ollama-status endpoint."""
     try:
         models = _ollama_installed_models()
         if not models:
@@ -4642,10 +4308,6 @@ def check_ollama_status() -> dict[str, Any]:
             "hint": str(exc),
         }
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CSV seed
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _ensure_unified_table_seeded() -> None:
     if not UNIFIED_CSV_PATH.exists():
@@ -4978,7 +4640,6 @@ def _question_data_coverage_warnings(question: str) -> list[str]:
     return warnings
 
 
-# Key columns that, when >60% null across result rows, indicate sparse data
 _SPARSE_FIELD_LABELS: dict[str, str] = {
     "forename":     "first name",
     "surname":      "surname",
@@ -4990,21 +4651,16 @@ _SPARSE_FIELD_LABELS: dict[str, str] = {
     "county":       "county",
     "age":          "age",
 }
-_SPARSE_MIN_ROWS = 5     # only warn when result has enough rows to be meaningful
-_SPARSE_THRESHOLD = 0.60  # 60% null → warn
+_SPARSE_MIN_ROWS = 5
+_SPARSE_THRESHOLD = 0.60
 
 
 def _null_rate_warnings(columns: list[str], rows: list[dict]) -> list[str]:
-    """
-    Return user-facing warnings for result columns that are mostly null.
-    Only fires when the result has >= _SPARSE_MIN_ROWS rows.
-    """
     if not rows or len(rows) < _SPARSE_MIN_ROWS:
         return []
     warnings: list[str] = []
     col_set = set(c.lower() for c in columns)
     for col_key, col_label in _SPARSE_FIELD_LABELS.items():
-        # Find the actual column name (case-insensitive match)
         actual = next((c for c in columns if c.lower() == col_key), None)
         if actual is None:
             continue
@@ -5032,10 +4688,6 @@ def _clean_message_result_text(text: str | None) -> str:
     clean = re.sub(r"\s*diagnostic\.?\s*$", "", clean, flags=re.IGNORECASE).strip()
     return clean
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# LLM SQL generation
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _generate_sql(
     question: str,
@@ -5110,10 +4762,6 @@ def _generate_vrti_postgres_query(question: str, townland_hint: str | None) -> t
 
 
 def _load_kg_context() -> str:
-    """
-    Load data/kg_context.yaml and format it as a compact text block for
-    inclusion in the SPARQL generation prompt.  Returns a cached string.
-    """
     if not hasattr(_load_kg_context, "_cache"):
         try:
             import yaml
@@ -5123,12 +4771,10 @@ def _load_kg_context() -> str:
 
             lines: list[str] = []
 
-            # ── Prefixes ──────────────────────────────────────────
             lines.append("PREFIXES (pre-declared — omit from queries):")
             for pfx, uri in ctx.get("prefixes", {}).items():
                 lines.append(f"  {pfx}  <{uri}>")
 
-            # ── Classes ───────────────────────────────────────────
             lines.append("\nCLASSES AND PROPERTIES (derived from live GraphDB — 143,209 triples):")
             for cls, cdata in ctx.get("classes", {}).items():
                 lines.append(f"\n{cls}  ({cdata.get('description', '')}  total={cdata.get('total', '?')})")
@@ -5150,20 +4796,17 @@ def _load_kg_context() -> str:
                     if note:
                         lines.append(f"    → {note}")
 
-            # ── OPTIONAL rules ────────────────────────────────────
             lines.append("\nOPTIONAL RULES:")
             lines.append("  NEVER OPTIONAL: co:eventType, co:estate")
             lines.append("  ALWAYS OPTIONAL: schema:familyName, schema:givenName, co:parish, co:occupation")
             lines.append("  co:townland: OPTIONAL when projecting; no OPTIONAL when used as a WHERE filter")
             lines.append("  co:year: OPTIONAL only when projecting in listing queries; omit OPTIONAL in GROUP BY / COUNT")
 
-            # ── Canonical patterns ────────────────────────────────
             lines.append("\nCANONICAL SPARQL PATTERNS (copy the closest match):")
             for name, sparql in ctx.get("patterns", {}).items():
                 lines.append(f"\n# {name}")
                 lines.append(sparql.strip())
 
-            # ── Mistakes ──────────────────────────────────────────
             lines.append("\nCOMMON MISTAKES — DO NOT REPEAT:")
             for m in ctx.get("mistakes", []):
                 lines.append(f"  ✗ {m}")
@@ -5175,9 +4818,6 @@ def _load_kg_context() -> str:
     return _load_kg_context._cache
 
 
-# Properties that exist in SQLite but NOT in the RDF graph.  If the LLM
-# hallucinates any of these as RDF predicates the generated SPARQL will
-# silently return 0 rows.
 _SPARQL_FORBIDDEN_PROPS = {
     "co:hasemigrationrecord", "co:hasevictionrecord", "co:hastenancyrecord",
     "co:has_emigration_record", "co:has_eviction_record", "co:has_tenancy_record",
@@ -5193,19 +4833,12 @@ def _sparql_uses_forbidden_props(sparql: str) -> bool:
 
 
 def _match_sparql_template(question: str, sql: str) -> str | None:
-    """
-    Try to map the question to a canonical SPARQL pattern before calling the LLM.
-    Returns a ready-to-execute SPARQL string (with any townland/year/surname
-    substitutions applied), or None if no template matches confidently.
-    """
     q = question.lower()
     s = sql.lower()
 
-    # Extract a townland name from the SQL WHERE clause (case-sensitive, from SQL)
     townland_m = re.search(r"townland\s*(?:LIKE\s*'%?|=\s*'|ILIKE\s*'%?)([^'%]+)", sql, re.I)
     townland = townland_m.group(1).strip().rstrip("%'") if townland_m else None
 
-    # Extract year filters from SQL
     year_m = re.search(r"year\s*=\s*(\d{4})", s)
     year = year_m.group(1) if year_m else None
     year_range_m = re.search(r"year\s*between\s*(\d{4})\s+and\s*(\d{4})", s)
@@ -5217,7 +4850,6 @@ def _match_sparql_template(question: str, sql: str) -> str | None:
         if yr_ge and yr_le:
             year_from, year_to = yr_ge.group(1), yr_le.group(1)
 
-    # Extract a surname from the SQL
     surname_m = re.search(r"(?:surname|family_?name)\s*(?:LIKE\s*'%?|=\s*'|ILIKE\s*'%?)([^'%]+)", sql, re.I)
     surname = surname_m.group(1).strip().rstrip("%'") if surname_m else None
 
@@ -5230,7 +4862,6 @@ def _match_sparql_template(question: str, sql: str) -> str | None:
     by_townland = any(k in q for k in ("per townland", "by townland", "each townland", "breakdown by townland"))
     by_parish = any(k in q for k in ("per parish", "by parish", "each parish"))
 
-    # ── COUNT emigration (total or from a townland) ──────────────────────
     if is_count and is_emigr and not by_year:
         if townland:
             return (
@@ -5250,7 +4881,6 @@ def _match_sparql_template(question: str, sql: str) -> str | None:
             '}'
         )
 
-    # ── COUNT evictions total ────────────────────────────────────────────
     if is_count and is_evict and not by_year:
         if townland:
             return (
@@ -5270,7 +4900,6 @@ def _match_sparql_template(question: str, sql: str) -> str | None:
             '}'
         )
 
-    # ── COUNT tenants total ──────────────────────────────────────────────
     if is_count and is_tenant and not by_year:
         return (
             'SELECT (COUNT(DISTINCT ?person) AS ?tenantCount)\n'
@@ -5280,7 +4909,6 @@ def _match_sparql_template(question: str, sql: str) -> str | None:
             '}'
         )
 
-    # ── Evictions per year ────────────────────────────────────────────────
     if is_evict and by_year:
         base = (
             'SELECT ?year (COUNT(DISTINCT ?person) AS ?evictionCount)\n'
@@ -5294,7 +4922,6 @@ def _match_sparql_template(question: str, sql: str) -> str | None:
             base += f'  FILTER(?year = {year})\n'
         return base + '}\nGROUP BY ?year ORDER BY ?year'
 
-    # ── Emigrations per year ─────────────────────────────────────────────
     if is_emigr and by_year:
         base = (
             'SELECT ?year (COUNT(DISTINCT ?person) AS ?emigrantCount)\n'
@@ -5306,7 +4933,6 @@ def _match_sparql_template(question: str, sql: str) -> str | None:
             base += f'  FILTER(?year >= {year_from} && ?year <= {year_to})\n'
         return base + '}\nGROUP BY ?year ORDER BY ?year'
 
-    # ── Emigration breakdown by townland ─────────────────────────────────
     if is_emigr and by_townland:
         return (
             'SELECT ?townland (COUNT(DISTINCT ?person) AS ?emigrants)\n'
@@ -5318,7 +4944,6 @@ def _match_sparql_template(question: str, sql: str) -> str | None:
             '}\nGROUP BY ?townland ORDER BY DESC(?emigrants) LIMIT 20'
         )
 
-    # ── Emigration breakdown by parish ───────────────────────────────────
     if is_emigr and by_parish:
         return (
             'SELECT ?parish (COUNT(DISTINCT ?person) AS ?emigrants)\n'
@@ -5330,7 +4955,6 @@ def _match_sparql_template(question: str, sql: str) -> str | None:
             '}\nGROUP BY ?parish ORDER BY DESC(?emigrants)'
         )
 
-    # ── List emigrants from a specific townland ──────────────────────────
     if is_list and is_emigr and townland:
         return (
             f'SELECT ?surname ?givenName ?year\n'
@@ -5345,7 +4969,6 @@ def _match_sparql_template(question: str, sql: str) -> str | None:
             f'}}\nORDER BY ?year ?surname LIMIT 50'
         )
 
-    # ── People by surname ────────────────────────────────────────────────
     if surname:
         return (
             f'SELECT ?givenName ?townland ?eventType ?year\n'
@@ -5360,19 +4983,10 @@ def _match_sparql_template(question: str, sql: str) -> str | None:
             f'}}\nORDER BY ?year LIMIT 50'
         )
 
-    return None  # no template matched
+    return None
 
 
 def _generate_graphdb_sparql(question: str, sql: str) -> tuple[str, dict[str, Any]]:
-    """
-    Translate the question + SQL into a SPARQL SELECT for the Coolattin GraphDB.
-
-    Steps:
-    1. Rule-based template matching (fast, deterministic, always-correct).
-    2. LLM generation with full kg_context.yaml schema context.
-    3. Post-validation: reject any query that uses SQLite column names as RDF
-       predicates, fall back to the listing template if validation fails.
-    """
     fallback = (
         "SELECT ?surname ?givenName ?townland ?eventType ?year\n"
         "WHERE {\n"
@@ -5386,13 +5000,11 @@ def _generate_graphdb_sparql(question: str, sql: str) -> tuple[str, dict[str, An
         "}\nORDER BY ?surname\nLIMIT 50"
     )
 
-    # ── Step 1: Template matching ────────────────────────────────────────
     template = _match_sparql_template(question, sql)
     if template:
         log.debug("ask_service.graphdb_sparql_template_matched | q=%s", question[:60])
         return template, {"provider": "rule_template", "model": "local_rule", "mode": "template_match"}
 
-    # ── Step 2: LLM generation ───────────────────────────────────────────
     kg_context_block = _load_kg_context()
 
     prompt = f"""You are writing a SPARQL 1.1 SELECT query for the Coolattin estate RDF knowledge graph stored in GraphDB.
@@ -5453,16 +5065,12 @@ SPARQL:""".strip()
     try:
         text, meta = _llm_generate(prompt, purpose="graphdb_sparql", max_tokens=500, temperature=0.0)
         text = text.strip()
-        # Strip markdown code fences
         if text.startswith("```"):
             lines_out = text.split("\n")
-            # Remove first line (``` or ```sparql) and any trailing ```
             text = "\n".join(lines_out[1:] if len(lines_out) > 1 else lines_out)
         text = text.rstrip("`").strip()
-        # Strip leading PREFIX lines (model sometimes adds them despite instructions)
         text_lines = text.splitlines()
         text_lines = [ln for ln in text_lines if not ln.lstrip().lower().startswith("prefix ")]
-        # Strip leading comment lines
         text_lines = [ln for ln in text_lines if not ln.lstrip().startswith("#")]
         text = "\n".join(text_lines).strip()
 
@@ -5470,10 +5078,8 @@ SPARQL:""".strip()
             log.warning("ask_service.graphdb_sparql_invalid | generated=%s", text[:120])
             return fallback, {**meta, "mode": "llm_invalid_fallback"}
 
-        # ── Step 3: Post-validation ──────────────────────────────────────
         if _sparql_uses_forbidden_props(text):
             log.warning("ask_service.graphdb_sparql_forbidden_prop | generated=%s", text[:200])
-            # Try template matching one more time with a looser check
             template_retry = _match_sparql_template(question, sql)
             if template_retry:
                 return template_retry, {**meta, "mode": "llm_forbidden_fallback_template"}
@@ -5487,7 +5093,6 @@ SPARQL:""".strip()
 
 
 def _first_numeric(row: dict) -> float | None:
-    """Return the first numeric value found in a result row, or None."""
     for v in row.values():
         if v is None:
             continue
@@ -5505,16 +5110,9 @@ def _explain_result_mismatch(
     sql_rows: list,
     sparql_rows: list,
 ) -> str | None:
-    """
-    Ask the LLM to explain why SQLite and GraphDB results differ.
-    Handles both row-count differences and single-row value differences
-    (the common case where both systems return one COUNT row but with
-    different totals).
-    """
     sql_count = len(sql_rows)
     sparql_count = len(sparql_rows)
 
-    # Detect value mismatch for single-row aggregate results
     sql_val = _first_numeric(sql_rows[0]) if sql_count == 1 else None
     gdb_val = _first_numeric(sparql_rows[0]) if sparql_count == 1 else None
     value_mismatch = (
@@ -5565,12 +5163,7 @@ Be direct and factual. If the SPARQL query uses a property that looks like a SQL
         return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Phase 6 — Fusion & reconciliation helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _infer_metric_name(columns: list, row: dict) -> str | None:
-    """Return a human-readable metric name from the first numeric column."""
     for col in columns:
         val = row.get(col)
         if val is None:
@@ -5594,7 +5187,6 @@ def _infer_discrepancy_cause(delta: float, sqlite_val: float, gdb_val: float) ->
 
 
 def _build_fusion_text(discrepancies: list[dict[str, Any]]) -> str:
-    """Build a citation-ready sentence for each detected discrepancy."""
     parts = []
     for d in discrepancies:
         s_val = d["sqlite_value"]
@@ -5625,11 +5217,6 @@ def _fuse_lanes(
     entity_resolution: dict | None,
     question: str,
 ) -> dict[str, Any]:
-    """
-    Phase 6: align results from all lanes on the resolved entity, detect
-    agreement vs. discrepancy on shared metrics, and annotate rows with
-    per-source provenance.
-    """
     entity_label = (
         (entity_resolution or {}).get("sql_id") or canonical_townland or "unknown entity"
     )
@@ -5644,7 +5231,6 @@ def _fuse_lanes(
     vrti_provenance = [{"source": "vrti", "entity": entity_label, "kg_uri": kg_uri}
                        for _ in vrti_rows]
 
-    # Aggregate comparison: both sources returned exactly one numeric row
     sqlite_val = _first_numeric(sqlite_rows[0]) if len(sqlite_rows) == 1 else None
     gdb_val = _first_numeric(graphdb_rows[0]) if len(graphdb_rows) == 1 else None
 
@@ -5666,7 +5252,6 @@ def _fuse_lanes(
                 "likely_cause": _infer_discrepancy_cause(delta, sqlite_val, gdb_val),
             })
     elif len(sqlite_rows) > 1 and len(graphdb_rows) > 1:
-        # List comparison: compare row counts
         s_count = len(sqlite_rows)
         g_count = len(graphdb_rows)
         if s_count == g_count:
@@ -5735,7 +5320,6 @@ Must start with SELECT or WITH.
 
 ═══ MULTI-TABLE JOIN RULES ═══
 Use the correct table for each data type — many questions require joins across multiple tables:
-
   PEOPLE / EVENTS (unified_record):
     - Emigrants  : has_emigration_record = 1
     - Evicted    : has_eviction_record   = 1
@@ -5929,13 +5513,7 @@ def _llm_generate_claude(
     max_tokens: int = 512,
     temperature: float = 0.1,
 ) -> tuple[str, dict[str, Any]]:
-    """
-    Part D — Call Claude (Anthropic) directly via HTTP.
-    Falls back to _llm_generate (OpenRouter/Ollama) when ANTHROPIC_API_KEY is unset.
-    Never raises — returns ("", meta) on error.
-    """
     if not ANTHROPIC_API_KEY or not LLM_ALLOW_PAID:
-        # Graceful fallback: pack system + user into a single prompt
         combined = f"{system_prompt}\n\n{user_content}"
         try:
             text, meta = _llm_generate(combined, purpose="synthesis", max_tokens=max_tokens, temperature=temperature)
@@ -5976,8 +5554,6 @@ def _llm_generate_claude(
         log.warning("ask_service.claude_generate_failed error=%s", exc)
         combined = f"{system_prompt}\n\n{user_content}"
         try:
-            # skip_providers={"claude"} prevents infinite recursion: _llm_generate would
-            # otherwise try Claude first (since it's #1 in the order) and call us again.
             text, meta = _llm_generate(
                 combined, purpose="synthesis", max_tokens=max_tokens,
                 temperature=temperature, skip_providers=frozenset({"claude"}),
@@ -5993,11 +5569,6 @@ def _llm_generate_grok(
     max_tokens: int = 512,
     temperature: float = 0.1,
 ) -> tuple[str, dict[str, Any]]:
-    """
-    Part D — Call Grok (xAI) via the OpenAI-compatible API.
-    Used when ASK_SYNTHESIS_MODEL=grok for comparative evaluation.
-    Returns ("", meta) on error so _llm_generate's cascade can continue.
-    """
     if not GROK_API_KEY or not LLM_ALLOW_PAID:
         return "", {"provider": "grok", "error": "GROK_API_KEY not configured or LLM_ALLOW_PAID=false"}
     _grok_models = [GROK_MODEL, "grok-3-mini-fast", "grok-beta"]
@@ -6030,8 +5601,7 @@ def _llm_generate_grok(
         except Exception as exc:
             log.warning("ask_service.grok_generate_failed model=%s error=%s", _gmodel, exc)
             if "403" not in str(exc) and "401" not in str(exc):
-                break  # non-auth errors won't be fixed by trying another model
-    # skip_providers={"grok"} prevents infinite recursion if caller is _llm_generate
+                break
     try:
         return _llm_generate(
             prompt, purpose="synthesis", max_tokens=max_tokens,
@@ -6041,25 +5611,11 @@ def _llm_generate_grok(
         return "", {"provider": "grok", "error": str(exc2)}
 
 
-# ── Numeric-consistency helpers ──────────────────────────────────────────────
-
 def _synthesis_allowed_numbers(
     sql_result: dict[str, Any],
     graph_context: str,
     question: str = "",
 ) -> set[str]:
-    """
-    Build the set of numeric tokens that synthesis prose is permitted to use.
-    Derived from the SQL result rows, graph context, and the question itself.
-    Digit-subsequences are included so "6,016" permits "over 6,000".
-
-    The question's own numeric tokens (e.g. a year like 1841) are included so
-    that historically contextual years mentioned in the question are never
-    flagged as unsupported hallucinations — they are part of the user's input,
-    not an LLM fabrication.
-    """
-    # Include rows AND metadata (row_count, actual_answer, etc.) so totals
-    # like "150 emigrants" aren't flagged when they come from row_count not rows.
     rows_str = json.dumps(sql_result.get("rows", [])[:20], ensure_ascii=False, default=str)
     meta_str = " ".join(str(v) for k, v in sql_result.items()
                         if k not in ("rows", "sql_used", "columns", "zero_result_diagnostics",
@@ -6079,12 +5635,6 @@ def _synthesis_allowed_numbers(
 
 
 def _synthesis_allowed_numbers_from_input(user_content: str, question: str = "") -> set[str]:
-    """
-    Build the allowed-number set from the full JSON input sent to the LLM.
-    This covers rows, row_count, zero_result_diagnostics, townland_summary,
-    discrepancies, graph_context, and anything else the model had access to.
-    The question is included to permit contextual years (e.g. 1841) from the query.
-    """
     base = _extract_numeric_tokens(user_content + " " + (question or ""))
     expanded: set[str] = set(base)
     for tok in base:
@@ -6101,14 +5651,6 @@ def _cross_verify_synthesis(
     synthesis_text: str,
     sql_result: dict[str, Any],
 ) -> dict[str, Any]:
-    """
-    Independent verifier — confirms every factual claim in synthesis_text is
-    supported by sql_result rows.  Uses Grok when available (and LLM_ALLOW_PAID),
-    else falls back to OpenRouter/Ollama free models.
-
-    Returns {verdict: "agree"|"disagree"|"skip", unsupported_claims: [...],
-             model, provider, agreement_rate: 0..1}
-    """
     if not synthesis_text or not sql_result.get("rows"):
         return {"verdict": "skip", "unsupported_claims": [], "model": None,
                 "provider": None, "agreement_rate": None, "reason": "no_content"}
@@ -6158,7 +5700,6 @@ def _cross_verify_synthesis(
                 "provider": None, "agreement_rate": None, "reason": str(exc)}
 
 
-# Part F — System prompt for answer synthesis
 _SYNTHESIS_SYSTEM_PROMPT = """You are the answer-writer for an Irish estate-records research assistant. You receive
 structured retrieval results and write the final, detailed plain-English answer a historian
 or genealogist reads. Your job is to give them the full picture — record, place, community,
@@ -6241,19 +5782,6 @@ def _claude_synthesize_answer(
     provenance: dict[str, Any],
     townland_context: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """
-    Part F — Produce the final answer with an embedded numeric-consistency gate.
-
-    Gate behaviour:
-      1. Generate answer with the standard system prompt.
-      2. Extract every number from the answer and compare against the allowlist
-         built from sql_result rows + graph_context.
-      3. If a violation is found, regenerate once with a stricter prompt addendum.
-      4. If the second attempt still violates, return ("", meta | gate_outcome="fallback")
-         so the caller falls back to the deterministic raw answer.
-      meta["gate_outcome"]: "pass" | "regenerated" | "fallback" | "not_applied"
-    """
-    # Compact townland context — strip sample_people to keep the payload lean
     _tc: dict[str, Any] | None = None
     if townland_context and townland_context.get("found"):
         _tc = {
@@ -6274,12 +5802,8 @@ def _claude_synthesize_answer(
         "provenance": provenance,
     }
     user_content = json.dumps(user_block, ensure_ascii=False, default=str)
-    # Build allowed numbers from the FULL input sent to the LLM — this covers
-    # rows, row_count, zero_result_diagnostics, townland_summary, discrepancies,
-    # graph_context, and any computed values the LLM legitimately has access to.
     allowed_numbers = _synthesis_allowed_numbers_from_input(user_content, question)
 
-    # Determine which provider is primary for synthesis
     _synthesis_provider = (ASK_SYNTHESIS_MODEL or "auto").lower()
     if _synthesis_provider not in {"claude", "grok", "openrouter", "ollama"}:
         _synthesis_provider = "claude"
@@ -6295,7 +5819,6 @@ def _claude_synthesize_answer(
             )
             if text:
                 return text, meta
-            # Claude returned empty (rate-limited or error) — cascade without re-trying claude
             return _llm_generate(
                 combined, purpose="synthesis", max_tokens=1000, temperature=0.1,
                 skip_providers=frozenset({"claude"}),
@@ -6316,16 +5839,9 @@ def _claude_synthesize_answer(
     def _gate_violations(text: str) -> list[str]:
         if not text:
             return []
-        # Strip markdown ordered-list markers ("1. " at line start).
         stripped = re.sub(r"(?m)^\s*\d+\.\s+", " ", text)
-        # Strip ordinal suffixes (19th, 1st, 2nd, 3rd, 4th …) so "19th century"
-        # doesn't generate a phantom "19" violation.
         stripped = re.sub(r"\b(\d+)(st|nd|rd|th)\b", " ", stripped, flags=re.IGNORECASE)
         generated = _extract_numeric_tokens(stripped)
-        # Only gate on numbers ≥ 3 digits — these are specific factual claims
-        # (counts, years, record IDs).  1–2 digit numbers are too ambiguous:
-        # they arise from percentages the LLM computes from the data, common
-        # contextual references ("about 20 years"), and ordinal fragments.
         return sorted(n for n in generated if n not in allowed_numbers and len(n) >= 3)
 
     try:
@@ -6340,7 +5856,6 @@ def _claude_synthesize_answer(
 
     log.info("ask_service.numeric_gate_violation unsupported=%s", violations[:5])
 
-    # Retry once with a stricter addendum
     _allowed_sample = ", ".join(sorted(allowed_numbers)[:30])
     strict_suffix = (
         "\n\nCRITICAL CONSTRAINT: The ONLY numbers you may state in your answer are those "
@@ -6360,8 +5875,6 @@ def _claude_synthesize_answer(
     if not violations2:
         return text2, {**meta2, "gate_outcome": "regenerated", "gate_violations_first": violations}
 
-    # Both attempts with primary provider failed the gate.
-    # Try remaining providers in the chain before giving up.
     log.warning("ask_service.numeric_gate_fallback violations=%s — trying backup providers", violations2[:5])
     _remaining_providers = [p for p in _llm_provider_order() if p != _synthesis_provider]
     for _backup in _remaining_providers:
@@ -6442,12 +5955,6 @@ def _llm_generate(
     temperature: float = 0.0,
     skip_providers: frozenset[str] = frozenset(),
 ) -> tuple[str, dict[str, Any]]:
-    """
-    Generate text using Claude → Grok → OpenRouter → Ollama priority order.
-    Rate-limited per provider; degrades gracefully when keys are missing or limits hit.
-    skip_providers: providers already attempted by the caller — avoids infinite recursion
-    when _llm_generate_claude/grok fall back here after their own failure.
-    """
     last_exc: Exception | None = None
     for provider in _llm_provider_order():
         if provider in skip_providers:
@@ -6505,18 +6012,12 @@ def _llm_generate(
 
 
 def _llm_provider_order() -> list[str]:
-    """Return provider list in priority order: Claude → Grok → OpenRouter → Ollama.
-
-    Always builds the full fallback cascade from available API keys.
-    ASK_LLM_PROVIDER controls which provider goes FIRST, not which is the only one tried.
-    """
     provider = (ASK_LLM_PROVIDER or "auto").lower()
     if provider in {"off", "none", "disabled"}:
         return []
     if provider not in {"auto", "claude", "grok", "openrouter", "ollama"}:
         log.warning("ask_service.unknown_llm_provider provider=%s", provider)
 
-    # Build full cascade from available keys — all providers are tried in order
     order: list[str] = []
     if ANTHROPIC_API_KEY and LLM_ALLOW_PAID:
         order.append("claude")
@@ -6526,7 +6027,6 @@ def _llm_provider_order() -> list[str]:
         order.append("openrouter")
     order.append("ollama")
 
-    # Honour preference: move the named provider to front without removing others
     if provider in {"claude", "grok", "openrouter", "ollama"} and provider in order:
         order = [provider] + [p for p in order if p != provider]
 
@@ -6598,7 +6098,6 @@ def _openrouter_generate(
                 }
             except RuntimeError as exc:
                 last_exc = exc
-                # Auth/quota errors are shared across models; do not burn retries.
                 if "OpenRouter rate limit" in str(exc) or "API key" in str(exc) or "credits" in str(exc):
                     raise
                 log.warning(
@@ -6817,7 +6316,6 @@ def _strip_sql_formatting(sql_text: str) -> str:
     out = re.sub(r"^```(?:sql)?\s*", "", out, flags=re.IGNORECASE)
     out = re.sub(r"\s*```\s*$", "", out)
     out = re.sub(r"^SQL\s*[:\-]?\s*", "", out, flags=re.IGNORECASE)
-    # Drop any trailing prose lines
     lines = []
     for line in out.splitlines():
         s = line.strip()
@@ -6829,17 +6327,10 @@ def _strip_sql_formatting(sql_text: str) -> str:
     return "\n".join(lines).strip() if lines else out.strip()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Fallback SQL templates
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _fallback_sql(question: str, townland_hint: str | None) -> str:
     q    = (question or "").lower()
     hint = _norm_townland(townland_hint) or ""
 
-    # Route richer questions to the heuristic builder first.
-    # This prevents narrow static templates from ignoring useful intent
-    # like "by year", "list", "around 20km", etc.
     advanced_markers = [
         " by ", "per ", "group", "list", "show", "who", "which",
         "around", "nearby", "radius", "within", "20km", "20 km",
@@ -6892,10 +6383,6 @@ def _fallback_vrti_postgres_sql(question: str, townland_hint: str | None) -> str
 
 
 def _dynamic_fallback_sql(question: str, townland_hint: str | None) -> str:
-    """
-    Heuristic SQL constructor for fallback mode.
-    Builds a relevant query from intent signals in the question.
-    """
     analysis = _analyse_question(question, townland_hint)
     q = (question or "").lower()
     hint = analysis.get("townland_norm") or ""
@@ -6917,7 +6404,6 @@ def _dynamic_fallback_sql(question: str, townland_hint: str | None) -> str:
     if same_parish_sql:
         return same_parish_sql
 
-    # Non-person geography intent: parish-focused questions.
     if asks_parish and asks_people and hint:
         where_parts = [f"townland_norm='{_sql_escape(hint)}'"]
         if year:
@@ -7217,7 +6703,6 @@ SELECT SUM(eviction_count) AS total_evictions
 FROM clearances_record
 """.strip()
 
-    # Primary record type signal.
     metric_alias = "matching_people"
     where_clauses: list[str] = []
     if asks_emigration:
@@ -7235,7 +6720,6 @@ FROM clearances_record
     if analysis.get("surname"):
         where_clauses.append(f"UPPER(surname)='{_sql_escape(str(analysis['surname']))}'")
 
-    # For radius intents we should filter by nearby set, not the center townland only.
     if hint and mentions_local_townland and not wants_radius:
         where_clauses.append(f"townland_norm='{_sql_escape(hint)}'")
 
@@ -7350,9 +6834,6 @@ FROM unified_record
 
 
 def _dynamic_fallback_vrti_postgres_sql(question: str, townland_hint: str | None) -> str:
-    """
-    Heuristic PostgreSQL query constructor for VRTI relational/warehouse context.
-    """
     analysis = _analyse_question(question, townland_hint)
     q = (question or "").lower()
     hint = analysis.get("townland_norm") or ""
@@ -7468,10 +6949,6 @@ ORDER BY t.name
 LIMIT 150
 """.strip()
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SQL safety + execution
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _sanitize_and_validate_sql(sql: str) -> str:
     if not sql:
@@ -7629,7 +7106,6 @@ def _requires_verified_fallback(question: str, sql: str) -> bool:
         return True
     if "parish" in q and ("how many" in q or "count" in q) and "people" not in q and "civil_parish" not in s:
         return True
-    # Age-filtered people queries must target unified_record with an age condition
     _is_age_query = bool(re.search(r'\bage\s*\d|\d+\s*(?:years?|yrs?)?\s*(?:old|of age)|above age|below age|older than|younger than', q))
     _asks_people = any(x in q for x in ["people", "person", "how many", "count", "who"])
     if _is_age_query and _asks_people and ("unified_record" not in s or "age" not in s):
@@ -7651,10 +7127,6 @@ def _single_scalar(columns: list[str], rows: list[dict]) -> float | None:
     except (TypeError, ValueError):
         return None
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# VRTI Knowledge Graph enrichment
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _vrti_temporarily_unavailable() -> bool:
     with _vrti_cache_lock:
@@ -7761,7 +7233,6 @@ def _kg_context(question: str, townland_hint: str | None, force: bool = False) -
     finally:
         conn.close()
 
-    # De-dup
     seen: set[str] = set()
     unique_names: list[str] = []
     for n in names:
@@ -7770,7 +7241,6 @@ def _kg_context(question: str, townland_hint: str | None, force: bool = False) -
         seen.add(n)
         unique_names.append(n)
 
-    # Parallel VRTI lookups
     vrti_lookup_failed = False
     if unique_names and not _vrti_temporarily_unavailable():
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(unique_names))) as pool:
@@ -7832,10 +7302,6 @@ def _kg_context_to_table(kg_context: dict | None) -> tuple[list[str], list[dict]
     rows = [{c: t.get(c) for c in cols} for t in kg_context.get("townlands", [])]
     return cols, rows
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Output builders
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _friendly_metric_name(metric: str) -> str:
     raw = (metric or "").strip().lower()
@@ -7933,8 +7399,6 @@ def _normalise_number_token(token: str) -> str:
 
 
 def _extract_numeric_tokens(text: str) -> set[str]:
-    # Collapse thousands-separator commas ("6,016" → "6016") before tokenising,
-    # so the LLM formatting numbers with commas doesn't trip the allowlist check.
     cleaned = re.sub(r'(?<=\d),(?=\d{3}(?:[^\d]|$))', '', text or "")
     return {
         _normalise_number_token(match)
@@ -7957,9 +7421,6 @@ def _allowed_rewrite_number_tokens(
         "townland_context": (kg_context or {}).get("townlands", []),
     }
     base = _extract_numeric_tokens(json.dumps(payload, ensure_ascii=False, default=str))
-    # Also allow numeric digit-subsequences of every allowed token (e.g. "6016"
-    # permits "6", "60", "601", "6016", "16", etc.) so the LLM can naturally
-    # rephrase "6,016 people" as "over 6,000" without tripping the check.
     expanded: set[str] = set(base)
     for tok in base:
         if tok.lstrip("-").isdigit() and len(tok) > 1:
@@ -7978,7 +7439,6 @@ def _assert_rewrite_numbers_supported(
     supporting_context: dict[str, Any],
     kg_context: dict | None,
 ) -> None:
-    # Strip ordinals and list markers before checking to avoid false positives.
     cleaned = re.sub(r"\b(\d+)(st|nd|rd|th)\b", " ", rewrite_text or "", flags=re.IGNORECASE)
     cleaned = re.sub(r"(?m)^\s*\d+\.\s+", " ", cleaned)
     generated_numbers = _extract_numeric_tokens(cleaned)
@@ -7991,8 +7451,6 @@ def _assert_rewrite_numbers_supported(
         supporting_context=supporting_context,
         kg_context=kg_context,
     )
-    # Only flag 3+ digit numbers — 1–2 digit numbers are too ambiguous
-    # (percentages, ordinal fragments, common contextual references).
     unsupported = sorted(n for n in generated_numbers if n not in allowed_numbers and len(n) >= 3)
     if unsupported:
         raise RuntimeError(
@@ -8010,7 +7468,6 @@ def _chart_is_relevant(
     row_count: int,
     analysis: dict[str, Any] | None,
 ) -> bool:
-    """Return True only when a chart would actually add value to the result."""
     if chart_hint:
         return True
     if label_col == "year":
@@ -8103,13 +7560,11 @@ def _is_list_column(col: str) -> bool:
 
 
 def _summarise_cell(col: str, val: Any, max_chars: int = 60) -> str:
-    """Return a display-safe cell value: list-like long strings become item counts."""
     if val is None:
         return "—"
     s = str(val)
     if len(s) <= max_chars:
         return s
-    # Looks like a comma-separated list — count items
     parts = [p.strip() for p in s.split(",") if p.strip()]
     if len(parts) > 3:
         return f"{len(parts)} names (see table)"
@@ -8139,7 +7594,6 @@ def _detail_answer(columns: list[str], row: dict, townland_hint: str | None) -> 
         if row.get("year"):
             pieces.append(f"year {row.get('year')}")
         return "Matching person record: " + ", ".join(str(p) for p in pieces if p) + "."
-    # Prefer short numeric/count columns; skip long list dumps
     preferred = [c for c in columns if not _is_list_column(c)][:5] or columns[:5]
     shown = [f"{c.replace('_', ' ')}={_summarise_cell(c, row.get(c))}" for c in preferred]
     context = f" for {display_townland}" if display_townland else ""
@@ -8535,10 +7989,6 @@ def _build_llm_data_context(
     vrti_rows: list[dict],
     sample_limit: int = 25,
 ) -> dict[str, Any]:
-    """
-    Compact, explicit data view for LLM rewriting only.
-    The full rows are still returned separately in processed_tables.
-    """
     def _truncate_row(row: dict, max_val_len: int = 300) -> dict:
         out = {}
         for k, v in row.items():
@@ -8573,11 +8023,6 @@ def _build_supporting_context(
     kg_context: dict | None,
     related_insights: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    """
-    Extra bounded context for broad questions and answer rewriting.
-    This is intentionally summarized/sampled so we do not send the whole DB
-    to the LLM, while still giving it enough verified local data to work from.
-    """
     context: dict[str, Any] = {
         "database_profile": _database_profile_context(),
         "townland_resolution": townland_resolution,
@@ -8917,11 +8362,6 @@ def _supporting_context_for_display(context: dict[str, Any]) -> list[dict[str, s
 
 
 def _build_zero_result_diagnostics(sql: str) -> dict[str, Any]:
-    """
-    When a query returns 0 rows, run diagnostic queries to explain why.
-    Returns a dict with null rates, total counts, and a suggested broader query.
-    Called only when row_count == 0 so the LLM can explain the gap.
-    """
     diag: dict[str, Any] = {"triggered": True}
     sql_upper = (sql or "").upper()
     try:
@@ -8930,7 +8370,6 @@ def _build_zero_result_diagnostics(sql: str) -> dict[str, Any]:
             total_ur = conn.execute("SELECT COUNT(DISTINCT record_id) FROM unified_record").fetchone()[0]
             diag["unified_record_total_people"] = total_ur
 
-            # Detect which event type was filtered (emigration / eviction / tenancy)
             if "HAS_EMIGRATION_RECORD" in sql_upper:
                 emi_cnt = conn.execute(
                     "SELECT COUNT(DISTINCT record_id) FROM unified_record WHERE has_emigration_record=1"
@@ -8942,7 +8381,6 @@ def _build_zero_result_diagnostics(sql: str) -> dict[str, Any]:
                 ).fetchone()[0]
                 diag["eviction_total"] = evi_cnt
 
-            # Null rate for each commonly-filtered column
             for col, label in [
                 ("gender",      "gender_null_rate"),
                 ("age",         "age_null_rate"),
@@ -8965,7 +8403,6 @@ def _build_zero_result_diagnostics(sql: str) -> dict[str, Any]:
                     except Exception:
                         pass
 
-            # For year filters: what years actually exist?
             if "YEAR" in sql_upper:
                 try:
                     yr_rows = conn.execute(
@@ -8975,7 +8412,6 @@ def _build_zero_result_diagnostics(sql: str) -> dict[str, Any]:
                 except Exception:
                     pass
 
-            # For gender='F': how many female records actually exist?
             if "GENDER" in sql_upper and ("= 'F'" in sql or "= 'M'" in sql):
                 try:
                     gender_breakdown = conn.execute(
@@ -8986,7 +8422,6 @@ def _build_zero_result_diagnostics(sql: str) -> dict[str, Any]:
                 except Exception:
                     pass
 
-            # For townland filter: does the townland exist at all?
             import re as _re
             tl_match = _re.search(r"TOWNLAND_NORM\s*=\s*'([^']+)'", sql_upper)
             if tl_match:
@@ -8997,7 +8432,6 @@ def _build_zero_result_diagnostics(sql: str) -> dict[str, Any]:
                 ).fetchone()[0]
                 diag["townland_total_records"] = {"townland": tl_val, "count": exists}
 
-            # Broader count: same event flag but no other filters
             if "HAS_EMIGRATION_RECORD = 1" in sql_upper:
                 diag["broader_hint"] = "Try removing age/gender/year filters to see all emigrants."
             elif "HAS_EVICTION_RECORD = 1" in sql_upper:
@@ -9056,15 +8490,11 @@ def _build_rephrase_prompt(
     supporting_context: dict[str, Any],
     kg_context: dict | None,
 ) -> str:
-    # Pass only the key facts — a large JSON dump leads to over-long answers.
     townland_names = [t.get("name") for t in (kg_context or {}).get("townlands", [])[:3] if t.get("name")]
     key_stats = summary_block.get("stats", {})
     fuzzy_note = (supporting_context or {}).get("fuzzy_match_note", "")
-    # Phase 3 subgraph context injected into kg_context by the SSE pipeline
     subgraph_linearized = (kg_context or {}).get("subgraph_linearized", "")
 
-    # Compact townland context from the deep-context lookup so the LLM can mention
-    # population trends, eviction counts, and record coverage in its write-up.
     townland_detail = (supporting_context or {}).get("townland_detail") or {}
     townland_ctx: dict[str, Any] = {}
     if townland_detail.get("found"):
@@ -9093,7 +8523,6 @@ def _build_rephrase_prompt(
         " State the total count and give 1–2 representative examples at most."
         if row_count > 10 else ""
     )
-    # Subgraph context block — present only for relational / hierarchy questions
     kg_block = (
         f"\n\nKNOWLEDGE GRAPH CONTEXT (administrative hierarchy and place "
         f"relationships retrieved by subgraph traversal — use for qualitative "
@@ -9106,8 +8535,6 @@ def _build_rephrase_prompt(
         " hierarchy questions. Never use it to produce counts or numbers."
         if subgraph_linearized else ""
     )
-    # Phase 6 fusion: cite detected discrepancies explicitly; for COMPARATIVE
-    # questions without numeric discrepancies, note that both sources contributed.
     fusion_note = (kg_context or {}).get("phase6_fusion_note", "")
     fusion_text = (kg_context or {}).get("phase6_fusion_text", "")
     discrepancy_rule = (
@@ -9121,7 +8548,6 @@ def _build_rephrase_prompt(
     )
     source_rules = fusion_rule + discrepancy_rule
 
-    # Zero-result explainability block
     zero_diag = data_context.get("local_database", {}).get("zero_result_diagnostics") or {}
     zero_result_rule = ""
     if row_count == 0:
@@ -9160,23 +8586,17 @@ Answer (2–4 sentences):""".strip()
 
 
 def _strip_answer_formatting(text: str) -> str:
-    """Remove LLM artefacts but preserve markdown so the frontend can render it."""
     out = (text or "").strip()
-    # Code fence wrappers
     out = re.sub(r"^```(?:text|markdown)?\s*", "", out, flags=re.IGNORECASE)
     out = re.sub(r"\s*```\s*$", "", out)
     out = re.sub(r"^(Rephrased answer|Answer)\s*:\s*", "", out, flags=re.IGNORECASE)
-    # Markdown tables (we display the actual data table separately)
     out = re.sub(r"(?m)^[ \t]*\|.+\|[ \t]*$", "", out)
-    # Section labels the LLM likes to add
     out = re.sub(r"(?mi)^(Filters applied|Caveats?|Next steps?)\s*:?\s*$", "", out)
-    # Collapse runs of blank lines
     out = re.sub(r"\n{3,}", "\n\n", out)
     return out.strip()
 
 
 def _strip_markdown_for_pdf(text: str) -> str:
-    """Strip all markdown formatting for plain-text PDF output."""
     out = (text or "").strip()
     out = re.sub(r"(?m)^#{1,6}\s+", "", out)
     out = re.sub(r"(?m)^[ \t]*[-*]\s+", "", out)
@@ -9187,10 +8607,6 @@ def _strip_markdown_for_pdf(text: str) -> str:
     return out.strip()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PDF export
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _write_pdf_report(question, answer, sql, columns, rows, llm_meta, kg_context,
                       include_sql=False, vrti_postgres_sql=None, vrti_columns=None,
                       vrti_rows=None, summary_block=None,
@@ -9200,16 +8616,6 @@ def _write_pdf_report(question, answer, sql, columns, rows, llm_meta, kg_context
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     path = out_dir / f"ask_report_{ts}.pdf"
 
-    # ── Build a structured section list ──────────────────────────────────────
-    # Each item is ("type", content) where type controls rendering:
-    #   "header"   – large title block (page 1 only)
-    #   "section"  – coloured section heading
-    #   "para"     – a wrapped paragraph of body text
-    #   "kv"       – key: value line (bold key)
-    #   "blank"    – empty line spacer
-    #   "rule"     – thin horizontal rule
-    #   "table"    – (columns, rows) data table
-    #   "code"     – monospace code block lines
     sections: list[tuple[str, Any]] = []
 
     generated_str = datetime.now(timezone.utc).strftime("%d %B %Y, %H:%M UTC")
@@ -9219,12 +8625,10 @@ def _write_pdf_report(question, answer, sql, columns, rows, llm_meta, kg_context
         "date": generated_str,
     }))
 
-    # ── Question ─────────────────────────────────────────────────────────────
     sections.append(("section", "Research Question"))
     sections.append(("para", question or "—"))
     sections.append(("blank", None))
 
-    # ── LLM Summary ──────────────────────────────────────────────────────────
     if llm_rephrased_answer:
         sections.append(("section", "Summary Answer"))
         for line in _wrap_line(_strip_markdown_for_pdf(str(llm_rephrased_answer)), width=95):
@@ -9235,10 +8639,8 @@ def _write_pdf_report(question, answer, sql, columns, rows, llm_meta, kg_context
         sections.append(("para", str(answer)))
         sections.append(("blank", None))
 
-    # ── Database Results ──────────────────────────────────────────────────────
     if rows and columns:
         sections.append(("section", f"Database Results  ({len(rows)} row{'s' if len(rows) != 1 else ''})"))
-        # Limit to first 80 rows and 8 columns to keep the report readable
         display_cols = columns[:8]
         display_rows = rows[:80]
         sections.append(("table", (display_cols, display_rows)))
@@ -9246,7 +8648,6 @@ def _write_pdf_report(question, answer, sql, columns, rows, llm_meta, kg_context
             sections.append(("para", f"Note: {len(rows) - 80} additional rows not shown in this report."))
         sections.append(("blank", None))
 
-    # ── Query Traceability ────────────────────────────────────────────────────
     sections.append(("section", "Query Traceability"))
     provider = llm_meta.get("provider", "—") if llm_meta else "—"
     model    = llm_meta.get("model",    "—") if llm_meta else "—"
@@ -9258,13 +8659,11 @@ def _write_pdf_report(question, answer, sql, columns, rows, llm_meta, kg_context
         sections.append(("kv", ("Summary provider", f"{rp} / {rm}")))
     sections.append(("blank", None))
 
-    # ── Generated SQL ─────────────────────────────────────────────────────────
     if sql:
         sections.append(("section", "Generated SQL Query"))
         sections.append(("code", sql.strip().splitlines()))
         sections.append(("blank", None))
 
-    # ── KG Townland Context ───────────────────────────────────────────────────
     if kg_context and kg_context.get("townlands"):
         sections.append(("section", "Knowledge Graph — Townland Context"))
         for t in kg_context.get("townlands", []):
@@ -9280,7 +8679,6 @@ def _write_pdf_report(question, answer, sql, columns, rows, llm_meta, kg_context
             sections.append(("para", line))
         sections.append(("blank", None))
 
-    # ── Summary stats ─────────────────────────────────────────────────────────
     if summary_block:
         final_text = summary_block.get("final_summary_text", "")
         if final_text:
@@ -9295,7 +8693,6 @@ def _write_pdf_report(question, answer, sql, columns, rows, llm_meta, kg_context
                 sections.append(("kv", (str(k), str(v))))
             sections.append(("blank", None))
 
-    # ── Footer note ───────────────────────────────────────────────────────────
     sections.append(("rule", None))
     sections.append(("para", "Coolattin Estate Records Explorer  ·  Masters Dissertation Project  ·  Data sourced from VRTI Knowledge Graph and local estate records."))
 
@@ -9303,26 +8700,14 @@ def _write_pdf_report(question, answer, sql, columns, rows, llm_meta, kg_context
     return path
 
 
-# ── Professional PDF renderer ─────────────────────────────────────────────────
-# Hand-written PDF 1.4.  No external library.
-# Colour palette:
-#   Header bg : #0f172a  → (0.059, 0.094, 0.165)
-#   Accent    : #0f766e  → (0.059, 0.463, 0.431)
-#   Section bg: #eff6ff  → (0.937, 0.965, 1.0)
-#   Section fg: #1e40af  → (0.118, 0.251, 0.686)
-#   Body text : #1e293b  → (0.118, 0.161, 0.231)
-#   Light rule: #e2e8f0  → (0.886, 0.910, 0.941)
-#   Table hdr : #f1f5f9  → (0.945, 0.961, 0.976)
+_PDF_PW  = 612
+_PDF_PH  = 792
+_PDF_ML  = 48
+_PDF_MR  = 48
+_PDF_MT  = 48
+_PDF_MB  = 48
+_PDF_CW  = _PDF_PW - _PDF_ML - _PDF_MR
 
-_PDF_PW  = 612   # US Letter width  (pts)
-_PDF_PH  = 792   # US Letter height (pts)
-_PDF_ML  = 48    # left margin
-_PDF_MR  = 48    # right margin
-_PDF_MT  = 48    # top margin
-_PDF_MB  = 48    # bottom margin
-_PDF_CW  = _PDF_PW - _PDF_ML - _PDF_MR   # content width
-
-# Colours as RGB 0-1 tuples
 _C_HEADER_BG  = (0.059, 0.094, 0.165)
 _C_HEADER_FG  = (1.0,   1.0,   1.0)
 _C_ACCENT     = (0.059, 0.463, 0.431)
@@ -9343,7 +8728,6 @@ def _rgb(c: tuple[float, float, float]) -> str:
 
 
 def _pdf_rect(x: float, y: float, w: float, h: float, fill: tuple, stroke: tuple | None = None) -> bytes:
-    """Draw a filled rectangle, optionally stroked."""
     ops = [f"{_rgb(fill)} rg"]
     if stroke:
         ops.append(f"{_rgb(stroke)} RG")
@@ -9371,8 +8755,7 @@ def _pdf_text(x: float, y: float, text: str, font: str, size: float, color: tupl
 
 def _pdf_text_block(x: float, y: float, text: str, font: str, size: float,
                     color: tuple, leading: float) -> tuple[bytes, float]:
-    """Wrap text and emit a BT block; return (bytes, height_used)."""
-    char_w = size * 0.52  # rough Helvetica width
+    char_w = size * 0.52
     max_chars = max(1, int(_PDF_CW / char_w))
     wrapped = _wrap_line(text, width=max_chars)
     ops: list[str] = [
@@ -9396,12 +8779,8 @@ def _pdf_text_block(x: float, y: float, text: str, font: str, size: float,
 
 
 def _build_professional_pdf(sections: list[tuple[str, Any]]) -> bytes:
-    """Render a professional multi-page PDF from structured sections."""
-
     objects: dict[int, bytes] = {}
-    # Object 1: Catalog (will point to Pages obj 2)
     objects[1] = b"<< /Type /Catalog /Pages 2 0 R >>"
-    # Objects 3 & 4: Fonts
     objects[3] = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
     objects[4] = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"
     objects[5] = b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>"
@@ -9409,9 +8788,7 @@ def _build_professional_pdf(sections: list[tuple[str, Any]]) -> bytes:
     next_obj = 6
     page_ids: list[int] = []
 
-    # ── Page state ────────────────────────────────────────────────────────────
     def new_page() -> tuple[list[bytes], float]:
-        """Return (stream_ops, cursor_y)."""
         return [], _PDF_PH - _PDF_MT
 
     def flush_page(stream_ops: list[bytes], page_num: int) -> None:
@@ -9420,7 +8797,6 @@ def _build_professional_pdf(sections: list[tuple[str, Any]]) -> bytes:
         next_obj += 2
         page_ids.append(pid)
 
-        # Page number footer
         footer = _pdf_text(
             _PDF_PW / 2 - 20, 24,
             f"Page {page_num}",
@@ -9451,30 +8827,22 @@ def _build_professional_pdf(sections: list[tuple[str, Any]]) -> bytes:
     first_page = True
 
     for sec_type, content in sections:
-
         if sec_type == "header":
-            # ── Full-width header banner ──────────────────────────────────
             banner_h = 80
             banner_y = _PDF_PH - _PDF_MT - banner_h
             stream_ops.append(_pdf_rect(0, banner_y, _PDF_PW, banner_h + _PDF_MT, _C_HEADER_BG))
-            # Title
             stream_ops.append(_pdf_text(_PDF_ML, banner_y + 52, content["title"], "F2", 22, _C_HEADER_FG))
-            # Subtitle
             stream_ops.append(_pdf_text(_PDF_ML, banner_y + 30, content["subtitle"], "F1", 13, (0.6, 0.8, 0.8)))
-            # Date (right-aligned approx)
             stream_ops.append(_pdf_text(_PDF_PW - _PDF_MR - 160, banner_y + 16, content["date"], "F1", 9, (0.6, 0.7, 0.75)))
-            # Accent line below banner
             stream_ops.append(_pdf_rect(0, banner_y - 4, _PDF_PW, 4, _C_ACCENT))
             y = banner_y - 20
             first_page = False
 
         elif sec_type == "section":
-            # ── Coloured section heading ──────────────────────────────────
             sec_h = 18
             stream_ops, y, page_num = need_space(stream_ops, y, sec_h + 10, page_num)
             y -= 8
             stream_ops.append(_pdf_rect(_PDF_ML - 6, y - 4, _PDF_CW + 12, sec_h, _C_SECTION_BG))
-            # Left accent bar
             stream_ops.append(_pdf_rect(_PDF_ML - 6, y - 4, 3, sec_h, _C_SECTION_FG))
             stream_ops.append(_pdf_text(_PDF_ML + 2, y + 4, content, "F2", 10, _C_SECTION_FG))
             y -= sec_h + 4
@@ -9506,12 +8874,10 @@ def _build_professional_pdf(sections: list[tuple[str, Any]]) -> bytes:
             y -= 4
 
         elif sec_type == "code":
-            # ── Dark code block ───────────────────────────────────────────
             lines_list = content if isinstance(content, list) else [content]
             line_h = 11
             block_h = line_h * len(lines_list) + 12
             stream_ops, y, page_num = need_space(stream_ops, y, min(block_h, 60) + 4, page_num)
-            # Background
             actual_h = min(line_h * len(lines_list) + 12, _PDF_PH - _PDF_MB - y - 10)
             stream_ops.append(_pdf_rect(_PDF_ML - 4, y - actual_h + 8, _PDF_CW + 8, actual_h, _C_CODE_BG))
             cy = y
@@ -9538,7 +8904,6 @@ def _build_professional_pdf(sections: list[tuple[str, Any]]) -> bytes:
             needed = hdr_h + row_h * min(len(tbl_rows), 4)
             stream_ops, y, page_num = need_space(stream_ops, y, needed, page_num)
 
-            # Header row
             stream_ops.append(_pdf_rect(_PDF_ML, y - hdr_h, _PDF_CW, hdr_h, _C_TABLE_HDR))
             stream_ops.append(_pdf_hline(_PDF_ML, y - hdr_h, _PDF_CW, _C_RULE, 0.3))
             for ci, col in enumerate(display_cols):
@@ -9552,14 +8917,12 @@ def _build_professional_pdf(sections: list[tuple[str, Any]]) -> bytes:
                     flush_page(stream_ops, page_num)
                     page_num += 1
                     stream_ops, y = new_page()
-                    # Re-draw header on new page
                     stream_ops.append(_pdf_rect(_PDF_ML, y - hdr_h, _PDF_CW, hdr_h, _C_TABLE_HDR))
                     for ci, col in enumerate(display_cols):
                         cx = _PDF_ML + ci * col_w + 3
                         stream_ops.append(_pdf_text(cx, y - 12, str(col)[:int(col_w/5.5)], "F2", 8, _C_SECTION_FG))
                     y -= hdr_h
 
-                # Alternate row shading
                 if ri % 2 == 1:
                     stream_ops.append(_pdf_rect(_PDF_ML, y - row_h, _PDF_CW, row_h, _C_TABLE_ALT))
                 stream_ops.append(_pdf_hline(_PDF_ML, y - row_h, _PDF_CW, _C_RULE, 0.2))
@@ -9570,13 +8933,11 @@ def _build_professional_pdf(sections: list[tuple[str, Any]]) -> bytes:
                     stream_ops.append(_pdf_text(cx, y - 11, val, "F1", 8, _C_BODY))
                 y -= row_h
 
-            # Bottom border
             stream_ops.append(_pdf_hline(_PDF_ML, y, _PDF_CW, _C_RULE, 0.5))
             y -= 6
 
     flush_page(stream_ops, page_num)
 
-    # ── Assemble PDF ──────────────────────────────────────────────────────────
     kids = " ".join(f"{p} 0 R" for p in page_ids)
     objects[2] = f"<< /Type /Pages /Count {len(page_ids)} /Kids [{kids}] >>".encode("latin-1")
 
@@ -9624,10 +8985,6 @@ def _wrap_line(text: str, width: int = 120) -> list[str]:
     return out
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _distance_km_sql(lat1, lon1, lat2, lon2):
     try:
         if None in (lat1, lon1, lat2, lon2):
@@ -9641,7 +8998,6 @@ def _distance_km_sql(lat1, lon1, lat2, lon2):
 
 
 def suggest_townlands(query: str, limit: int = 8) -> list[dict[str, Any]]:
-    """Public helper used by the Ask API for townland autocomplete."""
     return _suggest_townland_matches(query, limit=limit, min_score=0.55)
 
 
@@ -9801,9 +9157,6 @@ def _townland_resolution_payload(
     if warning:
         payload["warning"] = warning
 
-    # Phase 1 — enrich with sql_id + kg_uri from shared entity resolver.
-    # This ensures every downstream lane (SQL compiler, SPARQL engine,
-    # fusion reconciler) references the same resolved entity.
     try:
         from backend.services.entity_resolver import resolve_entity as _re
         er = _re(match.get("name") or "", "townland")
@@ -9930,7 +9283,6 @@ def _suggest_townland_matches(query: str | None, limit: int = 5, min_score: floa
 
     scored: list[dict[str, Any]] = []
     for item in _townland_catalog():
-        # Restrict autocomplete to County Wicklow townlands only
         if (item.get("county") or "").strip().lower() != "wicklow":
             continue
         item_compact = item.get("compact_key") or ""
@@ -10090,7 +9442,6 @@ def _clean_text(value: Any) -> str | None:
 _GENDER_NULL_VALUES = {"?", "-", "f/m", "m/f"}
 
 def _clean_gender(value: Any) -> str | None:
-    """Return 'M', 'F', or None. Ambiguous markers (?, -, F/M, M/F) become None."""
     s = _clean_text(value)
     if s is None:
         return None

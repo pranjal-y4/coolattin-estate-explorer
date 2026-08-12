@@ -162,7 +162,6 @@ def _interpret_tenancy_context(chief_surname: object, under_surname: object, mou
 def preprocess_unified() -> pd.DataFrame:
     df = pd.read_excel(UNIFIED_XLSX, engine="openpyxl")
 
-    # Keep a cleaned snake_case copy of ALL original unified columns
     aliased_name_cols = {
         "Surname (Chief tenant)": "chief_tenant_surname_original",
         "Forename (Chief Tenant)": "chief_tenant_forename_original",
@@ -177,7 +176,6 @@ def preprocess_unified() -> pd.DataFrame:
         key = _to_snake(col)
         if not key:
             continue
-        # Avoid collisions by suffixing
         base = key
         i = 2
         while key in all_cols:
@@ -237,7 +235,6 @@ def preprocess_unified() -> pd.DataFrame:
         + out["townland"].fillna("").str.lower().str.strip()
     )
 
-    # Source-presence flags for quick highlighting in UI
     out["has_emigration_record"] = (
         out["ship_name"].notna()
         | out["departure"].notna()
@@ -256,7 +253,6 @@ def preprocess_unified() -> pd.DataFrame:
         | out["occupation"].notna()
     )
 
-    # Interpreted user-friendly helper columns (derived from glossary terms and legacy notation)
     out["interpreted_abbreviations"] = [
         _interpret_abbrev_terms(a, b, c, d, e)
         for a, b, c, d, e in zip(

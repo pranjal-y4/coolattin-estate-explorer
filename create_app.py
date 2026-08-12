@@ -1,12 +1,3 @@
-"""
-create_app.py
-
-Flask application factory.
-
-To run:
-  python3 app.py                   (direct)
-  flask --app app run              (Flask CLI)
-"""
 from __future__ import annotations
 
 import logging
@@ -27,18 +18,9 @@ except ImportError:
 
 
 def create_app(config_class=None) -> Flask:
-    """
-    Application factory.
-
-    Parameters
-    ----------
-    config_class : optional config class override (e.g. for testing)
-    """
     if config_class is None:
         config_class = ActiveConfig
 
-    # Resolve absolute paths for template/static folders so Flask finds them
-    # regardless of the working directory the process is started from.
     _root = Path(__file__).resolve().parent
 
     app = Flask(
@@ -47,9 +29,6 @@ def create_app(config_class=None) -> Flask:
         static_folder=str(_root / "frontend" / "static"),
     )
 
-    # ------------------------------------------------------------------ #
-    # Config                                                               #
-    # ------------------------------------------------------------------ #
     app.config["SECRET_KEY"] = config_class.SECRET_KEY
     if not config_class.DEBUG and config_class.SECRET_KEY == "dev-secret-change-in-prod":
         log.error(
@@ -60,22 +39,12 @@ def create_app(config_class=None) -> Flask:
     app.config["VRTI_SPARQL_ENDPOINT"] = config_class.VRTI_SPARQL_ENDPOINT
     app.config["CENSUS_STALE_AFTER_DAYS"] = config_class.CENSUS_STALE_AFTER_DAYS
     app.config["EXPORTS_DIR"] = config_class.EXPORTS_DIR
-    # Cache static files (GeoJSON, CSS, JS) for 24 h in the browser so the
-    # 6.2 MB townlands.json and 4.4 MB unified records are not re-fetched on
-    # every page reload. Set to 0 in development if you need instant updates.
-    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 86400  # 24 h
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 86400
 
-    # ------------------------------------------------------------------ #
-    # Database                                                             #
-    # ------------------------------------------------------------------ #
     from extensions import init_db, ensure_schema
     init_db(config_class.DATABASE_PATH)
     ensure_schema()
 
-    # ------------------------------------------------------------------ #
-    # Rate limiting (flask-limiter, in-memory storage)                     #
-    # Protects the paid LLM endpoints from abuse.                          #
-    # ------------------------------------------------------------------ #
     if _LIMITER_AVAILABLE:
         limiter = Limiter(
             key_func=get_remote_address,
@@ -87,10 +56,6 @@ def create_app(config_class=None) -> Flask:
     else:
         app.extensions["limiter"] = None
 
-    # ------------------------------------------------------------------ #
-    # Blueprints                                                           #
-    # Each URL prefix is registered here — not in the route files.        #
-    # ------------------------------------------------------------------ #
     from backend.routes.main import bp as main_bp
     from backend.routes.census import bp as census_bp
     from backend.routes.unified import bp as unified_bp
@@ -109,12 +74,8 @@ def create_app(config_class=None) -> Flask:
     app.register_blueprint(ask_bp,       url_prefix="/api/ask")
     app.register_blueprint(kg_explore_bp, url_prefix="/api/kg")
 
-    # Apply rate limits to the LLM-backed ask routes after blueprint registration
     _apply_ask_rate_limits(app)
 
-    # ------------------------------------------------------------------ #
-    # Security headers (applied to every response)                        #
-    # ------------------------------------------------------------------ #
     @app.after_request
     def _add_security_headers(response):
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -124,7 +85,6 @@ def create_app(config_class=None) -> Flask:
             "Permissions-Policy",
             "camera=(), microphone=(), geolocation=()",
         )
-        # Only add CSP on HTML responses; SSE and JSON streams must not be blocked
         if "text/html" in response.content_type:
             response.headers.setdefault(
                 "Content-Security-Policy",
@@ -140,13 +100,8 @@ def create_app(config_class=None) -> Flask:
             )
         return response
 
-    # ------------------------------------------------------------------ #
-    # Legacy compatibility routes                                          #
-    # ------------------------------------------------------------------ #
     _register_legacy_routes(app)
 
-    # Pre-warm the unified records cache in a background thread so the first
-    # HTTP request doesn't block for ~10s loading the CSV.
     import threading
 
     def _prewarm():
@@ -165,15 +120,12 @@ def create_app(config_class=None) -> Flask:
 
 
 def _apply_ask_rate_limits(app: Flask) -> None:
-    """Apply per-IP rate limits to the LLM-backed /api/ask endpoints."""
     limiter = app.extensions.get("limiter")
     if limiter is None:
         return
-    # /api/ask/query touches paid LLM APIs — strict cap per IP
     limiter.limit("30 per minute; 200 per hour")(
         app.view_functions["ask_api.ask_query"]
     )
-    # /api/ask/feedback is cheaper but still writes to DB
     limiter.limit("60 per minute")(
         app.view_functions["ask_api.ask_feedback"]
     )

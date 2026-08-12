@@ -1,4 +1,3 @@
-/* kg_explore.js — D3.js force-directed Geographic Knowledge Graph */
 
 document.addEventListener("DOMContentLoaded", () => {
   const searchEl        = document.getElementById("kg-search");
@@ -26,7 +25,6 @@ document.addEventListener("DOMContentLoaded", () => {
     return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   }
 
-  // ── Node colour by type ────────────────────────────────────────────────────
   function nodeColor(d) {
     switch (d.type) {
       case "County":      return "#0369a1";
@@ -37,7 +35,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ── Load graph data ────────────────────────────────────────────────────────
   async function loadGraph() {
     statsEl.textContent = "Loading geographic hierarchy…";
     try {
@@ -65,7 +62,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ── D3 force simulation ────────────────────────────────────────────────────
   function buildSimulation() {
     svg.selectAll("*").remove();
 
@@ -117,7 +113,6 @@ document.addEventListener("DOMContentLoaded", () => {
       .force("collide", d3.forceCollide().radius(d => (d.size || 8) + 3))
       .alphaDecay(0.02);
 
-    // Links — coloured by hierarchy level
     linkSel = gRoot.append("g").attr("class","links").selectAll("line")
       .data(edges).enter().append("line")
         .attr("stroke", e => {
@@ -138,7 +133,6 @@ document.addEventListener("DOMContentLoaded", () => {
         })
         .attr("marker-end", "url(#arrowhead)");
 
-    // Node circles
     nodeSel = gRoot.append("g").attr("class","nodes").selectAll("circle")
       .data(nodes).enter().append("circle")
         .attr("r", d => d.size || 8)
@@ -161,7 +155,6 @@ document.addEventListener("DOMContentLoaded", () => {
         .on("mousemove", event => moveTooltip(event))
         .on("mouseout", () => hideTooltip());
 
-    // Labels for County, Barony, and Parish nodes
     labelSel = gRoot.append("g").attr("class","labels").selectAll("text")
       .data(nodes.filter(n => n.type === "County" || n.type === "Barony" || n.type === "CivilParish"))
       .enter().append("text")
@@ -183,7 +176,6 @@ document.addEventListener("DOMContentLoaded", () => {
     svg.on("click", () => clearSelection());
   }
 
-  // ── Detail panel ───────────────────────────────────────────────────────────
   function showDetail(d) {
     highlightNode(d.id);
     detailCard.style.display = "block";
@@ -199,7 +191,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function showTownlandDetail(d) {
-    // Show basic info immediately, then async-load the rich detail
     const rows = [];
     rows.push(`<div style="font-weight:700;font-size:14px;color:#15803d;">Townland</div>`);
     rows.push(`<div style="font-weight:700;font-size:14px;color:#0f172a;">${escHtml(d.label)}</div>`);
@@ -221,7 +212,6 @@ document.addEventListener("DOMContentLoaded", () => {
     if (d.kg_uri) {
       rows.push(`<a href="${escHtml(d.kg_uri)}" target="_blank" rel="noopener" style="display:inline-block;margin-top:8px;font-size:12px;color:#0f766e;">Open VRTI KG URI ↗</a>`);
     }
-    // Rich detail loading area
     rows.push(`<div id="kg-rich-detail" style="margin-top:12px;">
       <div style="display:flex;align-items:center;gap:6px;color:#64748b;font-size:11px;">
         <span style="animation:spin 1s linear infinite;display:inline-block;">⟳</span>
@@ -230,7 +220,6 @@ document.addEventListener("DOMContentLoaded", () => {
     </div>`);
     detailEl.innerHTML = rows.join("");
 
-    // Async fetch rich detail
     fetchRichTownlandDetail(d.label);
   }
 
@@ -252,7 +241,6 @@ document.addEventListener("DOMContentLoaded", () => {
     parts.push(`<div style="height:1px;background:#e2e8f0;margin:10px 0;"></div>`);
     parts.push(`<div style="font-size:11px;font-weight:700;color:#0369a1;letter-spacing:.04em;margin-bottom:6px;">GEOGRAPHICAL & HISTORICAL DETAIL</div>`);
 
-    // ── People summary ────────────────────────────────────────────────
     const ppl = (data.db_data || {}).people_summary || {};
     if (ppl.total_people) {
       parts.push(`<div style="font-size:12px;margin-bottom:6px;">
@@ -264,7 +252,6 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>`);
     }
 
-    // Top surnames
     const snames = (data.db_data || {}).top_surnames || [];
     if (snames.length) {
       parts.push(`<div style="font-size:11px;color:#475467;margin-bottom:6px;">
@@ -273,7 +260,6 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>`);
     }
 
-    // ── Census trend ─────────────────────────────────────────────────
     const census = (data.db_data || {}).census || [];
     if (census.length) {
       const cells = census.map(r =>
@@ -288,7 +274,6 @@ document.addEventListener("DOMContentLoaded", () => {
       </details>`);
     }
 
-    // ── Clearances ────────────────────────────────────────────────────
     const clears = (data.db_data || {}).clearances || [];
     if (clears.length) {
       parts.push(`<details style="margin-bottom:6px;">
@@ -299,7 +284,6 @@ document.addEventListener("DOMContentLoaded", () => {
       </details>`);
     }
 
-    // ── Heritage features ─────────────────────────────────────────────
     const heritage = (data.db_data || {}).heritage || [];
     if (heritage.length) {
       parts.push(`<div style="font-size:11px;margin-bottom:6px;">
@@ -308,7 +292,6 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>`);
     }
 
-    // ── VRTI external links ────────────────────────────────────────────
     const vrti = data.vrti_data || {};
     if (Array.isArray(vrti.links) && vrti.links.length) {
       parts.push(`<div style="font-size:11px;margin-bottom:6px;">
@@ -317,7 +300,6 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>`);
     }
 
-    // ── LLM narrative ─────────────────────────────────────────────────
     if (data.narrative) {
       parts.push(`<div style="font-size:12px;line-height:1.6;color:#0f172a;background:#f8fafc;border-radius:8px;padding:10px;margin-bottom:8px;border-left:3px solid #15803d;">
         ${escHtml(data.narrative).replace(/\n\n/g, "</p><p style='margin-top:8px;'>").replace(/\n/g, "<br>")}
@@ -326,7 +308,6 @@ document.addEventListener("DOMContentLoaded", () => {
       parts.push(`<div style="font-size:11px;color:#92400e;background:#fef3c7;border-radius:6px;padding:6px;margin-bottom:6px;">Narrative unavailable: ${escHtml(data.narrative_error)}</div>`);
     }
 
-    // ── Generated SPARQL query ────────────────────────────────────────
     if (data.generated_sparql) {
       const resultCount = (data.sparql_results || []).length;
       const sparqlErrNote = data.sparql_error ? `<div style="color:#dc2626;font-size:10px;margin-top:4px;">${escHtml(data.sparql_error)}</div>` : "";
@@ -409,7 +390,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function highlightNode(nodeId) {
     if (!nodeSel) return;
-    // Find all connected node IDs
     const connected = new Set([nodeId]);
     allEdges.forEach(e => {
       const sid = typeof e.source === "object" ? e.source?.id : e.source;
@@ -430,7 +410,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ── Tooltip ────────────────────────────────────────────────────────────────
   function showTooltip(event, d) {
     let html = `<strong>${escHtml(d.label)}</strong>`;
     if (d.name_gaelic) html += ` <span style="color:#c4b5fd;font-style:italic;">(${escHtml(d.name_gaelic)})</span>`;
@@ -456,7 +435,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   function hideTooltip() { tooltipEl.style.display = "none"; }
 
-  // ── Search ─────────────────────────────────────────────────────────────────
   searchEl.addEventListener("input", () => {
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(doSearch, 180);
@@ -472,7 +450,6 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // Match against name, name_gaelic, civil_parish, barony, county
     const matches = allNodes.filter(n =>
       (n.label || "").toLowerCase().includes(q) ||
       (n.name_gaelic || "").toLowerCase().includes(q) ||

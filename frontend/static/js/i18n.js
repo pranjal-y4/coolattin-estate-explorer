@@ -1,7 +1,5 @@
-// Complete translation system for Coolattin Lineage
 const translations = {
   en: {
-    // Navigation
     home: "Home",
     about: "About",
     records: "Records",
@@ -11,14 +9,12 @@ const translations = {
     exploreMap: "Explore Map",
     learnMore: "Learn More",
 
-    // Hero
     countyWicklow: "County Wicklow",
     coolattinEstate: "Coolattin (Fitzwilliam) Estate",
     heroTitle: "Discover Your Irish Ancestry Through the Coolattin Estate Records",
     heroSubtitle: "Explore a comprehensive genealogical archive spanning tenant histories, landholdings, evictions, and assisted emigration records—brought together with modern geospatial alignment for meaningful exploration.",
     exploreOnMap: "Explore on the Map",
 
-    // Record Cards
     estateRecords: "Estate Records",
     estateRecordsDesc: "Tenant lists, leases, and property records across 18th–19th centuries.",
     emigrationRecords: "Emigration Records",
@@ -28,7 +24,6 @@ const translations = {
     workhouseRecords: "Workhouse Records",
     workhouseRecordsDesc: "Workhouse admission and discharge records linked by name and electoral division context.",
 
-    // Understanding Records Section
     understandingRecords: "Understanding the Records",
     estateTenancyRecords: "Estate / Tenancy Records",
     estateTenancyRecordsDesc: "Estate and tenancy records document the relationship between landlords and tenants across the Fitzwilliam estate in County Wicklow. These records include tenant lists showing the head of household, townland location, landholding size, and rental terms.",
@@ -49,12 +44,10 @@ const translations = {
     keyDetailsAdmission: "Admission dates, family connections, outcomes",
     recordsTogether: "Together, these records provide a comprehensive picture of life in County Wicklow during one of Ireland's most turbulent periods.",
 
-    // About Teaser
     aboutCoolattinLives: "About Coolattin Lives",
     readProjectBackground: "Read project background, source record sets, references and partner links on the dedicated About page.",
     openAboutPage: "Open About Page",
 
-    // Research Section
     research: "Research",
     researchDesc: "Our primary goal is to explore families spatially—by townland and time—using an interactive map interface.",
     howYoullUseIt: "How you'll use it",
@@ -68,7 +61,6 @@ const translations = {
     timeBasedFiltering: "Time-based filtering (1750–1920)",
     unifiedRecordsClean: "Unified single-source records with clean person-level drilldown",
 
-    // Featured Records
     featuredFamilyRecords: "Featured Family Records",
     realFamiliesRealHistories: "Real families, real histories, preserved for generations.",
     townland: "Townland",
@@ -83,7 +75,6 @@ const translations = {
     evictionLegal: "Eviction/Legal-action traces",
     emigrationDeparture: "Emigration pattern",
 
-    // Map Explorer
     mapExplorer: "Map Explorer · County Wicklow",
     mapExplorerSub: "Townland boundaries are drawn from townlands.json. Family pins come from linked records (default: Tenancies). Select a townland and use Explore Historic Place to switch this same map into archaeology, holy wells, and monuments mode.",
     countyWicklowMap: "County Wicklow — Townlands & Families",
@@ -97,7 +88,6 @@ const translations = {
     familyStory: "Family Story",
     clickTownlandPolygon: "Click a townland polygon or a family pin to view linked records.",
 
-    // Census Page
     wicklowCensusExplorer: "Wicklow Census Explorer",
     censusExplorerDesc: "Explore census population by townland across time. Click a townland to open detailed counts, then slide the year bar to inspect historical shifts.",
     censusYear: "Census Year",
@@ -119,7 +109,6 @@ const translations = {
     theme: "Theme",
     population: "Population",
 
-    // About Page
     aboutCoolattinLivesTitle: "About Coolattin Lives",
     aboutCoolattinDesc: "Coolattin Lives contains the tenant records for the Earl of Fitzwilliam's estates in Co. Wicklow between 1841 and 1868. This period includes the Great Famine and the years of assisted migration that the Fitzwilliam estate put in place to encourage tenants to move to Canada.",
     introductionCourthouseArts: "Introduction to The Courthouse Arts Centre",
@@ -147,16 +136,13 @@ const translations = {
     surplusPeopleDesc: "Jim Rees, a Wicklow resident and historian with a History Masters Degree from NUI Maynooth.",
     purchaseBook: "Click here to purchase his book via The Collins Press",
 
-    // Glossary
     glossaryTerms: "Glossary of Terms",
 
-    // Footer
     preservingIrish: "Preserving Irish family histories and making them accessible worldwide.",
     privacy: "Privacy",
     terms: "Terms",
     cookies: "Cookies",
 
-    // FAQ
     faq: "FAQ",
     faqSubtitle: "Common questions about the archive.",
     whyUseTownlands: "Why use townlands?",
@@ -164,18 +150,15 @@ const translations = {
     whatSurnamesAppear: "What surnames appear in the dropdown?",
     whatSurnamesAppearAns: "Suggestions come directly from the unified records currently in scope. If a townland is selected, only surnames present in that townland are shown.",
 
-    // Stats
     dateRange: "1750–1920",
     records50000: "50,000+ Records",
     townlands200: "200+ Townlands",
 
-    // Brand
     brandName: "Coolattin Lineage",
     brandSub: "Digital Estate Archive",
   },
 
   ga: {
-    // Navigation
     home: "Baile",
     about: "Maidir",
     records: "Taifid",
@@ -185,14 +168,12 @@ const translations = {
     exploreMap: "Fiosraigh Mapa",
     learnMore: "Faigh amach níos mó",
 
-    // Hero
     countyWicklow: "Contae Chill Mhantáin",
     coolattinEstate: "Máilistín (Fitzwilliam)",
     heroTitle: "Faigh amach do Chlann na hÉireann trí Thaifid Mháilistín",
     heroSubtitle: "Fiosraigh cartlann ghinealach chuimsitheach a chlúdaíonn stair teaghlaigh, sealúchais, díbirt agus taifid imirce — curtha le chéile le geospásálaíocht nua-aimseartha.",
     exploreOnMap: "Fiosraigh ar an Mapa",
 
-    // Record Cards
     estateRecords: "Taifid Mháilistín",
     estateRecordsDesc: "Liostaí tionóntachta, léasú agus taifid maoine ón 18ú-19ú haois.",
     emigrationRecords: "Taifid Imirce",
@@ -202,7 +183,6 @@ const translations = {
     workhouseRecords: "Taifid Teach na mBocht",
     workhouseRecordsDesc: "Taifid iontrála agus scaoilteach teach na mbocht.",
 
-    // Understanding Records Section
     understandingRecords: "Na Taifid a Thuiscint",
     estateTenancyRecords: "Taifid Mháilistín / Tionóistíochta",
     estateTenancyRecordsDesc: "Taifid máilistín agus tionóistíochta cáidrimh idir landéirí agus tionóntaithe ar fud máilistín Fitzwilliam i gContae Chill Mhantáin.",
@@ -223,12 +203,10 @@ const translations = {
     keyDetailsAdmission: "Dátaí iontrála, naisc theaghlaigh, torthaí",
     recordsTogether: "Le chéile, soláthraíonn na taifid seo pictiúr cuimsitheach de shaol i gContae Chill Mhantáin.",
 
-    // About Teaser
     aboutCoolattinLives: "Maidir le Coolattin Lives",
     readProjectBackground: "Léigh cúlra an tionscadail, foinsí na dtaifead, tagairtí agus naisc páirtnéirí ar leathanach Maidir.",
     openAboutPage: "Oscail Leathanach Maidir",
 
-    // Research Section
     research: "Taighde",
     researchDesc: "Is é ár bpríomhchuspóir teaghlaigh a fhiosrú go spásúil — de réir bailte fearainn agus ama.",
     howYoullUseIt: "Conas a úsáidfidh tú é",
@@ -242,7 +220,6 @@ const translations = {
     timeBasedFiltering: "Scagadh bunaithe ar am (1750–1920)",
     unifiedRecordsClean: "Taifid aonfhoinse aontaithe le hiniúchadh glan",
 
-    // Featured Records
     featuredFamilyRecords: "Taifid Teaghlaigh Curtha i gCéill",
     realFamiliesRealHistories: "Teaghlaigh fhoghlaim, stair fhoghlaim, caomhnaithe ar feadh ghinealaigh.",
     townland: "Bailte fearainn",
@@ -257,7 +234,6 @@ const translations = {
     evictionLegal: "Díbirt/gniomh dlíthiúil",
     emigrationDeparture: "Patrún imirce",
 
-    // Map Explorer
     mapExplorer: "Fiosraí Mapa",
     mapExplorerSub: "Tarraingtí teorainneacha bailte fearainn ó townlands.json.",
     countyWicklowMap: "Contae Chill Mhantáin — Bailte Fearainn & Teaghlaigh",
@@ -271,7 +247,6 @@ const translations = {
     familyStory: "Scéal Teaghlaigh",
     clickTownlandPolygon: "Cliceáil polagán bailte fearainn nó pin teaghlaigh.",
 
-    // Census Page
     wicklowCensusExplorer: "Fiosraí Daonáireamh Chill Mhantáin",
     censusExplorerDesc: "Fiosraigh daonra daonáireamh de réir bailte fearainn thar am.",
     censusYear: "Bliain an Daonáireamh",
@@ -293,7 +268,6 @@ const translations = {
     theme: "Téama",
     population: "Daonra",
 
-    // About Page
     aboutCoolattinLivesTitle: "Maidir le Coolattin Lives",
     aboutCoolattinDesc: "Cuimsíonn Coolattin Lives taifid tionóntaithe do Theachasaí Earl Fitzwilliam i gCo. Chill Mhantáin idir 1841 agus 1868.",
     introductionCourthouseArts: "Ionad Ealaíne Chúirt an Tearmainn",
@@ -321,16 +295,13 @@ const translations = {
     surplusPeopleDesc: "Jim Rees, comhnyúirí Chill Mhantáin agus stairí le céim Mháistirí Staire.",
     purchaseBook: "Cliceáil anseo chun a leabhar a cheannach",
 
-    // Glossary
     glossaryTerms: "Gluais Téarmaí",
 
-    // Footer
     preservingIrish: "Stair teaghlaigh na hÉireann a chaomhnú.",
     privacy: "Príobháideach",
     terms: "Téarmaí",
     cookies: "Fianáin",
 
-    // FAQ
     faq: "Ceisteanna Coitianta",
     faqSubtitle: "Ceisteanna coitianta faoin cartlann.",
     whyUseTownlands: "Cáire Bailte Fearainn?",
@@ -338,50 +309,44 @@ const translations = {
     whatSurnamesAppear: "Cé na sloinnte a thaispeántar?",
     whatSurnamesAppearAns: "Tagann na moltaí go díreach ón taifid aontaithe.",
 
-    // Stats
     dateRange: "1750–1920",
     records50000: "50,000+ Taifid",
     townlands200: "200+ Bailte Fearainn",
 
-    // Brand
     brandName: "Líneáil Coolattin",
     brandSub: "Cartlann Digití Mháilistín",
   }
 };
 
-// Current language
 let currentLang = 'en';
 
-// Get translation function
 window.t = function(key) {
   const trans = translations[currentLang] || translations['en'];
   return trans[key] || translations['en'][key] || key;
 };
 
-// Translate page function
 function translatePage() {
   const trans = translations[currentLang] || translations['en'];
   const fallback = translations['en'];
-  
+
   document.querySelectorAll('[data-i18n]').forEach(el => {
     const key = el.getAttribute('data-i18n');
     const text = trans[key] || fallback[key] || key;
     el.textContent = text;
   });
-  
+
   document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
     const key = el.getAttribute('data-i18n-placeholder');
     const text = trans[key] || fallback[key] || key;
     el.placeholder = text;
   });
-  
+
   document.documentElement.lang = currentLang;
 }
 
-// Toggle language function
 function toggleLang() {
   currentLang = currentLang === 'en' ? 'ga' : 'en';
-  
+
   const toggle = document.querySelector('.lang-toggle');
   if (toggle) {
     if (currentLang === 'ga') {
@@ -390,22 +355,21 @@ function toggleLang() {
       toggle.classList.remove('gaelic');
     }
   }
-  
+
   translatePage();
   window.dispatchEvent(new CustomEvent('languageChanged', { detail: { lang: currentLang } }));
 }
 
-// Initialize
 document.addEventListener('DOMContentLoaded', function() {
   currentLang = 'en';
-  
+
   const toggle = document.querySelector('.lang-toggle');
   if (toggle) {
     toggle.classList.remove('gaelic');
   }
-  
+
   translatePage();
-  
+
   if (toggle) {
     toggle.addEventListener('click', toggleLang);
   }

@@ -1,21 +1,3 @@
-"""
-backend/services/kg_service.py
-
-Knowledge Graph data service.
-
-The knowledge graph now represents the pure geographic hierarchy of the
-Coolattin estate area:
-
-  County → Barony → CivilParish → Townland
-
-Each townland node carries its Gaelic name, geographic coordinates, and
-metadata (electoral division, placename theme) sourced from the `townland`
-table.  This geographic KG enriches the Ask page's townland context and
-powers the KG Explore visualisation.
-
-The comparison-scenario helpers are retained for the technical details
-section of the Ask page.
-"""
 from __future__ import annotations
 
 import logging
@@ -26,23 +8,14 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-# ------------------------------------------------------------------ #
-# Thread-safe graph cache (built once per process)                    #
-# ------------------------------------------------------------------ #
 _GRAPH_CACHE: dict | None = None
 _GRAPH_CACHE_LOCK = threading.Lock()
 
-# ------------------------------------------------------------------ #
-# rdflib graph — loaded lazily, once per process                      #
-# ------------------------------------------------------------------ #
 _RDF_GRAPH: Any = None
 _RDF_GRAPH_LOCK = threading.Lock()
 
-_MAX_PERSONS = 600   # cap for D3.js performance
+_MAX_PERSONS = 600
 
-# ------------------------------------------------------------------ #
-# Canned comparison scenarios                                         #
-# ------------------------------------------------------------------ #
 COMPARISON_SCENARIOS: list[dict] = [
     {
         "id": "emigration_count_by_townland",
@@ -168,17 +141,12 @@ COMPARISON_SCENARIOS: list[dict] = [
 ]
 
 
-# ------------------------------------------------------------------ #
-# rdflib helpers                                                      #
-# ------------------------------------------------------------------ #
-
 def _ttl_path() -> Path:
     from config import BASE_DIR
     return BASE_DIR / "data" / "coolattin_sample.ttl"
 
 
 def _load_rdf_graph():
-    """Load the Turtle file into an rdflib Graph (once per process)."""
     global _RDF_GRAPH
     with _RDF_GRAPH_LOCK:
         if _RDF_GRAPH is not None:
@@ -202,12 +170,6 @@ def _load_rdf_graph():
 
 
 def run_sparql(sparql_body: str) -> tuple[list[str], list[dict], str | None]:
-    """
-    Execute a SPARQL SELECT against the in-process rdflib graph.
-    Prefixes are prepended automatically.
-
-    Returns (columns, rows, error_message).
-    """
     prefixes = (
         "PREFIX co:     <https://coolattin.ie/ontology#>\n"
         "PREFIX ex:     <https://coolattin.ie/resource/>\n"
@@ -236,12 +198,7 @@ def run_sparql(sparql_body: str) -> tuple[list[str], list[dict], str | None]:
         return [], [], str(exc)
 
 
-# ------------------------------------------------------------------ #
-# SQL runner (for the comparison panel)                               #
-# ------------------------------------------------------------------ #
-
 def run_sql(sql: str, max_rows: int = 500) -> tuple[list[str], list[dict], str | None]:
-    """Execute a read-only SQL query against the local SQLite database."""
     from extensions import get_db_conn
     sql_upper = sql.strip().upper()
     if not sql_upper.startswith("SELECT"):
@@ -259,17 +216,7 @@ def run_sql(sql: str, max_rows: int = 500) -> tuple[list[str], list[dict], str |
         return [], [], str(exc)
 
 
-# ------------------------------------------------------------------ #
-# Graph topology builder                                              #
-# ------------------------------------------------------------------ #
-
 def build_graph(limit: int = _MAX_PERSONS) -> dict:  # noqa: ARG001
-    """
-    Build a geographic hierarchy graph {nodes, edges, meta} for D3.js.
-
-    Structure: County → Barony → CivilParish → Townland (County Wicklow only)
-    Each townland carries its Gaelic name, coordinates, and metadata.
-    """
     global _GRAPH_CACHE
     with _GRAPH_CACHE_LOCK:
         if _GRAPH_CACHE is not None:
@@ -280,14 +227,12 @@ def build_graph(limit: int = _MAX_PERSONS) -> dict:  # noqa: ARG001
 
 
 def reset_graph_cache() -> None:
-    """Force the geographic graph to be rebuilt on next request."""
     global _GRAPH_CACHE
     with _GRAPH_CACHE_LOCK:
         _GRAPH_CACHE = None
 
 
 def _build_geographic_graph() -> dict:
-    """Build the pure geographic hierarchy from the townland reference table."""
     from extensions import get_db_conn
 
     nodes: list[dict] = []
@@ -336,7 +281,6 @@ def _build_geographic_graph() -> dict:
             lon      = r["centroid_lon"]
             rec_cnt  = r["record_count"] or 0
 
-            # ── County node ──────────────────────────────────────────────
             if county and county not in county_seen:
                 county_seen.add(county)
                 add_node(
@@ -347,7 +291,6 @@ def _build_geographic_graph() -> dict:
                     size=28,
                 )
 
-            # ── Barony node + County→Barony edge ────────────────────────
             if barony and barony not in barony_seen:
                 barony_seen.add(barony)
                 add_node(
@@ -366,7 +309,6 @@ def _build_geographic_graph() -> dict:
                         "type": "county_barony",
                     })
 
-            # ── Parish node + Barony→Parish edge ────────────────────────
             if parish and parish not in parish_seen:
                 parish_seen.add(parish)
                 add_node(
@@ -387,7 +329,6 @@ def _build_geographic_graph() -> dict:
                         "type": "barony_parish",
                     })
 
-            # ── Townland node ────────────────────────────────────────────
             t_id = f"t_{tl_name}"
             size = min(8 + rec_cnt // 40, 14)
             add_node(
@@ -408,7 +349,6 @@ def _build_geographic_graph() -> dict:
                 size=size,
             )
 
-            # Parish→Townland edge
             parent_tl = f"parish_{parish}" if parish else (
                 f"barony_{barony}" if barony else (f"county_{county}" if county else None)
             )
@@ -438,7 +378,6 @@ def _build_geographic_graph() -> dict:
 
 
 def get_townland_persons(townland_name: str, limit: int = 50) -> dict:
-    """Return individual person records for a specific townland (detail drill-down)."""
     from extensions import get_db_conn
     conn = get_db_conn()
     try:
@@ -472,26 +411,13 @@ def get_townland_persons(townland_name: str, limit: int = 50) -> dict:
         conn.close()
 
 
-# ------------------------------------------------------------------ #
-# Rich townland detail — LLM SPARQL rewrite + narrative               #
-# ------------------------------------------------------------------ #
-
 def get_townland_rich_detail(townland_name: str) -> dict:
-    """
-    Return enriched geographical detail for a townland including:
-    - Local DB stats (census, clearances, heritage features, people counts)
-    - VRTI KG data (if reachable)
-    - LLM-generated optimised SPARQL query
-    - SPARQL result from VRTI
-    - LLM-generated narrative about the place
-    """
     import os, json, requests as _req, concurrent.futures, time as _time
 
     from extensions import get_db_conn
     conn = get_db_conn()
     db_data: dict = {}
     try:
-        # ── Local DB: townland reference ─────────────────────────────────
         row = conn.execute(
             """SELECT name, name_gaelic, civil_parish, barony, county,
                       electoral_division, placename_theme, description,
@@ -502,7 +428,6 @@ def get_townland_rich_detail(townland_name: str) -> dict:
         if row:
             db_data["townland"] = dict(row)
 
-        # ── Local DB: census trend ────────────────────────────────────────
         census_rows = conn.execute(
             """SELECT cr.year, cr.total, cr.male, cr.female,
                       cr.inhabited, cr.uninhabited
@@ -514,7 +439,6 @@ def get_townland_rich_detail(townland_name: str) -> dict:
         ).fetchall()
         db_data["census"] = [dict(r) for r in census_rows]
 
-        # ── Local DB: clearances (evictions) ─────────────────────────────
         clear_col = next(
             (c for c in ["count", "eviction_count", "num_evictions"]
              if any(c == col[1] for col in conn.execute("PRAGMA table_info(clearances_record)").fetchall())),
@@ -530,7 +454,6 @@ def get_townland_rich_detail(townland_name: str) -> dict:
         ).fetchall()
         db_data["clearances"] = [dict(r) for r in clear_rows]
 
-        # ── Local DB: heritage features ───────────────────────────────────
         heritage_rows = conn.execute(
             """SELECT feature_group, monument_class, source_dataset
                FROM heritage_feature
@@ -540,7 +463,6 @@ def get_townland_rich_detail(townland_name: str) -> dict:
         ).fetchall()
         db_data["heritage"] = [dict(r) for r in heritage_rows]
 
-        # ── Local DB: people summary ──────────────────────────────────────
         ppl = conn.execute(
             """SELECT
                  COUNT(DISTINCT record_id) AS total_people,
@@ -556,7 +478,6 @@ def get_townland_rich_detail(townland_name: str) -> dict:
         if ppl:
             db_data["people_summary"] = dict(ppl)
 
-        # Top 5 surnames
         surname_rows = conn.execute(
             """SELECT COALESCE(surname,'Unknown') AS surname, COUNT(DISTINCT record_id) AS n
                FROM unified_record
@@ -570,7 +491,6 @@ def get_townland_rich_detail(townland_name: str) -> dict:
     finally:
         conn.close()
 
-    # ── VRTI KG lookup (optional, best-effort) ────────────────────────────
     vrti_data: dict | None = None
     try:
         from backend.integrations import vrti_sparql as _vs
@@ -580,7 +500,6 @@ def get_townland_rich_detail(townland_name: str) -> dict:
     except Exception as exc:
         log.warning("kg_service.rich_detail.vrti_lookup_failed name=%s error=%s", townland_name, exc)
 
-    # ── Build context string for LLM prompts ─────────────────────────────
     tl = db_data.get("townland") or {}
     ppl_s = db_data.get("people_summary") or {}
     census_lines = "\n".join(
@@ -650,7 +569,6 @@ Heritage features:
     }
 
     def _llm_call(messages: list[dict], max_tokens: int = 600) -> tuple[str, str | None]:
-        """Call LLM via OpenRouter, return (text, model_used). Returns ('', error) on failure."""
         if not api_key:
             return "", "LLM not configured — OPENROUTER_API_KEY not set."
         for cand in candidates:
@@ -669,7 +587,6 @@ Heritage features:
                 log.warning("kg_service.rich_detail.llm_call_failed model=%s error=%s", cand, exc)
         return "", "All LLM candidates failed."
 
-    # ── LLM call 1: generate optimised SPARQL query ───────────────────────
     sparql_prompt = f"""You are a SPARQL expert working with the VRTI (Virtual Record Treasury of Ireland) Knowledge Graph.
 
 The VRTI endpoint is: https://virtuoso.virtualtreasury.ie/sparql/
@@ -710,13 +627,11 @@ LIMIT 1 is not needed — use LIMIT 20 to capture multiple rows from optional fi
         {"role": "user", "content": sparql_prompt},
     ], max_tokens=500)
 
-    # Clean up the generated SPARQL (remove markdown fences if LLM adds them)
     sparql_query = sparql_query_raw.strip()
     for fence in ("```sparql", "```SPARQL", "```"):
         sparql_query = sparql_query.replace(fence, "")
     sparql_query = sparql_query.strip()
 
-    # ── Run the generated SPARQL against VRTI ────────────────────────────
     sparql_results: list[dict] = []
     sparql_run_error: str | None = None
     if sparql_query and not sparql_err:
@@ -731,7 +646,6 @@ LIMIT 1 is not needed — use LIMIT 20 to capture multiple rows from optional fi
             sparql_run_error = str(exc)
             log.warning("kg_service.rich_detail.sparql_run_failed name=%s error=%s", townland_name, exc)
 
-    # ── LLM call 2: write rich narrative ─────────────────────────────────
     sparql_result_summary = ""
     if sparql_results:
         cols = list(sparql_results[0].keys())
@@ -773,10 +687,6 @@ Write 3–4 paragraphs of clear, engaging academic prose. Be specific with numbe
     }
 
 
-# ------------------------------------------------------------------ #
-# LLM-powered mismatch analysis                                       #
-# ------------------------------------------------------------------ #
-
 def explain_mismatch(
     sql_query: str,
     sparql_query: str,
@@ -785,15 +695,6 @@ def explain_mismatch(
     sql_row_count: int,
     sparql_row_count: int,
 ) -> dict:
-    """
-    Ask an LLM to explain why the SQL and SPARQL result sets differ.
-
-    Returns a dict with:
-      - analysis: structured explanation text (markdown)
-      - reasons: list of short reason strings
-      - model_used: which LLM model responded
-      - error: None or error string if LLM call failed
-    """
     import os, json, requests as _req
 
     api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
@@ -918,7 +819,6 @@ Be precise, academic, and base every claim on the queries and samples provided."
             if not text.strip():
                 continue
 
-            # Extract bullet-style reasons from "All Possible Reasons" section
             reasons: list[str] = []
             in_reasons = False
             for line in text.splitlines():

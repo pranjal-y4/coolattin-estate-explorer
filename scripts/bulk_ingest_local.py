@@ -1,18 +1,3 @@
-"""
-scripts/bulk_ingest_local.py
-
-Bulk ingest of the full retrieval corpus using BAAI/bge-large-en-v1.5.
-
-Uses dynamic int8 quantization (5× speedup on CPU) and commits rows in
-mini-batches so progress is visible and the run can be interrupted and resumed.
-
-Usage (from project root):
-    DATABASE_URL=postgresql://postgres:pw@localhost:5432/postgres \
-    EMBEDDING_PROVIDER=local \
-    python scripts/bulk_ingest_local.py
-
-Estimated: ~23 min for 41.6k chunks on a 4-core Intel CPU.
-"""
 from __future__ import annotations
 
 import json
@@ -22,11 +7,9 @@ import os
 import sys
 import time
 
-# Must be set BEFORE importing any project code that reads config.
 os.environ.setdefault("DATABASE_URL", "postgresql://postgres:pw@localhost:5432/postgres")
 os.environ.setdefault("EMBEDDING_PROVIDER", "local")
 
-# Bootstrap Flask app context so SQLite extensions work.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -36,11 +19,10 @@ NUM_WORKERS: int = int(os.environ.get("BULK_NUM_WORKERS", "4"))
 THREADS_PER_WORKER: int = int(os.environ.get("BULK_THREADS_PER_WORKER", "2"))
 BGE_MODEL_NAME: str = "BAAI/bge-large-en-v1.5"
 BGE_QUERY_INSTRUCTION: str = "Represent this sentence for searching relevant passages: "
-MINI_BATCH: int = 2000   # commit every N rows to show progress
+MINI_BATCH: int = 2000
 
 
 def _load_quantized_model(num_threads: int = 8):
-    """Load bge model with dynamic int8 quantization — 5× faster on CPU."""
     import torch
     from torch.quantization import quantize_dynamic
     from sentence_transformers import SentenceTransformer
@@ -57,12 +39,6 @@ def _load_quantized_model(num_threads: int = 8):
 
 
 def _worker_encode(args: tuple) -> list[list[float]]:
-    """
-    Worker function: load bge model (int8), encode a slice of texts, return vectors.
-
-    Runs in a separate process via multiprocessing.Pool.map().
-    args = (texts, input_type)  input_type is always "document" for corpus chunks.
-    """
     texts, input_type, num_threads = args
 
     import warnings
@@ -152,7 +128,6 @@ def run_bulk_ingest() -> None:
 
     log.info("Total: %d | to embed: %d | stale: %d", len(chunks), len(changed), len(stale_ids))
 
-    # Delete stale rows first
     if stale_ids:
         with _connect() as conn:
             with conn.cursor() as cur:
@@ -164,7 +139,6 @@ def run_bulk_ingest() -> None:
     embed_elapsed = 0.0
 
     if changed:
-        # Load int8-quantized model once in main process (8 threads, ~3.3GB RAM)
         import torch
         from torch.quantization import quantize_dynamic
         from sentence_transformers import SentenceTransformer
@@ -241,17 +215,14 @@ def run_bulk_ingest() -> None:
         log.info("Encoding+insert done in %.0fs (%.1f min) | succeeded=%d failed=%d",
                  embed_elapsed, embed_elapsed / 60, succeeded, failed)
 
-    # Rebuild HNSW after bulk insert
     idx = rebuild_hnsw_index()
     log.info("HNSW rebuild: %s", idx["status"])
 
-    # Final row count
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM ask_retrieval_chunks")
             total_rows = cur.fetchone()[0]
 
-    # Report acceptance criteria numbers
     print("\n=== BULK INGEST COMPLETE ===")
     print(f"status       : {'completed' if failed == 0 else 'completed_with_failures'}")
     print(f"total_chunks : {len(chunks)}")

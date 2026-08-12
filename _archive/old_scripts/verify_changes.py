@@ -2,7 +2,6 @@ import sys
 import os
 import pandas as pd
 
-# Add project root to path
 sys.path.append(os.getcwd())
 
 from coolattin.services.datahub import DataHub
@@ -11,8 +10,6 @@ from scripts.generate_audit_report import generate_audit
 def main():
     print("--- Verification Started ---")
     
-    # Force re-precomputation by deleting some markers or just calling it
-    # Actually, let's just delete the matched_records.csv to force it
     matched_path = "coolattin/static/data/matched_records.csv"
     if os.path.exists(matched_path):
         os.remove(matched_path)

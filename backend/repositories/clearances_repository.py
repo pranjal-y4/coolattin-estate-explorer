@@ -1,13 +1,3 @@
-"""
-coolattin/repositories/clearances_repository.py
-
-Local database access for clearances records.
-
-This module is the ONLY place that reads/writes the `clearances_record` table.
-It does not know about SPARQL, HTTP, or business rules.
-
-Source: estate GeoJSON (Clearances_1847 … Clearances_1856).
-"""
 from __future__ import annotations
 
 import logging
@@ -21,7 +11,6 @@ log = logging.getLogger(__name__)
 
 
 def find_by_townland(townland_name: str) -> list[ClearancesRecord]:
-    """Return all clearances records for a townland, ordered by year."""
     canonical = townland_name.strip().upper()
     conn = get_db_conn()
     try:
@@ -41,7 +30,6 @@ def find_by_townland(townland_name: str) -> list[ClearancesRecord]:
 
 
 def find_all() -> list[ClearancesRecord]:
-    """Return all clearances records ordered by townland name and year."""
     conn = get_db_conn()
     try:
         rows = conn.execute(
@@ -58,7 +46,6 @@ def find_all() -> list[ClearancesRecord]:
 
 
 def get_summary_by_townland() -> list[dict]:
-    """Return total clearances per townland (for map/chart display)."""
     conn = get_db_conn()
     try:
         rows = conn.execute(
@@ -88,11 +75,6 @@ def count_records() -> int:
 
 
 def upsert_many(records: list[ClearancesRecord]) -> int:
-    """
-    Insert or update clearances records.
-    Townland rows must already exist (created by townland_repository.upsert).
-    Returns count of upserted records.
-    """
     count = 0
     for rec in records:
         townland_id, _ = townland_repository.get_or_create(

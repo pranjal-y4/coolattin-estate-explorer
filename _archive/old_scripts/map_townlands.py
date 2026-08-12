@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Script to map townlands between GeoJSON and CSV data
-Generates a mapping with exact matches and fuzzy matching
-"""
 
 import json
 import pandas as pd
@@ -11,7 +7,6 @@ import argparse
 import os
 
 def load_geojson_townlands(filepath):
-    """Load townland names from GeoJSON file"""
     with open(filepath, 'r', encoding='utf-8') as f:
         data = json.load(f)
     
@@ -26,7 +21,6 @@ def load_geojson_townlands(filepath):
     return townlands
 
 def load_csv_townlands(filepath):
-    """Load townland names from CSV file"""
     df = pd.read_csv(filepath)
     townlands = []
     for name in df['townland_clean'].unique():
@@ -38,38 +32,29 @@ def load_csv_townlands(filepath):
     return townlands
 
 def fuzzy_match(json_name, csv_name, threshold=85):
-    """Check if names match using fuzzy string matching"""
     score = fuzz.ratio(json_name.upper(), csv_name.upper())
     return score >= threshold, score
 
 def normalize_name(name):
-    """Normalize townland name for matching"""
     name = name.upper()
-    # Remove common variations
     name = name.replace(' CO ', ' ').replace(' OR ', ' ')
-    name = ' '.join(name.split())  # Normalize whitespace
+    name = ' '.join(name.split())
     return name
 
 def map_townlands(json_townlands, csv_townlands, output_file):
-    """Map townlands and generate output"""
-
-    # Create output list
     mappings = []
     unmatched_csv = []
     unmatched_json = []
 
-    # Track matched records
     matched_csv = set()
     matched_json = set()
 
-    # First pass: Exact matches (case-insensitive)
     json_dict = {t['json_name_upper']: t for t in json_townlands}
     csv_dict = {t['csv_name_upper']: t for t in csv_townlands}
 
     for csv_t in csv_townlands:
         csv_name_upper = csv_t['csv_name_upper']
         if csv_name_upper in json_dict:
-            # Exact match
             json_t = json_dict[csv_name_upper]
             mappings.append({
                 'csv_name': csv_t['csv_name'],
@@ -81,7 +66,6 @@ def map_townlands(json_townlands, csv_townlands, output_file):
             matched_csv.add(csv_t['csv_name'])
             matched_json.add(json_t['json_name'])
 
-    # Second pass: Fuzzy matching
     for csv_t in csv_townlands:
         if csv_t['csv_name'] in matched_csv:
             continue
@@ -111,16 +95,12 @@ def map_townlands(json_townlands, csv_townlands, output_file):
         else:
             unmatched_csv.append(csv_t['csv_name'])
 
-    # Collect unmatched JSON townlands
     for json_t in json_townlands:
         if json_t['json_name'] not in matched_json:
             unmatched_json.append(json_t['json_name'])
 
-    # Create DataFrame
     df_mappings = pd.DataFrame(mappings)
 
-    # Add count of records for each matched townland
-    # This will require loading the full CSV data
     full_csv = pd.read_csv('/Users/pranjal/Desktop/Masters/Dissertation/Coolattin-app/coolattin/static/data/aggregated_records.csv')
     townland_counts = full_csv['townland_clean'].value_counts()
 
@@ -129,13 +109,10 @@ def map_townlands(json_townlands, csv_townlands, output_file):
 
     df_mappings['record_count'] = df_mappings['csv_name'].apply(get_count)
 
-    # Reorder columns
     df_mappings = df_mappings[['csv_name', 'json_name', 'match_type', 'match_score', 'record_count', 'approval']]
 
-    # Save to CSV
     df_mappings.to_csv(output_file, index=False)
 
-    # Print summary
     print(f"Mapping Summary:")
     print(f"  Total CSV townlands: {len(csv_townlands)}")
     print(f"  Total JSON townlands: {len(json_townlands)}")
@@ -145,11 +122,9 @@ def map_townlands(json_townlands, csv_townlands, output_file):
     print(f"  Unmatched JSON: {len(unmatched_json)}")
     print(f"\nOutput saved to: {output_file}")
 
-    # Show sample of mappings
     print("\nSample mappings:")
     print(df_mappings.head(20).to_string(index=False))
 
-    # Save unmatched lists
     unmatched_file = output_file.replace('.csv', '_unmatched.txt')
     with open(unmatched_file, 'w') as f:
         f.write("Unmatched CSV townlands:\n")

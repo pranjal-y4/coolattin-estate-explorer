@@ -1,4 +1,3 @@
-// Render Chart.js charts from inline JSON config blocks injected by analytics.html
 document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll("canvas[id]").forEach(canvas => {
     const configEl = document.getElementById(canvas.id + "-config");

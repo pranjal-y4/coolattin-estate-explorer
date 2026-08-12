@@ -1,26 +1,3 @@
-"""
-coolattin/integrations/graphdb_sparql.py
-
-Local GraphDB SPARQL client — D8 RDF/KG comparative prototype.
-
-=====================================================================
-THIS IS THE ONLY MODULE THAT QUERIES THE LOCAL GRAPHDB INSTANCE
-=====================================================================
-
-All GraphDB communication is centralised here so that:
-  - The endpoint URL and timeout come from config, not scattered constants.
-  - Callers never see SPARQL or HTTP — they receive list[dict] bindings.
-  - Unavailability is graceful: returns [] with a logged warning.
-
-Repository: configured via GRAPHDB_SPARQL_ENDPOINT in config / .env
-Default:    http://localhost:7200/repositories/coolattin
-
-RDF prefix convention for the Coolattin KG:
-  co:     https://coolattin.ie/ontology#
-  ex:     https://coolattin.ie/resource/
-  schema: https://schema.org/
-  xsd:    http://www.w3.org/2001/XMLSchema#
-"""
 from __future__ import annotations
 
 import logging
@@ -34,8 +11,8 @@ from config import ActiveConfig
 
 log = logging.getLogger(__name__)
 
-_PROBE_CACHE_TTL_SUCCESS_S = 30.0   # re-check a healthy GraphDB every 30 s
-_PROBE_CACHE_TTL_FAILURE_S = 300.0  # don't spam warnings when GraphDB is offline
+_PROBE_CACHE_TTL_SUCCESS_S = 30.0
+_PROBE_CACHE_TTL_FAILURE_S = 300.0
 _probe_cache: dict[str, float | bool | None] = {
     "checked_at": 0.0,
     "status": None,
@@ -51,24 +28,12 @@ PREFIX rdfs:   <http://www.w3.org/2000/01/rdf-schema#>
 """
 
 
-# ------------------------------------------------------------------ #
-# Internal helpers                                                     #
-# ------------------------------------------------------------------ #
-
 def _execute(sparql: str) -> tuple[list[str], list[dict]]:
-    """
-    Execute a SPARQL SELECT against the local GraphDB repository.
-    Returns (vars, bindings) where vars is the ordered list of selected variable
-    names from head.vars (always complete, even when OPTIONAL fields are unbound
-    in some rows) and bindings is the raw binding list.
-    Raises on HTTP / network error (caller must handle).
-    """
     endpoint = ActiveConfig.GRAPHDB_SPARQL_ENDPOINT
     timeout = ActiveConfig.GRAPHDB_REQUEST_TIMEOUT
     full_query = PREFIXES + "\n" + sparql
     log.debug("graphdb_sparql.execute | preview=%s", full_query[:200].replace("\n", " "))
 
-    # Use POST per SPARQL 1.1 Protocol §2.1.3 — this GraphDB instance hangs on GET
     resp = requests.post(
         endpoint,
         data={"query": full_query},
@@ -100,32 +65,7 @@ def _int_val(binding: dict, key: str) -> Optional[int]:
         return None
 
 
-# ------------------------------------------------------------------ #
-# Public API                                                           #
-# ------------------------------------------------------------------ #
-
 def query(sparql: str) -> tuple[list[str], list[dict]]:
-    """
-    Execute a SPARQL SELECT and return (columns, rows) in table format.
-
-    Always returns safely — callers receive ([], []) if GraphDB is
-    unavailable or the query fails.
-
-    Parameters
-    ----------
-    sparql : str
-        A SPARQL SELECT query (without PREFIX declarations — they are
-        prepended automatically).
-
-    Returns
-    -------
-    columns : list[str]    variable names from the SELECT clause (from head.vars,
-                           so OPTIONAL variables missing in the first binding are
-                           still included)
-    rows    : list[dict]   one dict per result row, keyed by variable name,
-                           matching the format used by SQLite rows so the same
-                           JS renderTable() call works for both backends
-    """
     if not ActiveConfig.GRAPHDB_ENABLED:
         log.debug("graphdb_sparql.disabled")
         return [], []
@@ -145,30 +85,22 @@ def query(sparql: str) -> tuple[list[str], list[dict]]:
     if not vars_:
         return [], []
 
-    # Rows as dicts (keyed by variable name) so the JS renderTable() helper
-    # can access row[columnName] identically for SQL and SPARQL results.
-    # Use head.vars (not bindings[0].keys()) so OPTIONAL columns that happen
-    # to be unbound in the first row are still present in every row dict.
     rows = [{c: _val(b, c) for c in vars_} for b in bindings]
     log.debug("graphdb_sparql.results | columns=%s rows=%d", vars_, len(rows))
     return vars_, rows
 
 
 def _size_endpoint() -> str:
-    """GraphDB REST /size endpoint — returns triple count as plain text, no SPARQL overhead."""
     base = ActiveConfig.GRAPHDB_SPARQL_ENDPOINT.rstrip("/")
-    # endpoint is .../repositories/<name> — append /size
     return base + "/size"
 
 
 def _probe_timeout_seconds() -> int:
-    """Use a short timeout so an unhealthy GraphDB does not stall every Ask request."""
     timeout = int(getattr(ActiveConfig, "GRAPHDB_REQUEST_TIMEOUT", 15) or 15)
     return max(1, min(timeout, 5))
 
 
 def probe(*, force: bool = False) -> bool:
-    """Return True if the GraphDB repository is reachable (uses /size REST endpoint)."""
     global _probe_cache
     if not ActiveConfig.GRAPHDB_ENABLED:
         return False
@@ -196,11 +128,6 @@ def probe(*, force: bool = False) -> bool:
 
 
 def triple_count() -> int:
-    """
-    Return the total number of triples in the repository.
-    Returns 0 if the repo is empty, -1 if unreachable or disabled.
-    Uses the /size REST endpoint to avoid SPARQL query overhead.
-    """
     if not ActiveConfig.GRAPHDB_ENABLED:
         return -1
     if not probe():
@@ -214,24 +141,11 @@ def triple_count() -> int:
         return -1
 
 
-# ── Phase 3 — subgraph neighbourhood expansion ─────────────────────────────
-
 def get_entity_neighborhood(
     entity_label: str,
     k: int = 2,
     max_nodes: int = 50,
 ) -> list[tuple[str, str, str]]:
-    """
-    Fetch the k-hop neighbourhood of a named entity from the local co: graph.
-
-    Returns a list of (subject_label, predicate_label, object_label) triples.
-    Skips blank nodes and geometry literals.  Returns [] gracefully when
-    GraphDB is unavailable, disabled, or the entity is not found.
-
-    The predicate URI is converted to a human-readable label via _pred_label().
-
-    Used by: subgraph_engine._expand_graphdb (Phase 3)
-    """
     if not ActiveConfig.GRAPHDB_ENABLED:
         return []
 
@@ -272,7 +186,6 @@ def get_entity_neighborhood(
             if obj_raw.startswith("http"):
                 seen_mid_uris.add(obj_raw)
 
-    # 2-hop: expand the first few intermediate URI nodes
     if k >= 2 and seen_mid_uris:
         for mid_uri in list(seen_mid_uris)[:4]:
             hop2_sparql = f"""
@@ -312,13 +225,8 @@ def get_entity_neighborhood(
 
 
 def _pred_label(pred_uri: str) -> str:
-    """
-    Convert a predicate URI to a short human-readable label.
-    Returns "" for predicates that should be omitted (rdf:type, geometry).
-    """
     if not pred_uri:
         return ""
-    # Omit geometry and type predicates — too noisy in the context window
     _omit = {
         "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
         "http://www.opengis.net/ont/geosparql#asWKT",
@@ -355,7 +263,6 @@ def _pred_label(pred_uri: str) -> str:
 
 
 def _shorten_uri(uri: str) -> str:
-    """Return a short readable fragment from a full URI, or the value unchanged."""
     if not uri or not uri.startswith("http"):
         return uri
     frag = uri.split("#")[-1] if "#" in uri else uri.rstrip("/").split("/")[-1]
@@ -363,6 +270,5 @@ def _shorten_uri(uri: str) -> str:
 
 
 def _camel_to_words(s: str) -> str:
-    """Convert camelCase / PascalCase to space-separated lower-case words."""
     spaced = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", s)
     return spaced.lower().strip()

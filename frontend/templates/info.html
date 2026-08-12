@@ -1,21 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
 
-<!-- ============================================================
-     INFO PAGE — Coolattin Estate & the Famine Clearances
-     Redesigned as an interactive digital history experience
-     ============================================================ -->
 
 <style>
-/* ═══════════════════════════════════════════════════════════════
-   INFO PAGE — scoped styles
-   ═══════════════════════════════════════════════════════════════ */
 
-/* ── Reset / base ─────────────────────────────────────────── */
 .ip * { box-sizing: border-box; }
 .ip { font-family: var(--font-ui); color: var(--ink); }
 
-/* ── Source pill ──────────────────────────────────────────── */
 .src-pill {
   display: inline-flex; align-items: center; gap: 5px;
   background: rgba(176,141,87,0.12); border: 1px solid rgba(176,141,87,0.35);
@@ -26,9 +17,6 @@
 }
 .src-pill:hover { background: rgba(176,141,87,0.22); }
 
-/* ══════════════════════════════════════════════════════════════
-   1. HERO — full-viewport immersive
-   ══════════════════════════════════════════════════════════════ */
 .ip-hero {
   position: relative; height: 100vh; min-height: 520px;
   display: flex; align-items: center; justify-content: center;
@@ -50,7 +38,6 @@
 }
 .ip-hero-bg.loaded { transform: scale(1); }
 
-/* YouTube Background Video Container */
 .ip-video-bg-wrap {
   position: absolute; inset: 0;
   z-index: 0; pointer-events: none; overflow: hidden;
@@ -124,9 +111,6 @@
 }
 .ip-hero-caption a { color: rgba(255,255,255,0.35); text-decoration: none; }
 
-/* ══════════════════════════════════════════════════════════════
-   2. SCROLL INTRO CARDS
-   ══════════════════════════════════════════════════════════════ */
 .ip-intro-band {
   background: var(--ink); padding: 64px 0;
   overflow: hidden;
@@ -162,9 +146,6 @@
 }
 .ip-dot.active { background: var(--brass); }
 
-/* ══════════════════════════════════════════════════════════════
-   3. ESTATE CONTEXT — two column with Fitzwilliam portrait
-   ══════════════════════════════════════════════════════════════ */
 .ip-section {
   padding: 72px 0;
 }
@@ -215,7 +196,6 @@
   margin-top: 8px; display: block;
 }
 
-/* ── Portrait figure ──────────────────────────────────────── */
 .ip-portrait-wrap {
   position: relative; display: flex; flex-direction: column; align-items: center;
 }
@@ -259,9 +239,6 @@
   border-top: 1px solid var(--line-soft); line-height: 1.5;
 }
 
-/* ══════════════════════════════════════════════════════════════
-   4. SOCIAL HIERARCHY
-   ══════════════════════════════════════════════════════════════ */
 .ip-pyramid {
   max-width: 600px; margin: 0 auto 32px;
   display: flex; flex-direction: column; align-items: center; gap: 0;
@@ -303,9 +280,6 @@
   to   { opacity: 1; transform: none; }
 }
 
-/* ══════════════════════════════════════════════════════════════
-   5. CLEARANCES STEP FLOW
-   ══════════════════════════════════════════════════════════════ */
 .ip-steps {
   display: flex; flex-direction: column; gap: 0; position: relative;
   max-width: 700px; margin: 0 auto;
@@ -349,9 +323,6 @@
 .ip-step-expanded p:last-child { margin: 0; }
 .ip-step.open .ip-step-expanded { display: block; }
 
-/* ══════════════════════════════════════════════════════════════
-   6. TIMELINE
-   ══════════════════════════════════════════════════════════════ */
 .ip-timeline-slider-row {
   display: flex; align-items: center; gap: 18px; margin-bottom: 28px;
 }
@@ -385,9 +356,6 @@
   font-size: 0.85rem; color: var(--ink-muted); line-height: 1.65; margin: 0;
 }
 
-/* ══════════════════════════════════════════════════════════════
-   7. VIDEO SECTION
-   ══════════════════════════════════════════════════════════════ */
 .ip-video-section {
   background: #0c1510; padding: 72px 0; text-align: center;
 }
@@ -422,9 +390,6 @@
   font-size: 0.8rem; color: rgba(255,255,255,0.4); margin-top: 14px;
 }
 
-/* ══════════════════════════════════════════════════════════════
-   8. PHILANTHROPY vs PROFIT — slider
-   ══════════════════════════════════════════════════════════════ */
 .ip-verdict-slider-wrap { margin: 8px 0 32px; }
 .ip-verdict-track {
   display: flex; align-items: center; gap: 14px; margin-bottom: 10px;
@@ -476,9 +441,6 @@
 .ip-vpoint-text { font-size: 0.85rem; color: var(--ink-muted); line-height: 1.6; }
 .ip-vpoint-text strong { display: block; font-size: 0.88rem; color: var(--ink); margin-bottom: 2px; }
 
-/* ══════════════════════════════════════════════════════════════
-   9. HUMAN EXPERIENCE (pattern-based, labelled)
-   ══════════════════════════════════════════════════════════════ */
 .ip-experience-cards {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
   gap: 22px; margin-top: 8px;
@@ -505,9 +467,6 @@
   font-size: 0.86rem; color: var(--ink-muted); line-height: 1.68; margin: 0;
 }
 
-/* ══════════════════════════════════════════════════════════════
-   10. SOURCES
-   ══════════════════════════════════════════════════════════════ */
 .ip-sources-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 32px;
 }
@@ -526,10 +485,8 @@
 .ip-src-list a { color: var(--forest); text-decoration: underline; text-underline-offset: 3px; }
 .ip-src-list strong { color: var(--ink); }
 
-/* ── Section divider ──────────────────────────────────────── */
 .ip-hr { border: none; height: 1px; background: linear-gradient(90deg, transparent, var(--line), transparent); margin: 0; }
 
-/* ── Scroll-reveal ────────────────────────────────────────── */
 .reveal { opacity: 0; transform: translateY(28px); transition: opacity 0.6s ease, transform 0.6s ease; }
 .reveal.visible { opacity: 1; transform: none; }
 .reveal-delay-1 { transition-delay: 0.1s; }
@@ -539,11 +496,7 @@
 
 <div class="ip">
 
-<!-- ══════════════════════════════════════════════════════════════
-     1. HERO
-     ══════════════════════════════════════════════════════════════ -->
 <section class="ip-hero" id="ip-top">
-  <!-- YouTube Background -->
   <div class="ip-video-bg-wrap">
     <div id="ytPlayer"></div>
   </div>
@@ -571,9 +524,6 @@
   </div>
 </section>
 
-<!-- ══════════════════════════════════════════════════════════════
-     2. SCROLL INTRO CARDS
-     ══════════════════════════════════════════════════════════════ -->
 <section class="ip-intro-band" id="ip-intro">
   <div class="container" style="max-width:640px;">
     <div style="overflow:hidden;">
@@ -611,9 +561,6 @@
 
 <hr class="ip-hr">
 
-<!-- ══════════════════════════════════════════════════════════════
-     3. ESTATE CONTEXT + FITZWILLIAM PORTRAIT
-     ══════════════════════════════════════════════════════════════ -->
 <section class="ip-section" id="ip-estate">
   <div class="container">
     <div class="ip-two-col">
@@ -686,9 +633,6 @@
 
 <hr class="ip-hr">
 
-<!-- ══════════════════════════════════════════════════════════════
-     4. SOCIAL HIERARCHY
-     ══════════════════════════════════════════════════════════════ -->
 <section class="ip-section alt" id="ip-hierarchy">
   <div class="container">
     <span class="ip-tag">Society</span>
@@ -700,7 +644,6 @@
     <div class="ip-two-col" style="align-items:center;">
       <div class="reveal">
         <div class="ip-pyramid" id="ipPyramid">
-          <!-- rows injected by JS -->
         </div>
         <p style="font-size:0.75rem;color:var(--ink-muted);text-align:center;margin-top:4px;">
           Click any tier to expand details
@@ -733,9 +676,6 @@
 
 <hr class="ip-hr">
 
-<!-- ══════════════════════════════════════════════════════════════
-     5. TIMELINE SLIDER
-     ══════════════════════════════════════════════════════════════ -->
 <section class="ip-section" id="ip-timeline">
   <div class="container">
     <span class="ip-tag">Chronology</span>
@@ -754,9 +694,6 @@
 
 <hr class="ip-hr">
 
-<!-- ══════════════════════════════════════════════════════════════
-     6. CLEARANCES STEP FLOW
-     ══════════════════════════════════════════════════════════════ -->
 <section class="ip-section alt" id="ip-clearances">
   <div class="container">
     <span class="ip-tag">The Clearances 1847–1856</span>
@@ -766,19 +703,13 @@
       Based on agent correspondence in the Fitzwilliam Papers (NLI MS 4974–4975).
     </p>
     <div class="ip-steps reveal reveal-delay-2" id="ipSteps">
-      <!-- steps injected by JS -->
     </div>
   </div>
 </section>
 
 
-
-
 <hr class="ip-hr">
 
-<!-- ══════════════════════════════════════════════════════════════
-     8. PHILANTHROPY vs PROFIT SLIDER
-     ══════════════════════════════════════════════════════════════ -->
 <section class="ip-section" id="ip-debate">
   <div class="container">
     <span class="ip-tag">Historical Debate</span>
@@ -881,9 +812,6 @@
 
 <hr class="ip-hr">
 
-<!-- ══════════════════════════════════════════════════════════════
-     9. HUMAN EXPERIENCE (pattern-based, clearly labelled)
-     ══════════════════════════════════════════════════════════════ -->
 <section class="ip-section alt" id="ip-human">
   <div class="container">
     <span class="ip-tag">Human Experience</span>
@@ -961,9 +889,6 @@
 
 <hr class="ip-hr">
 
-<!-- ══════════════════════════════════════════════════════════════
-     10. LEGACY
-     ══════════════════════════════════════════════════════════════ -->
 <section class="ip-section dark" id="ip-legacy">
   <div class="container">
     <div class="ip-two-col">
@@ -1030,9 +955,6 @@
 
 <hr class="ip-hr">
 
-<!-- ══════════════════════════════════════════════════════════════
-     11. SOURCES
-     ══════════════════════════════════════════════════════════════ -->
 <section class="ip-section" id="ip-sources">
   <div class="container">
     <span class="ip-tag">Credibility &amp; Sourcing</span>
@@ -1106,24 +1028,18 @@
   </div>
 </section>
 
-</div><!-- /ip -->
+</div>
 
-<!-- ══════════════════════════════════════════════════════════════
-     JAVASCRIPT
-     ══════════════════════════════════════════════════════════════ -->
-<!-- YouTube IFrame API -->
 <script src="https://www.youtube.com/iframe_api"></script>
 
 <script>
 (function () {
 "use strict";
 
-/* ── YouTube Background Theme ─────────────────────────── */
 const VIDEO_ID = 'L4_a80T4_1g';
 let player;
 const heroBg = document.getElementById("ipHeroBg");
 
-// Show fallback image initially
 if (heroBg) heroBg.classList.add("has-image");
 
 window.onYouTubeIframeAPIReady = function() {
@@ -1135,7 +1051,7 @@ window.onYouTubeIframeAPIReady = function() {
       'showinfo': 0,
       'modestbranding': 1,
       'loop': 1,
-      'playlist': VIDEO_ID, // Required for loop
+      'playlist': VIDEO_ID,
       'fs': 0,
       'cc_load_policy': 0,
       'iv_load_policy': 3,
@@ -1152,9 +1068,7 @@ window.onYouTubeIframeAPIReady = function() {
       },
       'onStateChange': (event) => {
         if (event.data === YT.PlayerState.PLAYING) {
-          // Attempt to force quality again once playing
           event.target.setPlaybackQuality('hd1080');
-          // Remove fallback image once video starts
           if (heroBg) heroBg.classList.remove("has-image");
         }
         if (event.data === YT.PlayerState.ENDED) {
@@ -1171,7 +1085,6 @@ window.updateBgVideo = function() {
   let val = input.value.trim();
   if (!val) return;
 
-  // Extract ID if full URL
   const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
   const match = val.match(regExp);
   const id = (match && match[2].length === 11) ? match[2] : val;
@@ -1190,24 +1103,20 @@ window.updateBgVideo = function() {
   }
 };
 
-/* ── Hero parallax / load animation ──────────────────────── */
 if (heroBg) {
   requestAnimationFrame(() => heroBg.classList.add("loaded"));
   window.addEventListener("scroll", () => {
     const y = window.scrollY;
-    // Keep heroBg above the video but animate its parallax
     heroBg.style.transform = `scale(1) translateY(${y * 0.25}px)`;
   }, { passive: true });
 }
 
-/* ── Scroll reveal ────────────────────────────────────────── */
 const revealEls = document.querySelectorAll(".reveal");
 const revealObs = new IntersectionObserver((entries) => {
   entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add("visible"); revealObs.unobserve(e.target); } });
 }, { threshold: 0.12 });
 revealEls.forEach(el => revealObs.observe(el));
 
-/* ── Intro card carousel ──────────────────────────────────── */
 const CARD_COUNT = 5;
 let currentCard = 0;
 const track = document.getElementById("ipIntroTrack");
@@ -1226,11 +1135,9 @@ for (let i = 0; i < CARD_COUNT; i++) {
   dotsEl.appendChild(btn);
 }
 
-// Auto-advance
 let autoTimer = setInterval(() => goToCard(currentCard + 1), 4000);
 track.addEventListener("click", () => { clearInterval(autoTimer); goToCard(currentCard + 1); });
 
-/* ── Social hierarchy ─────────────────────────────────────── */
 const TIERS = [
   {
     cls: "t1", name: "Earl Fitzwilliam", sub: "Absentee landowner · Sheffield, England",
@@ -1275,7 +1182,6 @@ if (pyramid) {
     row.querySelector(".ip-tier").addEventListener("click", () => {
       const det = document.getElementById("ipTier" + i);
       const isOpen = det.classList.contains("open");
-      // Close all
       TIERS.forEach((_, j) => document.getElementById("ipTier" + j).classList.remove("open"));
       if (!isOpen) det.classList.add("open");
     });
@@ -1283,7 +1189,6 @@ if (pyramid) {
   });
 }
 
-/* ── Timeline slider ─────────────────────────────────────── */
 const EVENTS = [
   { year: 1845, title: "Blight Arrives", text: "Phytophthora infestans devastates the potato crop across Ireland for the first time. In Wicklow the failure is partial but severe in many townlands. No major estate response yet." },
   { year: 1846, title: "Total Crop Failure", text: "A second consecutive complete failure of the potato crop. Hunger becomes widespread across Wicklow. The Fitzwilliam estate records mounting arrears and increasing distress among cottiers and labourers." },
@@ -1321,7 +1226,6 @@ if (rangeEl) {
   renderTimeline(1845);
 }
 
-/* ── Steps ────────────────────────────────────────────────── */
 const STEPS = [
   {
     title: "Identification of tenants",
@@ -1380,11 +1284,9 @@ if (stepsEl) {
     });
     stepsEl.appendChild(div);
   });
-  // Open first by default
   stepsEl.querySelector(".ip-step").classList.add("open");
 }
 
-/* ── Philanthropy slider ──────────────────────────────────── */
 const verdictRange = document.getElementById("ipVerdictRange");
 const philCol  = document.getElementById("ipPhilCol");
 const profitCol = document.getElementById("ipProfitCol");
@@ -1404,11 +1306,9 @@ if (verdictRange) {
   updateVerdict(50);
 }
 
-/* ── Video placeholder ────────────────────────────────────── */
 window.loadVideo = function () {
   const area = document.getElementById("ipVideoArea");
   if (!area) return;
-  // Replace placeholder with a note — no specific video URL verified
   area.innerHTML = `
     <div style="padding:40px 24px;color:rgba(255,255,255,0.6);text-align:center;">
       <div style="font-size:2rem;margin-bottom:12px;">🎬</div>

@@ -1,25 +1,3 @@
-"""
-scripts/eval_fallback_live.py
-
-Part B live evaluation of the LLM fallback path.
-
-For the 16 cases that reach template_miss in D10:
-  1. Exec accuracy   — does the LLM SQL return the oracle answer?
-  2. Hallucination   — numbers in the prose answer not in the result rows
-  3. Verifier catch  — cross-verifier.verdict = 'disagree' on hallucinated cases
-  4. Refusal rate    — G-series cases where LLM correctly declines to answer
-
-Usage (Flask server must be running):
-    python3 app.py                         # in one terminal
-    python3 scripts/eval_fallback_live.py  # in another
-
-    # Or with a custom URL / timeout:
-    python3 scripts/eval_fallback_live.py --url http://127.0.0.1:5001 --timeout 120
-
-Output:
-    eval_results/eval_fallback_live.json
-    eval_results/eval_fallback_live.md
-"""
 from __future__ import annotations
 
 import argparse
@@ -35,30 +13,18 @@ from typing import Any
 
 import requests
 
-# ── Path bootstrap ─────────────────────────────────────────────────────────────
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
 from backend.services.ask_eval import GOLDEN_CASES, EvalCase  # noqa: E402
 
 
-# ── Fallback case manifest ─────────────────────────────────────────────────────
-# Only cases expected_route == "llm" are run live.
-# Separated into in-scope (data IS in DB → measure exec accuracy) and
-# G-series / out-of-scope (LLM should refuse → measure refusal rate).
-
 _FALLBACK_CASES = [c for c in GOLDEN_CASES if c.expected_route == "llm"]
 _INSCOPE   = [c for c in _FALLBACK_CASES if not c.is_out_of_scope]
 _OUTSCOPE  = [c for c in _FALLBACK_CASES if c.is_out_of_scope]
 
 
-# ── Oracle SQL runner ──────────────────────────────────────────────────────────
-
 def _run_oracle(case: EvalCase, db_path: Path) -> tuple[bool, Any]:
-    """
-    Execute case.ground_truth_sql directly against the DB.
-    Returns (ok, scalar_value).  For cases with no oracle SQL, returns (None, None).
-    """
     if not case.ground_truth_sql or case.ground_truth_type is None:
         return None, None
     try:
@@ -76,35 +42,12 @@ def _run_oracle(case: EvalCase, db_path: Path) -> tuple[bool, Any]:
         return False, str(exc)[:80]
 
 
-# ── SSE client ────────────────────────────────────────────────────────────────
-
 def _ask_live(
     question: str,
     base_url: str,
     timeout_s: int = 300,
     chunk_timeout_s: int = 90,
 ) -> dict[str, Any]:
-    """
-    POST to /api/ask/query, parse the SSE stream, and return the final result
-    event payload plus extracted metrics.
-
-    Uses a wall-clock deadline via a background thread so slow LLM calls don't
-    stall the eval indefinitely. The per-chunk read timeout is set to 90s (enough
-    for one LLM round-trip) and a wall-clock deadline to timeout_s.
-
-    Returns a dict with keys:
-      status                : "ok" | "error" | "timeout"
-      final_sql             : str | None — SQL compiled/generated
-      result_rows           : list[dict]
-      answer_text           : str — answer shown to user (LLM or raw)
-      llm_synthesized_text  : str — LLM-synthesized prose (blank if gate discarded)
-      verifier_verdict      : "agree" | "disagree" | "skip" | None
-      verifier_unsupported  : list[str]
-      gate_outcome          : str — "not_applied" | "pass" | "regenerated" | "fallback"
-      query_strategy        : str — query_provenance.strategy
-      elapsed_s             : float
-      error                 : str | None
-    """
     url = f"{base_url}/api/ask/query"
     payload = {"question": question}
 
@@ -132,8 +75,6 @@ def _ask_live(
                 url,
                 json=payload,
                 stream=True,
-                # chunk read timeout: resets on each SSE chunk, not total.
-                # Wall-clock deadline is enforced by the threading.Event below.
                 timeout=(10, chunk_timeout_s),
                 headers={"Accept": "text/event-stream"},
             )
@@ -178,12 +119,10 @@ def _ask_live(
 
 
 def _process_sse_event(event: dict, out: dict) -> None:
-    """Extract fields from a single SSE event and mutate out."""
     etype = event.get("type")
     if etype != "result":
         return
 
-    # SQL — the result event has structured_output.queries at top level
     structured_output = event.get("structured_output", {})
     queries = structured_output.get("queries", {})
     out["final_sql"] = (
@@ -191,54 +130,37 @@ def _process_sse_event(event: dict, out: dict) -> None:
         or queries.get("vrti_postgresql_query")
     )
 
-    # Result rows — local_database.rows inside structured_output
     db_table = structured_output.get("processed_tables", {}).get("local_database", {})
     out["result_rows"] = db_table.get("rows", [])
 
-    # Answer text: the result event spreads payload at top level.
-    # llm_rephrased_answer is the LLM-synthesized prose; "answer" is the raw fallback.
-    # The numeric gate may blank llm_rephrased_answer (outcome=fallback) — check both.
     out["answer_text"] = (
         event.get("llm_rephrased_answer")
         or event.get("answer")
         or event.get("actual_answer")
         or ""
     )
-    # Also track the LLM-synthesized text separately (may be blanked by gate)
     out["llm_synthesized_text"] = event.get("llm_rephrased_answer") or ""
 
-    # Verifier
     prov = event.get("query_provenance", {})
     verifier = prov.get("verifier", {})
     out["verifier_verdict"] = verifier.get("verdict")
     out["verifier_unsupported"] = verifier.get("unsupported_claims", [])
 
-    # Numeric gate
     out["gate_outcome"] = prov.get("numeric_gate_outcome", "not_applied")
     out["gate_blocked_synthesis"] = prov.get("gate_blocked_synthesis", "")
     out["gate_violations"] = prov.get("gate_violations", [])
     out["query_strategy"] = prov.get("strategy", "")
 
 
-# ── Hallucination checker ─────────────────────────────────────────────────────
-
 def _extract_numbers(text: str) -> set[str]:
-    """Extract normalised numeric tokens from text (strips thousands-commas and list markers)."""
-    # Strip markdown ordered list markers ("1. " "2. " at line start) — same normalisation
-    # as the gate's _gate_violations so the two checkers agree on what counts as a number.
     stripped = re.sub(r"(?m)^\s*\d+\.\s+", " ", text or "")
     cleaned = re.sub(r'(?<=\d),(?=\d{3}(?:[^\d]|$))', '', stripped)
     return {m for m in re.findall(r"-?\d+(?:\.\d+)?", cleaned)}
 
 
 def _allowed_numbers(result_rows: list[dict], question: str = "") -> set[str]:
-    """
-    Build the allowlist: all numbers in result rows, plus numbers in the question
-    itself (e.g. year 1841 in "population of X in 1841?").
-    """
     base = _extract_numbers(json.dumps(result_rows, default=str))
     base |= _extract_numbers(question)
-    # Expand digit sub-sequences so "6016" allows "6", "60", "601", …
     expanded: set[str] = set(base)
     for tok in set(base):
         if tok.lstrip("-").isdigit() and len(tok) > 1:
@@ -254,11 +176,6 @@ def _hallucination_check(
     result_rows: list[dict],
     question: str = "",
 ) -> tuple[bool, list[str]]:
-    """
-    Return (has_hallucination, list_of_unsupported_numbers).
-    A hallucination occurs when a number in the answer is not in the allowlist.
-    Returns (False, []) when answer_text is empty or has no numbers.
-    """
     if not answer_text:
         return False, []
     answer_nums = _extract_numbers(answer_text)
@@ -270,10 +187,6 @@ def _hallucination_check(
 
 
 def _is_refusal(answer_text: str) -> bool:
-    """
-    Heuristic: did the LLM refuse to answer (no data, not available, etc.)?
-    Checks for common refusal phrases; returns True if it appears to refuse.
-    """
     if not answer_text:
         return False
     lower = answer_text.lower()
@@ -286,8 +199,6 @@ def _is_refusal(answer_text: str) -> bool:
     ]
     return any(p in lower for p in refusal_phrases)
 
-
-# ── Numeric closeness ─────────────────────────────────────────────────────────
 
 def _close_enough(a: Any, b: Any, rtol: float = 0.02) -> bool:
     if a is None or b is None:
@@ -306,29 +217,20 @@ def _exec_accuracy_check(
     live_rows: list[dict],
     oracle_value: Any,
 ) -> bool | None:
-    """
-    Check whether the live result rows contain the oracle answer.
-    Returns None if oracle is unavailable.
-    """
     if oracle_value is None or case.ground_truth_key is None:
-        # Try expected_answer_facts as a fallback check
         if case.expected_answer_facts and live_rows:
             rows_str = json.dumps(live_rows, default=str).lower()
             return all(f.lower() in rows_str for f in case.expected_answer_facts)
         return None
-    # Check every row for the oracle value in the key column
     for row in live_rows:
         if case.ground_truth_key in row and _close_enough(row[case.ground_truth_key], oracle_value):
             return True
-    # Also check all values (LLM might use a different alias)
     for row in live_rows:
         for v in row.values():
             if _close_enough(v, oracle_value):
                 return True
     return False
 
-
-# ── Per-case evaluation ────────────────────────────────────────────────────────
 
 def eval_fallback_case(
     case: EvalCase,
@@ -337,7 +239,6 @@ def eval_fallback_case(
     timeout_s: int,
     chunk_timeout_s: int = 90,
 ) -> dict[str, Any]:
-    """Run one fallback case live and return the result dict."""
     print(f"  [{case.id}] ...", end=" ", flush=True)
 
     oracle_ok, oracle_value = _run_oracle(case, db_path)
@@ -345,15 +246,10 @@ def eval_fallback_case(
 
     gate = live["gate_outcome"]
 
-    # Hallucination check: for LLM-synthesized text (what was intended to be shown).
-    # If gate_outcome=fallback, the LLM text was discarded — gate caught it.
-    # We check the final answer_text for hallucinations (what user actually sees).
     has_hallucination, unsupported_nums = _hallucination_check(
         live["answer_text"], live["result_rows"], case.question
     )
-    # Also track whether the LLM synthesis had violations caught by the gate
     gate_caught = gate in ("fallback", "regenerated")
-    # Did the LLM attempt a synthesis (non-empty synthesized text OR gate caught it)?
     llm_synthesized = bool(live["llm_synthesized_text"] or gate_caught)
 
     exec_acc = None
@@ -377,7 +273,6 @@ def eval_fallback_case(
         "oracle_sql": case.ground_truth_sql,
         "oracle_value": oracle_value,
         "oracle_sql_ok": oracle_ok,
-        # Live results
         "live_status": live["status"],
         "live_sql": live["final_sql"],
         "live_rows": live["result_rows"],
@@ -385,7 +280,6 @@ def eval_fallback_case(
         "llm_synthesized": live["llm_synthesized_text"][:500] if live["llm_synthesized_text"] else "",
         "live_elapsed_s": live["elapsed_s"],
         "live_error": live["error"],
-        # Metrics
         "exec_acc": exec_acc,
         "has_hallucination": has_hallucination,
         "unsupported_numbers": unsupported_nums,
@@ -401,35 +295,27 @@ def eval_fallback_case(
     }
 
 
-# ── Metrics aggregation ────────────────────────────────────────────────────────
-
 def compute_metrics(results: list[dict]) -> dict[str, Any]:
     ok_results = [r for r in results if r["live_status"] in ("ok", "timeout_partial")]
     inscope = [r for r in results if not r["is_out_of_scope"]]
     outscope = [r for r in results if r["is_out_of_scope"]]
     timed_out = [r for r in results if r["live_status"] == "timeout"]
 
-    # Exec accuracy — in-scope cases only (where oracle SQL exists and request completed)
     exec_tested = [r for r in inscope if r["exec_acc"] is not None and r["live_status"] == "ok"]
     exec_pass = [r for r in exec_tested if r["exec_acc"]]
 
-    # Hallucination rate — all cases with a non-empty answer that completed
     with_answer = [r for r in ok_results if r.get("live_answer")]
     hallucinated = [r for r in with_answer if r["has_hallucination"]]
 
-    # Cross-verifier catch rate — hallucinated cases where verifier fired
     verifier_tested = [r for r in hallucinated if r["verifier_verdict"] in ("agree", "disagree")]
     verifier_caught = [r for r in verifier_tested if r["verifier_verdict"] == "disagree"]
 
-    # Verifier overall (all answered cases where verifier ran)
     all_verifier_ran = [r for r in with_answer if r["verifier_verdict"] in ("agree", "disagree")]
 
-    # Numeric gate catches — cases where LLM synthesis was attempted and gate fired
     synth_attempted = [r for r in ok_results if r.get("llm_synthesized_attempt")]
     gate_caught = [r for r in synth_attempted if r["gate_caught"]]
     gate_pass = [r for r in synth_attempted if r["gate_outcome"] == "pass"]
 
-    # G-series: refusal rate (completed requests only)
     outscope_completed = [r for r in outscope if r["live_status"] == "ok"]
     outscope_with_answer = [r for r in outscope_completed if r.get("live_answer")]
     outscope_refused = [r for r in outscope_with_answer if r["refused"]]
@@ -440,33 +326,26 @@ def compute_metrics(results: list[dict]) -> dict[str, Any]:
         "n_timed_out": len(timed_out),
         "n_inscope": len(inscope),
         "n_outscope": len(outscope),
-        # Exec accuracy
         "exec_acc_n": len(exec_tested),
         "exec_acc_pass": len(exec_pass),
         "exec_acc_rate": round(100 * len(exec_pass) / len(exec_tested), 1) if exec_tested else None,
-        # Hallucination
         "answered_n": len(with_answer),
         "hallucinated_n": len(hallucinated),
         "hallucination_rate": round(100 * len(hallucinated) / len(with_answer), 1) if with_answer else None,
-        # Cross-verifier
         "verifier_tested_n": len(verifier_tested),
         "verifier_caught_n": len(verifier_caught),
         "verifier_catch_rate": round(100 * len(verifier_caught) / len(verifier_tested), 1) if verifier_tested else None,
         "verifier_ran_n": len(all_verifier_ran),
-        # Numeric gate
         "synth_attempted_n": len(synth_attempted),
         "gate_caught_n": len(gate_caught),
         "gate_pass_n": len(gate_pass),
         "gate_catch_rate": round(100 * len(gate_caught) / len(synth_attempted), 1) if synth_attempted else None,
-        # G-series refusal
         "outscope_completed_n": len(outscope_completed),
         "outscope_with_answer_n": len(outscope_with_answer),
         "outscope_refused_n": len(outscope_refused),
         "outscope_refusal_rate": round(100 * len(outscope_refused) / len(outscope_with_answer), 1) if outscope_with_answer else None,
     }
 
-
-# ── Markdown report ────────────────────────────────────────────────────────────
 
 def generate_report(results: list[dict], metrics: dict, phase: str) -> str:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -623,8 +502,6 @@ def generate_report(results: list[dict], metrics: dict, phase: str) -> str:
     return "\n".join(lines)
 
 
-# ── CLI ────────────────────────────────────────────────────────────────────────
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Live evaluation of LLM fallback path")
     parser.add_argument("--url", default="http://127.0.0.1:5001", help="Flask app base URL")
@@ -641,7 +518,6 @@ def main() -> None:
         print(f"ERROR: database not found at {db_path}")
         sys.exit(1)
 
-    # Resolve case list
     cases = _FALLBACK_CASES
     if args.ids:
         id_set = set(args.ids)
@@ -650,7 +526,6 @@ def main() -> None:
             print(f"ERROR: no cases matched IDs: {args.ids}")
             sys.exit(1)
 
-    # Health check
     print(f"Checking Flask server at {args.url} …")
     try:
         resp = requests.get(f"{args.url}/", timeout=5)
@@ -684,7 +559,6 @@ def main() -> None:
     print(f"  G-series refusal rate:      {metrics['outscope_refusal_rate']}%  ({metrics['outscope_refused_n']}/{metrics['outscope_with_answer_n']})")
     print("═" * 60)
 
-    # Save outputs
     out_dir = _ROOT / "eval_results"
     out_dir.mkdir(exist_ok=True)
 

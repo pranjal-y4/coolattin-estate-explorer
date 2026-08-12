@@ -72,7 +72,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let dropdownActiveIdx = -1;
   let closeDropdownTimer = null;
 
-  // Pre-load full townland catalog on page load for instant client-side filtering.
   let _townlandCatalog = null;
   fetch("/api/ask/townland-catalog")
     .then(r => r.ok ? r.json() : null)
@@ -100,7 +99,6 @@ document.addEventListener("DOMContentLoaded", () => {
     return results.slice(0, 8);
   }
 
-  // ── Utilities ──────────────────────────────────────────────────────────────
   function setStatus(msg, stageLabel) {
     if (statusEl) statusEl.textContent = msg || "";
     if (loadingBannerTextEl && msg) loadingBannerTextEl.textContent = msg;
@@ -124,7 +122,6 @@ document.addEventListener("DOMContentLoaded", () => {
       .replaceAll("'", "&#39;");
   }
 
-  // Configure marked.js (loaded via marked.min.js before this script)
   marked.use({ gfm: true, breaks: false });
 
   function markdownToHtml(text) {
@@ -132,10 +129,8 @@ document.addEventListener("DOMContentLoaded", () => {
     return marked.parse(String(text));
   }
 
-  // ── Townland autocomplete dropdown ─────────────────────────────────────────
   const ALL_TOWNLANDS_ITEM = { name: null, _isAll: true };
 
-  // Single delegated listener — more reliable than per-item mousedown bindings
   if (hintDropdownEl) {
     hintDropdownEl.addEventListener("pointerdown", (e) => {
       const option = e.target.closest(".tl-option");
@@ -229,7 +224,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     hintEl.addEventListener("input", () => {
-      // Typing clears an "All Townlands" selection
       if (hintEl.dataset.isAll) {
         delete hintEl.dataset.isAll;
         hintEl.style.color = "";
@@ -240,7 +234,6 @@ document.addEventListener("DOMContentLoaded", () => {
       if (val.length === 0) { renderDropdown([], true); return; }
       if (val.length < 2) { closeDropdown(); return; }
 
-      // Use pre-loaded catalog for instant filtering; fall back to network if not ready
       const clientResults = _filterTownlandsClientSide(val);
       if (clientResults !== null) {
         renderDropdown(clientResults, true);
@@ -276,7 +269,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // ── Warnings ───────────────────────────────────────────────────────────────
   function renderWarnings(list) {
     if (!warningsEl) return;
     const warnings = Array.isArray(list) ? list.filter(Boolean) : [];
@@ -287,7 +279,6 @@ document.addEventListener("DOMContentLoaded", () => {
       ).join("") + `</div>`;
   }
 
-  // ── Suggestions / Insights ─────────────────────────────────────────────────
   function renderSuggestions(payload) {
     if (!suggestionsBlockEl || !suggestionsEl) return;
     const availability = payload?.availability || payload?.structured_output?.availability || {};
@@ -320,7 +311,6 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>`).join("");
   }
 
-  // ── Badge helpers ──────────────────────────────────────────────────────────
   const _laneLabels = {
     analytical_rule: "ANALYTICAL · semantic rule",
     analytical_llm:  "ANALYTICAL · LLM SQL",
@@ -356,7 +346,6 @@ document.addEventListener("DOMContentLoaded", () => {
       + `${escapeHtml(label)}</span>`;
   }
 
-  // ── Explainability & Justification (Section 3) ────────────────────────────
   function renderExplainability(payload) {
     if (!explainContentEl) return;
     const provenance = payload?.query_provenance || payload?.structured_output?.query_provenance || {};
@@ -366,14 +355,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const sections = [];
 
-    // ── Tables queried ────────────────────────────────────────────────────
     sections.push({
       label: "Tables Queried",
       desc: "These are the database tables the system accessed to construct this answer. Each table holds a different category of estate records — unified person records, townland geography, census population counts, or clearance events.",
       value: srcTables.length ? srcTables.join(", ") : "Not recorded for this query.",
     });
 
-    // ── Rows retrieved ────────────────────────────────────────────────────
     const kgRows = structured.processed_tables?.vrti_graph?.row_count ?? 0;
     sections.push({
       label: "Records Retrieved",
@@ -382,7 +369,6 @@ document.addEventListener("DOMContentLoaded", () => {
              (kgRows ? ` · ${kgRows} row${kgRows !== 1 ? "s" : ""} from the VRTI Knowledge Graph` : " · Knowledge Graph not queried for this question"),
     });
 
-    // ── Filters applied ───────────────────────────────────────────────────
     const sql = (structured.queries?.local_sqlite_query || payload.sql || "").toUpperCase();
     const filterParts = [];
     if (sql.includes("HAS_EMIGRATION_RECORD = 1"))  filterParts.push("emigrants only");
@@ -405,7 +391,6 @@ document.addEventListener("DOMContentLoaded", () => {
       value: filterParts.length ? filterParts.join(" · ") : "No specific filters applied. Estate-wide or unfiltered query.",
     });
 
-    // ── Geographic scope ──────────────────────────────────────────────────
     const tr = payload?.townland_resolution;
     if (tr?.name) {
       const pct = tr.confidence != null ? `, ${Math.round(tr.confidence * 100)}% confidence` : "";
@@ -422,7 +407,6 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
 
-    // ── KG subgraph ───────────────────────────────────────────────────────
     if (provenance?.subgraph_node_count != null) {
       const sources = Array.isArray(provenance.subgraph_sources)
         ? provenance.subgraph_sources.join(", ") : "VRTI";
@@ -433,7 +417,6 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
 
-    // ── Query strategy ────────────────────────────────────────────────────
     const stratDescriptions = {
       "semantic_layer_rule":        "Deterministic rule. The answer was computed directly from a pre-defined template with no language model involvement. This is the most reliable path.",
       "verified_analysis":          "Verified template. A pre-approved query pattern was used and cross-checked for numeric consistency.",
@@ -452,7 +435,6 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
 
-    // ── Memory reuse ──────────────────────────────────────────────────────
     if (provenance?.direct_memory_reuse) {
       sections.push({
         label: "Pattern Reuse",
@@ -472,7 +454,6 @@ document.addEventListener("DOMContentLoaded", () => {
       `<p style="font-size:12px;color:#94a3b8;margin:0;">No trace data available for this query.</p>`;
   }
 
-  // ── Provenance (technical details section) ────────────────────────────────
   function renderProvenance(payload) {
     if (!provenanceEl) return;
     const provenance = payload?.query_provenance || payload?.structured_output?.query_provenance || {};
@@ -481,7 +462,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const gateBadgeEl       = $("askGateBadge");
     const verifierBadgeEl   = $("askVerifierBadge");
 
-    // Confidence tier badge (top bar)
     const strategy = provenance?.strategy || "";
     if (confidenceBadgeEl) {
       const conf = _strategyConfidence[strategy];
@@ -493,7 +473,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    // Numeric gate badge (explainability section)
     if (gateBadgeEl) {
       const gate = provenance?.numeric_gate_outcome;
       if (gate && gate !== "not_applied") {
@@ -510,7 +489,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    // Cross-verifier badge
     if (verifierBadgeEl) {
       const verifier = provenance?.verifier;
       if (verifier && verifier.verdict !== "skip") {
@@ -529,7 +507,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    // Lane badge (top bar)
     if (retrievalLaneEl) {
       const route = provenance?.route;
       const lane  = provenance?.lane;
@@ -546,7 +523,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    // Detail rows in technical section
     const srcTables = Array.isArray(payload?.source_tables) ? payload.source_tables : [];
     const rows = [
       `SQL source: ${provenance?.direct_memory_reuse ? "approved query memory" : payload?.llm?.mode || "generated"}.`,
@@ -575,12 +551,10 @@ document.addEventListener("DOMContentLoaded", () => {
       .map(line => `<div style="padding:7px 9px;border:1px solid #e2e8f0;background:#f8fafc;border-radius:8px;">${escapeHtml(line)}</div>`)
       .join("");
 
-    // Also hide the standalone source tables label (it's in explainability now)
     const srcTablesEl = $("askSourceTables");
     if (srcTablesEl) srcTablesEl.style.display = "none";
   }
 
-  // ── Townland resolution banner ─────────────────────────────────────────────
   function renderTownlandResolution(resolution) {
     if (!townlandResEl) return;
     if (!resolution || (!resolution.warning && !resolution.matched && !(resolution.suggestions || []).length)) {
@@ -608,7 +582,6 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>`;
   }
 
-  // ── KG townland context ────────────────────────────────────────────────────
   function renderKg(kg) {
     if (!kgBlockEl || !kgContentEl) return;
     if (!kg || !Array.isArray(kg.townlands) || !kg.townlands.length) {
@@ -640,7 +613,6 @@ document.addEventListener("DOMContentLoaded", () => {
     kgSectionEl.style.display = (hasKgTable || hasKgGeo) ? "block" : "none";
   }
 
-  // ── Estate-wide overview panel ────────────────────────────────────────────
   async function renderEstateOverview(isEstateWide) {
     if (!estateOverviewEl || !estateOverviewBodyEl) return;
     if (!isEstateWide) { estateOverviewEl.style.display = "none"; return; }
@@ -653,7 +625,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const n = (v) => escapeHtml(v == null ? "—" : String(v));
 
-      // ── helpers ──────────────────────────────────────────────────────────
       const statCard = (label, value, sub) => `
         <div style="padding:12px 14px;border:1px solid #bfdbfe;background:#fff;border-radius:10px;">
           <div style="font-size:10px;font-weight:700;color:#1e40af;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px;">${escapeHtml(label)}</div>
@@ -678,7 +649,6 @@ document.addEventListener("DOMContentLoaded", () => {
           </div>`
         ).join("");
 
-      // ── Section 1: County Wicklow geography ──────────────────────────────
       const geoCards = [
         statCard("Townlands",       data.townland_count, "in County Wicklow"),
         statCard("Civil Parishes",  data.parish_count,   "administrative divisions"),
@@ -692,17 +662,14 @@ document.addEventListener("DOMContentLoaded", () => {
           : "",
       ].filter(Boolean).join("");
 
-      // Baronies list
       const baroniesHtml = Array.isArray(data.baronies) && data.baronies.length
         ? data.baronies.map(pill).join("")
         : "<span style='font-size:12px;color:#94a3b8;'>No barony data in database</span>";
 
-      // Top parishes by townland count
       const topParishHtml = Array.isArray(data.top_parishes_by_townlands) && data.top_parishes_by_townlands.length
         ? rankRow(data.top_parishes_by_townlands, "parish", "townland_count", "townlands")
         : "<span style='font-size:12px;color:#94a3b8;'>No parish data</span>";
 
-      // ── Section 2: Census & population ───────────────────────────────────
       const censusCards = [];
       if (data.pop_1841) {
         censusCards.push(statCard("Population 1841", data.pop_1841.toLocaleString(), "pre-Famine count"));
@@ -722,7 +689,6 @@ document.addEventListener("DOMContentLoaded", () => {
         ? rankRow(data.top_parish_pop_1841, "parish", "population", "people (1841)")
         : "<span style='font-size:12px;color:#94a3b8;'>No census data</span>";
 
-      // ── Section 3: Coolattin estate records ──────────────────────────────
       const yrs = (data.year_min && data.year_max) ? `${data.year_min}–${data.year_max}` : "";
       const estateCards = [
         statCard("Estate Records", data.total_records, yrs ? `covering ${yrs}` : "total persons"),
@@ -740,7 +706,6 @@ document.addEventListener("DOMContentLoaded", () => {
         ? rankRow(data.top_baronies_by_records, "barony", "count", "records")
         : "<span style='font-size:12px;color:#94a3b8;'>No data</span>";
 
-      // ── Assemble ──────────────────────────────────────────────────────────
       const sep = (title) =>
         `<div style="grid-column:1/-1;padding:6px 0 2px;border-top:2px solid #dbeafe;margin-top:4px;">
           <span style="font-size:11px;font-weight:700;color:#1e40af;text-transform:uppercase;letter-spacing:.07em;">${escapeHtml(title)}</span>
@@ -768,7 +733,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ── Supporting context ─────────────────────────────────────────────────────
   function renderSupportingContext(payload) {
     if (!supportContextBlockEl || !supportContextEl) return;
     const items = payload?.structured_output?.supporting_context || [];
@@ -783,7 +747,6 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>`).join("");
   }
 
-  // ── Data table renderer ────────────────────────────────────────────────────
   function renderTable(tableEl, columns, rows, emptyText) {
     if (!tableEl) return;
     const cols = Array.isArray(columns) ? columns : [];
@@ -794,7 +757,6 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // Highlight ID columns for traceability
     const idCols = new Set(cols.filter(c => c === "record_id" || c === "id" || c.endsWith("_id")));
 
     const header = `<thead><tr>${cols.map(c =>
@@ -825,7 +787,6 @@ document.addEventListener("DOMContentLoaded", () => {
     tableEl.innerHTML = header + body;
   }
 
-  // ── Structured output (Section 1 + Section 4) ─────────────────────────────
   function renderStructured(payload) {
     const structured = payload?.structured_output || {};
     const queries    = structured?.queries || {};
@@ -833,7 +794,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const summary    = structured?.summary || {};
     const chart      = payload?.chart || structured?.chart || null;
 
-    // ── Section 1a: SQL result table ─────────────────────────────────────────
     const local = processed.local_database || {};
     const localCols = local.columns || payload.columns || [];
     const localRows = local.rows   || payload.rows   || [];
@@ -844,7 +804,6 @@ document.addEventListener("DOMContentLoaded", () => {
         : "0 rows returned";
     }
 
-    // ── Section 1b: VRTI/KG result table (separate KG section) ──────────────
     const vrti     = processed.vrti_graph || {};
     const vrtiCols = vrti.columns || [];
     const vrtiRows = vrti.rows    || [];
@@ -858,7 +817,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     _updateKgSection();
 
-    // ── Section 4: Generated queries ─────────────────────────────────────────
     const sqlText = queries.local_sqlite_query || payload.sql || "";
     if (sqliteQueryEl) sqliteQueryEl.textContent = sqlText;
 
@@ -866,12 +824,10 @@ document.addEventListener("DOMContentLoaded", () => {
     if (sparqlQueryEl) sparqlQueryEl.textContent = sparqlText;
     if (sparqlBlockEl) sparqlBlockEl.style.display = sparqlText ? "block" : "none";
 
-    // ── Summary (hidden section) ──────────────────────────────────────────────
     if (summaryEl) summaryEl.textContent = summary.final_summary_text || "Summary unavailable.";
     renderChart(chart);
   }
 
-  // ── Chart ──────────────────────────────────────────────────────────────────
   function renderChart(chart) {
     if (!chartBlockEl || !chartEl) return;
     const labels = Array.isArray(chart?.labels) ? chart.labels.map(v => String(v ?? "")) : [];
@@ -925,7 +881,6 @@ document.addEventListener("DOMContentLoaded", () => {
       <div style="display:grid;gap:8px;">${bars.join("")}</div>`;
   }
 
-  // ── LLM meta (technical section) ──────────────────────────────────────────
   function renderLlmMeta(payload) {
     if (!llmMetaEl) return;
     const sqlLlm = payload?.llm || {};
@@ -951,7 +906,6 @@ document.addEventListener("DOMContentLoaded", () => {
       .join("");
   }
 
-  // ── LLM status chip (top of page) ─────────────────────────────────────────
   function renderLlmStatus(payload) {
     if (!llmStatusEl) return;
     const ok = Boolean(payload?.available);
@@ -976,7 +930,6 @@ document.addEventListener("DOMContentLoaded", () => {
       ${detail}`;
   }
 
-  // ── Progress tracker ───────────────────────────────────────────────────────
   function renderProgress() {
     if (!progressEl) return;
     progressEl.innerHTML = progressOrder.map(stage => {
@@ -1012,7 +965,6 @@ document.addEventListener("DOMContentLoaded", () => {
     if (evt.detail) setStatus(evt.detail, isCompleted ? "" : stageLabel);
   }
 
-  // ── SSE stream consumer ────────────────────────────────────────────────────
   async function consumeSSEPost(url, body, onEvent) {
     const res = await fetch(url, {
       method: "POST",
@@ -1056,7 +1008,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ── Main query runner ──────────────────────────────────────────────────────
   async function runQuery() {
     const question = (questionEl?.value || "").trim();
     const townlandHint = hintEl?.dataset.isAll ? null : (hintEl?.value || "").trim() || null;
@@ -1105,14 +1056,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const payload = finalPayload;
 
-      // Primary: LLM plain-English summary — rendered as formatted HTML
       if (llmAnswerEl) {
         const rewrite = payload.llm_rephrased_answer || "";
         llmAnswerEl.innerHTML = rewrite
           ? markdownToHtml(rewrite)
           : `<span style="color:#94a3b8;font-style:italic;">No summary available. See database result below.</span>`;
       }
-      // Compact raw answer below table
       if (actualAnswerEl) {
         const raw = payload.actual_answer || payload.answer || "";
         actualAnswerEl.textContent = raw ? `Raw computed answer: ${raw}` : "";
@@ -1163,7 +1112,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ── Feedback ───────────────────────────────────────────────────────────────
   function setFeedbackStatus(message, tone = "muted") {
     if (!feedbackStatusEl) return;
     const colors = tone === "success" ? { color: "#166534" } : tone === "error" ? { color: "#b42318" } : { color: "#475467" };
@@ -1219,7 +1167,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ── Event listeners ────────────────────────────────────────────────────────
   if (submitEl)   submitEl.addEventListener("click", () => runQuery());
   if (questionEl) questionEl.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runQuery();
@@ -1235,13 +1182,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  // Close dropdown when clicking outside
   document.addEventListener("click", (e) => {
     if (hintEl && !hintEl.contains(e.target) && hintDropdownEl && !hintDropdownEl.contains(e.target)) {
       closeDropdown();
     }
   });
 
-  // Initial checks
   checkLlmStatus();
 });

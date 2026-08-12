@@ -1,27 +1,3 @@
-"""
-scripts/rdf_uplift.py
-
-RDF uplift for the Coolattin Estate Records.
-
-Reads four SQLite tables (unified_record, townland, census_record,
-clearances_record) and writes a deterministic, idempotent Turtle file to
-data/seed/coolattin.ttl in the co: ontology.
-
-Classes generated
------------------
-  co:Person        — one per unified_record row
-  co:Event         — one per unified_record row (linked via co:hasEvent)
-  co:Townland      — one per townland row
-  co:CensusRecord  — one per census_record row
-  co:Clearance     — one per clearances_record row
-
-Usage
------
-  python3 scripts/rdf_uplift.py                      # generate TTL to data/seed/coolattin.ttl
-  python3 scripts/rdf_uplift.py --import             # generate + POST to GraphDB
-  python3 scripts/rdf_uplift.py --limit 500          # sample first 500 unified_record rows
-  python3 scripts/rdf_uplift.py --repo my-repo-name  # custom GraphDB repo name
-"""
 from __future__ import annotations
 
 import argparse
@@ -36,8 +12,6 @@ PROJECT_ROOT = HERE.parent
 DB_PATH = PROJECT_ROOT / "coolattin.db"
 OUT_PATH = PROJECT_ROOT / "data" / "seed" / "coolattin.ttl"
 
-
-# ── RDF vocabulary ────────────────────────────────────────────────────────────
 
 PREFIXES = """\
 @prefix co:     <https://coolattin.ie/ontology#> .
@@ -88,8 +62,6 @@ def _infer_event_type(row: sqlite3.Row) -> str:
         return "eviction"
     return "tenancy"
 
-
-# ── Per-table TTL generators ──────────────────────────────────────────────────
 
 def _person_event_blocks(rows: list[sqlite3.Row]) -> list[str]:
     blocks: list[str] = []
@@ -186,8 +158,6 @@ def _clearance_blocks(rows: list[sqlite3.Row]) -> list[str]:
         blocks.append("\n".join(cl))
     return blocks
 
-
-# ── Main generation ───────────────────────────────────────────────────────────
 
 def generate_ttl(db_path: Path, limit: int = 0) -> str:
     conn = sqlite3.connect(db_path)

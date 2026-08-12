@@ -52,7 +52,6 @@ def test_graphrag_prioritises_place_hierarchy_and_same_parish_summary(monkeypatc
     graph.add_edge("parish:CARNEW", "barony:SCARAWALSH", rel_type="WITHIN")
     graph.add_edge("barony:SCARAWALSH", "county:WICKLOW", rel_type="WITHIN")
 
-    # Add lots of noise so the pruning logic has to prefer the place structure.
     for i in range(260):
         person_id = f"person:{i}"
         event_id = f"event:{i}"

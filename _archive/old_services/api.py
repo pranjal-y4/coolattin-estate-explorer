@@ -6,7 +6,6 @@ from pathlib import Path
 api = Blueprint("api", __name__)
 DATA_DIR = Path("coolattin/static/data")
 
-# Load unified database once at startup
 _unified_df = None
 
 def get_unified_data():
@@ -18,19 +17,16 @@ def get_unified_data():
 @api.route("/api/map-data")
 def map_data():
     df = get_unified_data()
-    # Return records with townland data
     df = df[df['townland'].notna() & (df['townland'] != '')]
     return jsonify(df.to_dict(orient="records"))
 
 @api.route("/api/unified-data")
 def unified_data():
-    """Return unified database records with optional filtering"""
     df = get_unified_data()
     return jsonify(df.to_dict(orient="records"))
 
 @api.route("/api/unified-search")
 def unified_search():
-    """Search unified database"""
     from flask import request
     df = get_unified_data()
     
@@ -52,7 +48,6 @@ def unified_search():
 
 @api.route("/api/unified-stats")
 def unified_stats():
-    """Return statistics from unified database"""
     df = get_unified_data()
     return jsonify({
         'total_records': len(df),

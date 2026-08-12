@@ -1,20 +1,4 @@
-/**
- * heritage.js — Historic Landscape page
- *
- * Displays Wicklow-only heritage features (ASI archaeology, holy wells,
- * monuments-to-visit) filtered to the currently selected Coolattin townland.
- *
- * Data files consumed (produced by scripts/preprocess_heritage.py):
- *   /static/data/townlands.json          — estate townland polygons
- *   /static/data/asi_wicklow.geojson     — Wicklow ASI archaeology
- *   /static/data/holywells_wicklow.geojson
- *   /static/data/monuments_wicklow.geojson
- *
- * Photo fallback uses the Wikipedia geosearch + pageimages API (no key needed).
- * To add Google Street View or Flickr, configure API keys in HP_CONFIG below.
- */
 
-// ─── Configuration ────────────────────────────────────────────────────────────
 
 const HP_CONFIG = {
   COUNTY: "WICKLOW",
@@ -48,18 +32,14 @@ const HP_CONFIG = {
     },
   },
 
-  // ── Photo source: "wikipedia" is the no-key fallback.
-  //    To use Google Street View: set STREET_VIEW_KEY to your API key.
-  //    To use Flickr: set FLICKR_KEY.
   PHOTO_SOURCE: "wikipedia",
-  STREET_VIEW_KEY: "",  // optional: set to enable Google Street View thumbnails
-  FLICKR_KEY: "",       // optional: set to enable Flickr geotagged photos
+  STREET_VIEW_KEY: "",
+  FLICKR_KEY: "",
   PHOTO_SEARCH_RADIUS_M: 10000,
 
   TOWNLANDS_FILE: "/static/data/townlands.json",
 };
 
-// ─── State ────────────────────────────────────────────────────────────────────
 
 const hpState = {
   map: null,
@@ -67,7 +47,7 @@ const hpState = {
 
   selectedName: null,
   selectedFeature: null,
-  centroid: null,          // [lat, lng]
+  centroid: null,
 
   radius: HP_CONFIG.DEFAULT_RADIUS_M,
   activeLayers: new Set(["asi", "holywells", "monuments"]),
@@ -81,16 +61,14 @@ const hpState = {
   nearbyLayer: null,
   radiusCircleLayer: null,
 
-  rightMode: "empty",  // "empty" | "townland" | "feature"
+  rightMode: "empty",
 };
 
-// ─── DOM shortcuts ─────────────────────────────────────────────────────────────
 
 const $ = (id) => document.getElementById(id);
 const show = (id) => { const el = $(id); if (el) el.style.display = ""; };
 const hide = (id) => { const el = $(id); if (el) el.style.display = "none"; };
 
-// ─── Entry point ──────────────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", () => {
   initMap();
@@ -120,7 +98,6 @@ async function startHeritagePage() {
   }
 }
 
-// ─── URL params ───────────────────────────────────────────────────────────────
 
 function readUrlParams() {
   const p = new URLSearchParams(window.location.search);
@@ -142,7 +119,6 @@ function updateUrl() {
   history.replaceState({}, "", qs ? "?" + qs : window.location.pathname);
 }
 
-// ─── Map initialisation ──────────────────────────────────────────────────────
 
 function initMap() {
   hpState.map = L.map("heritageMap", {
@@ -152,11 +128,9 @@ function initMap() {
     maxZoom: HP_CONFIG.MAP_MAX_ZOOM,
   });
 
-  // Shared layer-switcher utility from map.js
   initLayerSwitcher(hpState.map, "hp-layer-switcher-container");
 }
 
-// ─── Townland GeoJSON ─────────────────────────────────────────────────────────
 
 async function loadTownlandsGeo() {
   try {
@@ -220,7 +194,6 @@ function drawTownlandBrowseLayer() {
   }).addTo(hpState.map);
 }
 
-// ─── Townland selection ───────────────────────────────────────────────────────
 
 function selectTownlandByName(name, options = {}) {
   if (!hpState.townlandsGeo) return;
@@ -244,15 +217,12 @@ async function selectTownland(feature, options = {}) {
   const select = $("hp-townland-select");
   if (select) select.value = name;
 
-  // Update back link to preserve townland context on home page
   const backLink = $("hp-back-link");
   if (backLink) backLink.href = `/?townland=${encodeURIComponent(name)}#explore`;
 
-  // Hide the no-selection overlay
   const noSel = $("hp-map-no-sel");
   if (noSel) noSel.style.display = "none";
 
-  // Update left panel
   $("hp-townland-name").textContent = name;
   $("hp-county-label").style.display = "";
   hide("hp-no-sel-hint");
@@ -260,15 +230,12 @@ async function selectTownland(feature, options = {}) {
   show("hp-layers-section");
   show("hp-gmaps-section");
 
-  // Highlight the selected townland on the map
   drawTownlandHighlight(feature);
   drawTownlandBrowseLayer();
 
-  // Zoom map to the selected townland
   const bounds = L.geoJSON(feature).getBounds();
   hpState.map.fitBounds(bounds, { padding: [40, 40] });
 
-  // Load heritage data (lazy — only once, then filter locally)
   if (!options.dataReady) {
     showLoading(true);
     await loadAllHeritageData();
@@ -280,7 +247,6 @@ async function selectTownland(feature, options = {}) {
   updateRightTownlandPanel();
   updateUrl();
 
-  // Photos
   showPhotosSection(true);
   fetchAndRenderPhotos(hpState.centroid[0], hpState.centroid[1], name);
 }
@@ -332,14 +298,12 @@ function showAllLandscape(options = {}) {
   }
 }
 
-// ─── Townland highlight on map ────────────────────────────────────────────────
 
 function drawTownlandHighlight(feature) {
   if (hpState.townlandPolygonLayer) {
     hpState.map.removeLayer(hpState.townlandPolygonLayer);
   }
 
-  // Draw the selected townland with strong emphasis
   hpState.townlandPolygonLayer = L.geoJSON(feature, {
     style: {
       color: "#234B3A",
@@ -351,7 +315,6 @@ function drawTownlandHighlight(feature) {
     interactive: false,
   }).addTo(hpState.map);
 
-  // Draw radius circle when radius > 0
   if (hpState.radiusCircleLayer) hpState.map.removeLayer(hpState.radiusCircleLayer);
   if (hpState.centroid) {
     const [lat, lng] = hpState.centroid;
@@ -376,13 +339,12 @@ function drawTownlandHighlight(feature) {
   }
 }
 
-// ─── Heritage data loading ────────────────────────────────────────────────────
 
 async function loadAllHeritageData() {
   const keys = Object.keys(HP_CONFIG.DATASETS);
   await Promise.all(
     keys.map(async (key) => {
-      if (hpState.rawData[key] !== null) return; // already loaded
+      if (hpState.rawData[key] !== null) return;
       try {
         const res = await fetch(HP_CONFIG.DATASETS[key].file);
         if (!res.ok) {
@@ -400,7 +362,6 @@ async function loadAllHeritageData() {
   );
 }
 
-// ─── Spatial filtering ────────────────────────────────────────────────────────
 
 function filterFeatures(features, geometry, centroid, radiusM) {
   if (!features || !features.length) return [];
@@ -411,10 +372,8 @@ function filterFeatures(features, geometry, centroid, radiusM) {
     if (!coords) return false;
     const [lng, lat] = coords;
 
-    // Test: inside the selected polygon
     if (pointInGeoJSONPolygon(lng, lat, geometry)) return true;
 
-    // Test: within radius of centroid (when radius > 0)
     if (radiusM > 0) {
       return haversineM(lat, lng, cLat, cLng) <= radiusM;
     }
@@ -422,7 +381,6 @@ function filterFeatures(features, geometry, centroid, radiusM) {
   });
 }
 
-// Ray-casting point-in-polygon for GeoJSON Polygon / MultiPolygon
 function pointInGeoJSONPolygon(lng, lat, geometry) {
   if (!geometry) return false;
   const rings =
@@ -446,7 +404,6 @@ function pointInRing(lng, lat, ring) {
   return inside;
 }
 
-// Haversine distance in metres
 function haversineM(lat1, lng1, lat2, lng2) {
   const R = 6371000;
   const φ1 = (lat1 * Math.PI) / 180;
@@ -459,7 +416,6 @@ function haversineM(lat1, lng1, lat2, lng2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// Bounding-box centroid of a GeoJSON polygon
 function polygonCentroid(geometry) {
   const ring =
     geometry.type === "Polygon"
@@ -477,7 +433,6 @@ function polygonCentroid(geometry) {
   return [(minLat + maxLat) / 2, (minLng + maxLng) / 2];
 }
 
-// ─── Layer rendering ──────────────────────────────────────────────────────────
 
 function filterAndRenderAll() {
   const geometry = hpState.selectedFeature?.geometry || null;
@@ -547,7 +502,6 @@ function featureDisplayName(props, key) {
 
 function shortMonumentClass(cls) {
   if (!cls) return "Heritage Feature";
-  // "Ritual site - holy well" → "Ritual site"
   return cls.split(" - ")[0].trim();
 }
 
@@ -558,7 +512,6 @@ function titleCaseName(name) {
     .replace(/\bOr\b/g, "or");
 }
 
-// ─── Right panel ──────────────────────────────────────────────────────────────
 
 function showRightPanel(mode) {
   hpState.rightMode = mode;
@@ -577,7 +530,6 @@ function updateRightTownlandPanel() {
   if (title) title.textContent = "Townland Overview";
   $("hp-right-tl-name").textContent = name;
 
-  // Stat chips
   const statRow = $("hp-stat-row");
   statRow.innerHTML = "";
   for (const [key, cfg] of Object.entries(HP_CONFIG.DATASETS)) {
@@ -594,13 +546,11 @@ function updateRightTownlandPanel() {
     statRow.appendChild(chip);
   }
 
-  // Narrative summary
   const narrative = buildNarrative(name);
   const narrativeEl = $("hp-narrative");
   narrativeEl.textContent = narrative;
   narrativeEl.style.display = "";
 
-  // Back-links
   const censusLink = $("hp-right-census-link");
   const homeLink = $("hp-right-home-link");
   if (censusLink) censusLink.style.display = "block";
@@ -608,7 +558,6 @@ function updateRightTownlandPanel() {
   if (censusLink) censusLink.href = `/census?townland=${encodeURIComponent(name)}`;
   if (homeLink) homeLink.href = `/?townland=${encodeURIComponent(name)}#explore`;
 
-  // Google Maps links in right panel
   const gmapsDiv = $("hp-right-gmaps-links");
   if (gmapsDiv && hpState.centroid) {
     const [lat, lng] = hpState.centroid;
@@ -704,7 +653,6 @@ function buildNarrative(name) {
   return `The historic landscape ${radiusLabel} of ${name} contains ${joined}.`;
 }
 
-// ─── Feature detail panel ─────────────────────────────────────────────────────
 
 function showFeatureDetail(feature, key, distM) {
   const props = feature.properties || {};
@@ -757,7 +705,6 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
-// ─── Google Maps links ────────────────────────────────────────────────────────
 
 function googleMapsUrl(type, lat, lng, name) {
   const coord = `${formatCoord(lat)},${formatCoord(lng)}`;
@@ -795,7 +742,6 @@ function updateGoogleMapsLinks() {
   if (coordEl) coordEl.innerHTML = `Coordinates: <code>${formatCoord(lat)}, ${formatCoord(lng)}</code>`;
 }
 
-// ─── Area photos ──────────────────────────────────────────────────────────────
 
 function showPhotosSection(visible) {
   const section = $("hp-photos-section");
@@ -891,17 +837,14 @@ function renderPhotos(photos, grid, townlandName) {
     .join("");
 }
 
-// ─── Loading overlay ──────────────────────────────────────────────────────────
 
 function showLoading(visible) {
   const el = $("hp-loading");
   if (el) el.style.display = visible ? "flex" : "none";
 }
 
-// ─── Event wiring ─────────────────────────────────────────────────────────────
 
 function wireEvents() {
-  // Radius radio buttons
   document.querySelectorAll('input[name="hp-radius"]').forEach((radio) => {
     radio.addEventListener("change", () => {
       hpState.radius = parseInt(radio.value, 10);
@@ -918,7 +861,6 @@ function wireEvents() {
     });
   });
 
-  // Layer checkboxes
   document.querySelectorAll(".hp-layer-cb").forEach((cb) => {
     cb.addEventListener("change", () => {
       const key = cb.dataset.layer;
@@ -934,7 +876,6 @@ function wireEvents() {
     });
   });
 
-  // Reset button
   const resetBtn = $("hp-reset-btn");
   if (resetBtn) {
     resetBtn.addEventListener("click", () => {
@@ -953,7 +894,6 @@ function wireEvents() {
     });
   }
 
-  // Feature-detail back button
   const featureBack = $("hp-feature-back");
   if (featureBack) {
     featureBack.addEventListener("click", () => {

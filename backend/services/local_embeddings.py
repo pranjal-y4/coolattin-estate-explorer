@@ -1,18 +1,3 @@
-"""
-backend/services/local_embeddings.py
-
-Local dense embedding provider using BAAI/bge-large-en-v1.5 (SentenceTransformers).
-
-Model: BAAI/bge-large-en-v1.5 — 1024-dim, MIT-licensed, CPU, no API key required.
-
-CRITICAL prefix asymmetry (verified from model card):
-  queries  → prepend "Represent this sentence for searching relevant passages: "
-  passages → NO prefix; encode raw text as-is
-  Both paths use normalize_embeddings=True for unit-norm vectors (cosine = dot).
-
-Hard assertion: output dim must equal BGE_OUTPUT_DIMENSION (1024).  Raises
-RuntimeError loudly on first use if the model returns anything else.
-"""
 from __future__ import annotations
 
 import logging
@@ -24,7 +9,6 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 BGE_MODEL_NAME: str = "BAAI/bge-large-en-v1.5"
-# Exact query instruction from the model card (for asymmetric retrieval).
 BGE_QUERY_INSTRUCTION: str = "Represent this sentence for searching relevant passages: "
 BGE_OUTPUT_DIMENSION: int = 1024
 
@@ -42,13 +26,6 @@ def _model_cache_exists(model_name: str = BGE_MODEL_NAME) -> bool:
 
 
 def _local_model_path(model_name: str = BGE_MODEL_NAME) -> Path | None:
-    """
-    Return a fully populated local model directory if one is available.
-
-    We resolve to the actual snapshot path instead of just checking that some
-    cache directory exists, because partial Hugging Face cache folders can
-    still trigger slow online resolution attempts.
-    """
     required = {
         "modules.json",
         "config_sentence_transformers.json",
@@ -125,7 +102,6 @@ def _get_model() -> Any:
         except TypeError:
             model = SentenceTransformer(model_source, device="cpu")
 
-        # Hard dimension assertion — fail loudly rather than silently inserting wrong-dim vectors.
         probe = model.encode(["dim-probe"], normalize_embeddings=True, show_progress_bar=False)
         actual_dim = int(len(probe[0]))
         if actual_dim != BGE_OUTPUT_DIMENSION:
@@ -143,15 +119,6 @@ def embed_texts_local(
     texts: list[str],
     input_type: str = "document",
 ) -> list[list[float]]:
-    """
-    Embed texts using the local bge-large-en-v1.5 model.
-
-    input_type "query"    → prepend BGE_QUERY_INSTRUCTION (asymmetric retrieval convention)
-    input_type "document" → no prefix; encode raw text as-is
-
-    Returns list of 1024-dim L2-normalised float vectors.  Returns empty inner
-    lists on encode failure rather than raising (same contract as Cohere path).
-    """
     if not texts:
         return []
 

@@ -1,20 +1,3 @@
-"""
-eval/graphrag_enrichment_eval.py
-
-GraphRAG value evaluation — testing protocol §9.
-
-Compares R-series + multi-hop questions with GraphRAG enrichment OFF vs ON.
-Verifies:
-  1. Numeric correctness delta = 0  (graph never changes SQL aggregates)
-  2. Every enriched fact traces to a node/edge in subgraph_rels
-  3. Provenance carries the subgraph path
-  4. Records usefulness score (1-5) + latency
-
-Usage (from project root):
-    source venv/bin/activate
-    python3 -m eval.graphrag_enrichment_eval
-    python3 -m eval.graphrag_enrichment_eval --save eval_results/graphrag_enrichment.json
-"""
 from __future__ import annotations
 
 import json
@@ -28,27 +11,18 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-# ── Test cases  ───────────────────────────────────────────────────────────────
-# R-series (relational/hierarchy) and multi-hop questions.
-# usefulness_rubric:
-#   5 = context strongly enriches answer (specific dates/names/relationships)
-#   4 = context adds useful corroborating detail
-#   3 = context present but only loosely relevant
-#   2 = context minimal or redundant with SQL answer
-#   1 = no useful enrichment
-
 @dataclass
 class GraphRAGCase:
     id: str
     question: str
-    intent: str                           # "relational" | "comparative" | "fallback"
+    intent: str
     entity_hints: dict[str, Any] = field(default_factory=dict)
-    ground_truth_sql: str | None = None   # SQL to check numeric answer unchanged
+    ground_truth_sql: str | None = None
     ground_truth_value: Any = None
     ground_truth_key: str | None = None
     expected_subgraph_terms: list[str] = field(default_factory=list)
     expected_path_prefix: str = "vector_seed"
-    usefulness_rubric: str = ""           # human-readable grading guide
+    usefulness_rubric: str = ""
 
 
 GRAPHRAG_CASES: list[GraphRAGCase] = [
@@ -142,7 +116,6 @@ GRAPHRAG_CASES: list[GraphRAGCase] = [
             "4 if any Famine-related nodes; 3 if only townlands; 2/1 degraded"
         ),
     ),
-    # Multi-hop: person → townland → barony
     GraphRAGCase(
         id="mh_01_byrne_townlands",
         question="Which townlands had Byrne families and what barony are those in?",
@@ -160,7 +133,6 @@ GRAPHRAG_CASES: list[GraphRAGCase] = [
             "4 if Person+Townland nodes; 3 if only Person; 2/1 degraded"
         ),
     ),
-    # Multi-hop: emigration voyage → ship → destination
     GraphRAGCase(
         id="mh_02_glenlyon_voyage",
         question="Tell me about the Glenlyon voyage and who was on it",
@@ -170,7 +142,7 @@ GRAPHRAG_CASES: list[GraphRAGCase] = [
             "SELECT COUNT(DISTINCT record_id) AS n FROM unified_record "
             "WHERE ship_name='Glenlyon'"
         ),
-        ground_truth_value=None,   # list result, not a scalar
+        ground_truth_value=None,
         ground_truth_key=None,
         expected_subgraph_terms=["Glenlyon", "Voyage"],
         expected_path_prefix="vector_seed",
@@ -179,7 +151,6 @@ GRAPHRAG_CASES: list[GraphRAGCase] = [
             "3 if ship mentioned in community; 2/1 degraded"
         ),
     ),
-    # Comparative: same person count from two angle
     GraphRAGCase(
         id="cmp_01_emigration_ballynultagh_vs_kg",
         question="Compare the emigration count from Ballynultagh in the estate records versus the knowledge graph",
@@ -201,18 +172,14 @@ GRAPHRAG_CASES: list[GraphRAGCase] = [
 ]
 
 
-# ── Result dataclass ──────────────────────────────────────────────────────────
-
 @dataclass
 class EnrichmentResult:
     id: str
     question: str
     intent: str
-    # Numeric delta gate
     sql_value_on: Any
     sql_value_off: Any
-    numeric_delta_ok: bool         # True if values are identical
-    # Grounding checks
+    numeric_delta_ok: bool
     linearized: str
     subgraph_node_count: int
     subgraph_rel_count: int
@@ -221,22 +188,18 @@ class EnrichmentResult:
     community_summaries: list[str]
     k_hops: int
     pruned: bool
-    path_ok: bool                  # path_used starts with expected prefix
+    path_ok: bool
     terms_found: list[str]
     terms_missing: list[str]
-    grounding_ok: bool             # all expected terms in linearized or node names
+    grounding_ok: bool
     grounding_rate: float
-    # Provenance
-    provenance_path_present: bool  # path_used is non-empty
+    provenance_path_present: bool
     sources_traced: list[str]
-    # Latency
     latency_ms_on: int
     latency_ms_off: int
     latency_overhead_ms: int
-    # Auto usefulness score (1-5) based on grounding + content
     auto_usefulness: int
     usefulness_rubric: str
-    # Degradation
     degraded: bool
     degradation_note: str
     error: str | None
@@ -257,14 +220,6 @@ def _close_enough(a: Any, b: Any, rtol: float = 0.01) -> bool:
 
 
 def _auto_usefulness(result_on: "GraphRAGResult") -> int:  # type: ignore[name-defined]
-    """
-    Auto-score usefulness 1-5:
-    5: many triples + community summary + path OK
-    4: triples + some community context
-    3: triples but no community / few nodes
-    2: degraded but some seed nodes
-    1: not available or empty
-    """
     if not result_on.available:
         return 1
     n_triples = len(result_on.subgraph_rels)
@@ -282,7 +237,6 @@ def _auto_usefulness(result_on: "GraphRAGResult") -> int:  # type: ignore[name-d
 
 
 def _run_sql(sql: str) -> Any:
-    """Run a read-only SQL query and return the first row's first value."""
     from extensions import get_db_conn
     conn = get_db_conn()
     try:
@@ -295,7 +249,6 @@ def _run_sql(sql: str) -> Any:
 
 
 def run_case(case: GraphRAGCase) -> EnrichmentResult:
-    """Run one GraphRAG case — ON vs OFF."""
     from backend.services.graphrag import (
         is_available, retrieve_subgraph, reload,
     )
@@ -305,22 +258,19 @@ def run_case(case: GraphRAGCase) -> EnrichmentResult:
     sql_value_on: Any = None
     sql_value_off: Any = None
 
-    # Get SQL ground truth (independent of GraphRAG state)
     if case.ground_truth_sql and case.ground_truth_key:
         try:
             sql_value_on = _run_sql(case.ground_truth_sql)
-            sql_value_off = sql_value_on   # SQL is never affected by GraphRAG
+            sql_value_off = sql_value_on
         except Exception as e:
             error = str(e)
 
     numeric_delta_ok = _close_enough(sql_value_on, sql_value_off)
 
-    # ── GraphRAG ON ───────────────────────────────────────────────────────────
     t0 = time.perf_counter()
     result_on = None
     try:
         os.environ["GRAPHRAG_ENABLED"] = "true"
-        # Force reload to pick up env change
         if is_available():
             result_on = retrieve_subgraph(
                 case.question,
@@ -331,19 +281,15 @@ def run_case(case: GraphRAGCase) -> EnrichmentResult:
         error = f"graphrag_on: {e}"
     latency_ms_on = int((time.perf_counter() - t0) * 1000)
 
-    # ── GraphRAG OFF ──────────────────────────────────────────────────────────
     t1 = time.perf_counter()
     try:
         os.environ["GRAPHRAG_ENABLED"] = "false"
-        # With GRAPHRAG_ENABLED=false, is_available() returns False → no retrieval
     except Exception:
         pass
     latency_ms_off = int((time.perf_counter() - t1) * 1000)
 
-    # Restore
     os.environ["GRAPHRAG_ENABLED"] = "true"
 
-    # ── Analyse result ────────────────────────────────────────────────────────
     from backend.services.graphrag import GraphRAGResult
     if result_on is None:
         result_on = GraphRAGResult(
@@ -352,8 +298,6 @@ def run_case(case: GraphRAGCase) -> EnrichmentResult:
         )
 
     linearized = result_on.linearized or ""
-    # Include both subgraph_nodes AND seed_nodes so entity-seeded nodes are
-    # always represented even when they appear late in the visited set.
     all_nodes = list(result_on.subgraph_nodes) + list(result_on.seed_nodes)
     node_names = " ".join(
         (n.get("name", "") + " " + n.get("label", "") + " " + n.get("node_id", ""))
@@ -371,8 +315,6 @@ def run_case(case: GraphRAGCase) -> EnrichmentResult:
     path_ok = result_on.path_used.startswith(case.expected_path_prefix) if result_on.path_used else False
 
     sources_traced: list[str] = list(result_on.sources_used) if result_on.sources_used else []
-    # Verify that linearized facts trace to nodes or edges
-    # Each triple in subgraph_rels has src_name and dst_name — these are the grounded facts
     grounded_entities: set[str] = set()
     for rel in result_on.subgraph_rels:
         grounded_entities.add(str(rel.get("src_name", "")).lower())
@@ -380,8 +322,6 @@ def run_case(case: GraphRAGCase) -> EnrichmentResult:
     for node in result_on.subgraph_nodes:
         grounded_entities.add(str(node.get("name", "")).lower())
 
-    # All non-trivial words in linearized should appear in grounded_entities
-    # We check the expected terms specifically
     ungrounded = [
         t for t in case.expected_subgraph_terms
         if t.lower() not in grounded_entities and t.lower() not in combined_text
@@ -464,7 +404,6 @@ def print_table(results: list[EnrichmentResult]) -> None:
             print(f"  ✗ error: {r.error}")
     print(f"{'─' * W}")
 
-    # Summary
     n = len(results)
     numeric_ok = sum(1 for r in results if r.numeric_delta_ok)
     grounding_ok = sum(1 for r in results if r.grounding_ok)
@@ -549,7 +488,6 @@ def main() -> None:
     out.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str))
     print(f"\nSaved → {out}")
 
-    # Acceptance gate
     summary = data["summary"]
     if not summary["numeric_delta_all_zero"]:
         print("\n✗ ACCEPTANCE GATE FAILED: numeric_delta is non-zero for at least one case.")

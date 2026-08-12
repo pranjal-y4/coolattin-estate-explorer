@@ -1,17 +1,3 @@
-"""
-backend/services/entity_resolution/scoring.py
-
-Transparent scoring for workhouse-to-unified-record candidate links.
-
-Signal weights (60 pts max → normalised to 0–1):
-  Full name similarity   10
-  Exact surname          10  (phonetic fallback: 7)
-  Forename               10  (missing either side → neutral 5)
-  Townland name norm     10  (variant match: 6)
-  Birth-year alignment    5  (gap ≤ 3 yrs: 5; ≤ 8 yrs: 3)
-  Gender                 10  (missing → neutral 5; mismatch → 0 + conflict)
-  Timeline alignment      5  (age-progression consistency across records)
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -49,7 +35,6 @@ def score_candidate(mention: dict[str, Any], candidate: dict[str, Any]) -> Score
     missing: list[str] = []
     raw = 0.0
 
-    # ── 1. Full name similarity (max 10) ─────────────────────────────────────
     m_name = mention.get("normalised_name") or ""
     c_name = candidate.get("normalised_name") or ""
     name_ratio = _ratio(m_name, c_name)
@@ -65,7 +50,6 @@ def score_candidate(mention: dict[str, Any], candidate: dict[str, Any]) -> Score
     else:
         missing.append("No strong full-name match")
 
-    # ── 2. Surname (max 10; phonetic fallback 7) ──────────────────────────────
     if mention.get("surname") and mention.get("surname") == candidate.get("surname"):
         raw += 10.0
         evidence.append("Exact surname match")
@@ -78,7 +62,6 @@ def score_candidate(mention: dict[str, Any], candidate: dict[str, Any]) -> Score
     else:
         missing.append("No surname match")
 
-    # ── 3. Forename (max 10; one side missing → neutral 5) ───────────────────
     m_fore = mention.get("forename") or ""
     c_fore = candidate.get("forename") or ""
     if not m_fore or not c_fore:
@@ -100,7 +83,6 @@ def score_candidate(mention: dict[str, Any], candidate: dict[str, Any]) -> Score
                 f"Forename mismatch ({m_fore} vs {c_fore}; {fore_ratio:.0f}%)"
             )
 
-    # ── 4. Townland / place normalisation (max 10; variant 6) ────────────────
     m_place = mention.get("normalised_place") or ""
     c_place = candidate.get("normalised_place") or ""
     if m_place and c_place and m_place == c_place:
@@ -114,7 +96,6 @@ def score_candidate(mention: dict[str, Any], candidate: dict[str, Any]) -> Score
     else:
         missing.append("Place mismatch (Electoral Division vs townland may differ)")
 
-    # ── 5. Birth-year alignment (max 5) ──────────────────────────────────────
     m_birth = mention.get("inferred_birth_year")
     c_birth = candidate.get("inferred_birth_year")
     if m_birth and c_birth:
@@ -130,7 +111,6 @@ def score_candidate(mention: dict[str, Any], candidate: dict[str, Any]) -> Score
     else:
         missing.append("Missing age or birth-year evidence")
 
-    # ── 6. Gender (max 10; missing → neutral 5; mismatch → 0 + conflict) ─────
     m_gender = (mention.get("gender") or "").upper()[:1]
     c_gender = (candidate.get("gender") or "").upper()[:1]
     if m_gender and c_gender:
@@ -143,10 +123,6 @@ def score_candidate(mention: dict[str, Any], candidate: dict[str, Any]) -> Score
         raw += 5.0
         missing.append("Gender unknown on one or both sides")
 
-    # ── 7. Timeline alignment — age-progression check (max 5) ────────────────
-    # Primary: if both records have year + age, verify the age-progression is
-    # consistent (person aged 20 in 1861 should be 28–32 in 1871).
-    # Fallback: if only years are known, check temporal plausibility.
     m_year = mention.get("event_year")
     c_year = candidate.get("event_year")
     m_age = mention.get("age")
@@ -177,7 +153,6 @@ def score_candidate(mention: dict[str, Any], candidate: dict[str, Any]) -> Score
     else:
         missing.append("No event-year evidence for timeline check")
 
-    # ── Label ─────────────────────────────────────────────────────────────────
     impossible = any(
         c in conflicts
         for c in ("Impossible age/date conflict", "Impossible timeline gap")

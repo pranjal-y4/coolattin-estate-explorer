@@ -1,10 +1,3 @@
-"""
-Helpers for loading bundled standard census seed data.
-
-This fallback is used when the live KG census query is unavailable or
-returns no rows. The bundled CSV already ships with the repo and maps
-cleanly onto the estate townlands used by the census page.
-"""
 from __future__ import annotations
 
 import csv
@@ -24,17 +17,6 @@ def load_standard_census_seed_records(
     allowed_townlands: Optional[set[str]] = None,
     years: Optional[Iterable[int]] = None,
 ) -> list[CensusRecord]:
-    """
-    Load standard census rows from the bundled CSV seed.
-
-    Parameters
-    ----------
-    allowed_townlands:
-        Optional canonical-name whitelist. When provided, only matching
-        townlands are emitted.
-    years:
-        Optional subset of years to load.
-    """
     seed_path = _resolve_seed_path()
     if not seed_path:
         return []

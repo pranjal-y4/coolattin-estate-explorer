@@ -1,53 +1,3 @@
-"""
-backend/services/semantic_layer.py
-
-Phase 2 — Semantic layer + deterministic query compiler.
-
-Public API
-----------
-try_rule_based_fill(question, analysis, townland_resolution) -> SlotFill | None
-    Attempts to map the question to a slot-fill without any LLM call.
-    Returns None if the question is not an analytical/aggregate query.
-
-build_slot_fill_prompt(question, analysis, townland_resolution) -> str
-    Returns the tight slot-filling prompt to send to the LLM.
-    The LLM MUST return JSON {metric, dimensions, filters, group_mode, confidence}.
-    It NEVER writes SQL.
-
-parse_slot_fill(json_text) -> SlotFill | None
-    Parses LLM JSON response into a validated SlotFill.
-
-compile_sql(slot_fill, clearances_col) -> str
-    Deterministic SQLite compiler.  Never raises; returns None on failure.
-
-compile_sparql(slot_fill) -> str | None
-    Equivalent SPARQL aggregate for the local GraphDB co: ontology.
-    Returns None when no KG equivalent exists.
-
-validate_slot_fill(slot_fill) -> None
-    Raises ValueError if the fill references undefined metrics/dimensions/filters.
-
-Architecture
-------------
-Questions flow through three layers (in order):
-
-  ① try_rule_based_fill   — keyword + entity pattern matching, zero LLM calls
-  ② LLM slot filler       — structured JSON only (via build_slot_fill_prompt)
-  ③ Deterministic compiler — parse_slot_fill + compile_sql = guaranteed-valid SQL
-
-Every compiled query goes through _sanitize_and_validate_sql in ask_service before
-execution — the FORBIDDEN_SQL guardrail is never bypassed.
-
-Metric / Dimension / Filter vocabulary
----------------------------------------
-METRICS  — what to measure (scalar or grouped aggregate)
-DIMENSIONS — how to slice / GROUP BY
-FILTERS  — WHERE conditions (from resolved entities and extracted values)
-
-All three are declared below as plain dicts (no YAML dependency).  Adding a
-new metric requires only an entry in METRIC_REGISTRY and optionally a keyword
-in _METRIC_KEYWORDS.
-"""
 from __future__ import annotations
 
 import json
@@ -58,34 +8,12 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-# ── SQL escape helper (mirrors ask_service._sql_escape) ──────────────────────
 def _esc(value: str) -> str:
-    """Escape single-quote in a value embedded in a SQL string literal."""
     return str(value).replace("'", "''")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Metric registry
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# Each metric entry:
-#   from_clause     str  — base FROM (may include a JOIN alias block)
-#   aggregate       str  — aggregate expression (no alias)
-#   alias           str  — output column alias
-#   base_where      str  — metric-inherent WHERE condition ("" if none)
-#   dim_select      dict — dimension id → SELECT expression
-#   dim_group_by    dict — dimension id → GROUP BY expression
-#   filter_where    dict — filter id → WHERE SQL (use {val} placeholder)
-#   order_by        str  — default ORDER BY for trend/grouped queries
-#   valid_dimensions set
-#   valid_filters   set
-#   sparql_agg      str|None  — co: SPARQL aggregate if KG equivalent exists
-#   keywords        list[str] — trigger substrings (lower-case)
-#   subsumes        list[str] — template IDs this metric replaces
-
 METRIC_REGISTRY: dict[str, dict] = {
 
-    # ── Emigration ────────────────────────────────────────────────────────────
 
     "emigration_count": {
         "label": "People who emigrated",
@@ -155,7 +83,6 @@ METRIC_REGISTRY: dict[str, dict] = {
         "subsumes": ["canada_emigration_peak_period", "ship_most_families_canada"],
     },
 
-    # ── Evictions ─────────────────────────────────────────────────────────────
 
     "eviction_event_count": {
         "label": "Eviction events (from clearances ledger)",
@@ -163,10 +90,7 @@ METRIC_REGISTRY: dict[str, dict] = {
             "clearances_record cr "
             "LEFT JOIN townland t ON cr.townland_id = t.id"
         ),
-        "aggregate": "SUM(cr.{eviction_col})",   # {eviction_col} resolved at compile time
-        # Use total_evictions (not eviction_count) to avoid collision with the
-        # _normalise_schema_compat_sql substitution that rewrites "eviction_count"
-        # to the live column name ("count").
+        "aggregate": "SUM(cr.{eviction_col})",
         "alias": "total_evictions",
         "base_where": "",
         "dim_select": {
@@ -227,7 +151,6 @@ METRIC_REGISTRY: dict[str, dict] = {
         "subsumes": ["eviction_people", "eviction_people_townland"],
     },
 
-    # ── Census / Population ───────────────────────────────────────────────────
 
     "population": {
         "label": "Census population",
@@ -278,7 +201,7 @@ METRIC_REGISTRY: dict[str, dict] = {
         ),
         "aggregate": "SUM(b.total) - SUM(a.total)",
         "alias": "population_change",
-        "base_where": "",   # year filters required
+        "base_where": "",
         "dim_select": {
             "townland": "t.name AS townland",
             "parish":   "t.civil_parish AS parish",
@@ -325,7 +248,6 @@ METRIC_REGISTRY: dict[str, dict] = {
         "subsumes": ["census_uninhabited", "census_houses"],
     },
 
-    # ── Tenancy ───────────────────────────────────────────────────────────────
 
     "tenancy_count": {
         "label": "Tenants recorded",
@@ -383,7 +305,6 @@ METRIC_REGISTRY: dict[str, dict] = {
         "subsumes": ["tenant_land_gender_average", "largest_latest_tenant_holdings"],
     },
 
-    # ── People / Demographics ─────────────────────────────────────────────────
 
     "widow_count": {
         "label": "Widow records",
@@ -454,7 +375,6 @@ METRIC_REGISTRY: dict[str, dict] = {
         "subsumes": ["people_all_records", "records_overview", "records_per_year"],
     },
 
-    # ── Geography ─────────────────────────────────────────────────────────────
 
     "townland_count": {
         "label": "Number of townlands",
@@ -502,12 +422,11 @@ METRIC_REGISTRY: dict[str, dict] = {
         "subsumes": ["parishes_count"],
     },
 
-    # ── Townland attribute lookup (not an aggregate — returns a detail row) ───
 
     "townland_attribute": {
         "label": "Townland attributes (parish, barony, coordinates)",
         "from_clause": "townland",
-        "aggregate": "",   # not an aggregate; compiler uses SELECT *
+        "aggregate": "",
         "alias": "",
         "base_where": "",
         "dim_select": {},
@@ -529,10 +448,6 @@ METRIC_REGISTRY: dict[str, dict] = {
 }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Dimension registry (informational — for validation and routing)
-# ─────────────────────────────────────────────────────────────────────────────
-
 DIMENSION_REGISTRY: dict[str, dict] = {
     "year":     {"label": "Year",          "type": "integer",  "table_col": "year"},
     "townland": {"label": "Townland",      "type": "string",   "table_col": "townland_norm"},
@@ -547,7 +462,6 @@ DIMENSION_REGISTRY: dict[str, dict] = {
     "occupation":  {"label": "Occupation",  "type": "string",  "table_col": "occupation"},
 }
 
-# Valid filter keys across all metrics
 _ALL_FILTER_KEYS = frozenset({
     "townland", "year", "year_range", "year_a", "year_b",
     "surname", "gender", "parish", "barony", "county",
@@ -555,37 +469,20 @@ _ALL_FILTER_KEYS = frozenset({
 })
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SlotFill dataclass
-# ─────────────────────────────────────────────────────────────────────────────
-
 @dataclass
 class SlotFill:
-    """
-    The output of the slot-filler (rule-based or LLM).
-    Passed verbatim into compile_sql / compile_sparql.
-    """
-    metric: str                          # must be a key in METRIC_REGISTRY
+    metric: str
     dimensions: list[str] = field(default_factory=list)
     filters: dict[str, Any] = field(default_factory=dict)
-    group_mode: str = "aggregate"        # "aggregate"|"trend"|"list"|"detail"
+    group_mode: str = "aggregate"
     limit: int | None = 50
-    order_by_override: str | None = None # overrides metric's default order
-    confidence: float = 1.0              # 1.0 rule-based; 0.0–1.0 for LLM-filled
-    source: str = "rule"                 # "rule" | "llm"
-    raw_intent: str = ""                 # original question for provenance
+    order_by_override: str | None = None
+    confidence: float = 1.0
+    source: str = "rule"
+    raw_intent: str = ""
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Validation
-# ─────────────────────────────────────────────────────────────────────────────
 
 def validate_slot_fill(sf: SlotFill) -> None:
-    """
-    Raise ValueError if the slot fill references undefined metrics, dimensions,
-    or filters.  Called before compile_sql to guarantee the compiler never
-    receives invalid input.
-    """
     if sf.metric not in METRIC_REGISTRY:
         raise ValueError(f"Unknown metric '{sf.metric}'. Valid: {sorted(METRIC_REGISTRY)}")
 
@@ -604,29 +501,14 @@ def validate_slot_fill(sf: SlotFill) -> None:
             )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SQL compiler
-# ─────────────────────────────────────────────────────────────────────────────
-
 def compile_sql(sf: SlotFill, clearances_col: str = "count") -> str | None:
-    """
-    Deterministic SQLite compiler.
-
-    Takes a validated SlotFill and returns a complete, read-only SELECT/WITH
-    statement.  Returns None if compilation fails (caller should fall back).
-
-    clearances_col is the runtime-detected column name in clearances_record
-    (either "count" or "eviction_count" depending on schema version).
-    """
     try:
         validate_slot_fill(sf)
         m = METRIC_REGISTRY[sf.metric]
 
-        # ── Attribute lookup (non-aggregate) ──────────────────────────────
         if sf.metric == "townland_attribute":
             return _compile_attribute_lookup(sf, m)
 
-        # ── SELECT clause ──────────────────────────────────────────────────
         select_parts: list[str] = []
         for dim in sf.dimensions:
             expr = m["dim_select"].get(dim, dim)
@@ -637,10 +519,8 @@ def compile_sql(sf: SlotFill, clearances_col: str = "count") -> str | None:
         select_parts.append(f"{agg_expr} AS {alias}")
         select_sql = ", ".join(select_parts)
 
-        # ── FROM clause ────────────────────────────────────────────────────
         from_sql = m["from_clause"]
 
-        # ── WHERE clause ───────────────────────────────────────────────────
         where_parts: list[str] = []
         if m["base_where"]:
             where_parts.append(m["base_where"])
@@ -653,7 +533,6 @@ def compile_sql(sf: SlotFill, clearances_col: str = "count") -> str | None:
 
         where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
-        # ── GROUP BY ───────────────────────────────────────────────────────
         group_parts: list[str] = []
         for dim in sf.dimensions:
             gb = m["dim_group_by"].get(dim)
@@ -661,12 +540,9 @@ def compile_sql(sf: SlotFill, clearances_col: str = "count") -> str | None:
                 group_parts.append(gb)
         group_sql = (" GROUP BY " + ", ".join(group_parts)) if group_parts else ""
 
-        # ── ORDER BY ───────────────────────────────────────────────────────
         order = sf.order_by_override or (m["order_by"] if sf.dimensions else "")
         order_sql = (f" ORDER BY {order}") if order else ""
 
-        # ── LIMIT ─────────────────────────────────────────────────────────
-        # No LIMIT for simple scalar aggregates (0 or 1 dimensions)
         limit_n = sf.limit
         if not sf.dimensions:
             limit_n = None
@@ -681,7 +557,6 @@ def compile_sql(sf: SlotFill, clearances_col: str = "count") -> str | None:
 
 
 def _render_filter(template: str, val: Any) -> str:
-    """Replace {val} or {val[0]}/{val[1]} in a filter template."""
     if isinstance(val, (list, tuple)) and "{val[0]}" in template:
         return template.replace("{val[0]}", str(val[0])).replace("{val[1]}", str(val[1]))
     if isinstance(val, str):
@@ -690,7 +565,6 @@ def _render_filter(template: str, val: Any) -> str:
 
 
 def _compile_attribute_lookup(sf: SlotFill, m: dict) -> str | None:
-    """Compile a non-aggregate townland attribute SELECT."""
     townland = sf.filters.get("townland")
     if not townland:
         return None
@@ -700,17 +574,7 @@ def _compile_attribute_lookup(sf: SlotFill, m: dict) -> str | None:
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SPARQL compiler (local GraphDB co: ontology)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def compile_sparql(sf: SlotFill) -> str | None:
-    """
-    Compile a SPARQL aggregate for the local co: ontology.
-    Returns None when no KG equivalent exists or GraphDB is not available.
-    The returned string is a bare SPARQL SELECT (PREFIX declarations are
-    added by graphdb_sparql.query).
-    """
     try:
         m = METRIC_REGISTRY.get(sf.metric)
         if not m or not m.get("sparql_agg"):
@@ -718,7 +582,6 @@ def compile_sparql(sf: SlotFill) -> str | None:
 
         sparql_tpl: str = m["sparql_agg"]
 
-        # Build filter triples
         filter_triples: list[str] = []
         if "townland" in sf.filters:
             norm = _esc(str(sf.filters["townland"]))
@@ -742,14 +605,7 @@ def compile_sparql(sf: SlotFill) -> str | None:
         return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Rule-based slot filler (deterministic fast lane — zero LLM calls)
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Keyword → metric candidates (ordered by specificity)
 _METRIC_KEYWORDS: list[tuple[str, str]] = [
-    # (substring to match in lowercased question, metric_id)
-    # Most specific first to avoid false positives
     ("canada",    "canada_emigration_count"),
     ("widow",     "widow_count"),
     ("uninhabit", "uninhabited_houses"),
@@ -767,54 +623,33 @@ _METRIC_KEYWORDS: list[tuple[str, str]] = [
     ("tenancy",   "tenancy_count"),
 ]
 
-# Words that trigger "how many" aggregate mode
 _COUNT_WORDS = frozenset(["how many", "count", "total", "number of"])
 
-# Words that trigger GROUP BY year (trend)
 _TREND_WORDS = frozenset([
     "per year", "by year", "each year", "over time", "trend",
     "yearly", "annual", "year by year",
 ])
 
-# Words that trigger GROUP BY townland
 _BY_TOWNLAND_WORDS = frozenset(["per townland", "by townland", "each townland"])
 
-# Words that signal a geography/attribute question (not aggregate)
 _ATTRIBUTE_WORDS = frozenset([
     "which parish", "what parish", "which barony", "what barony",
     "which county", "what county", "located in", "where is", "belong to",
     "same parish", "fall within",
 ])
 
-# ── Out-of-scope signals ──────────────────────────────────────────────────────
-# If ANY of these substrings appear in the lowercased question the question
-# addresses data that is genuinely outside the metric registry (no table/field
-# covers it).  Return None immediately — do not force a metric match.
 _OUT_OF_SCOPE_SIGNALS: frozenset[str] = frozenset([
-    # religion / social data not recorded
     "religion", "religious", "faith", "catholic", "protestant",
-    # environmental / agricultural data not in DB
     "weather", "climate", "temperature", "rainfall",
     "crop", "farming", "agriculture", "tillage",
-    # political / organisational records not in DB
     "political",
-    # mortality records not in DB (distinct from emigration/eviction)
     "died of", "cause of death",
-    # cross-estate comparison — only Coolattin data available
     "other irish", "other estate",
-    # workhouse ER-specific tables (source_mentions, entity_resolution_candidates,
-    # workhouse_unified_links) are not covered by any metric
     "workhouse",
-    # ER pipeline artefact labels — no metric maps to these
     "entity resolution candidate", "confirmed match", "review required",
     "source mention",
 ])
 
-# ── Unmapped-requirement phrases ──────────────────────────────────────────────
-# These phrases indicate the question needs a field or aggregate that no metric
-# can provide (e.g. AVG(rent_owed) when the only metric counts people, or an
-# age filter that no metric's filter_where supports).  Return None so the
-# question falls through to LLM-fallback.
 _UNMAPPED_REQUIREMENT_PHRASES: frozenset[str] = frozenset([
     "average rent",
     "rent owed",
@@ -829,43 +664,19 @@ def try_rule_based_fill(
     analysis: dict[str, Any],
     townland_resolution: dict[str, Any],
 ) -> SlotFill | None:
-    """
-    Attempt to map the question to a SlotFill without any LLM call.
-
-    Returns None if:
-    - The question is not analytical (it's a list/people/geography detail query)
-    - No metric can be identified with high confidence
-
-    Uses resolved entity from townland_resolution (sql_id, name_norm) and
-    the question analysis dict from _analyse_question in ask_service.
-    """
     q = (question or "").lower()
 
-    # ── Out-of-scope guard ────────────────────────────────────────────────
-    # Questions mentioning topics with no DB coverage must not be forced onto
-    # any metric — they should reach the LLM-fallback / honest-refusal path.
     if any(sig in q for sig in _OUT_OF_SCOPE_SIGNALS):
         return None
 
-    # ── Unmapped-requirement guard ─────────────────────────────────────────
-    # Questions that need a filter or aggregate no metric can provide.
     if any(phrase in q for phrase in _UNMAPPED_REQUIREMENT_PHRASES):
         return None
 
-    # ── Cross-metric intersection guard ───────────────────────────────────
-    # "How many widows emigrated?" requires both is_widow=1 AND
-    # has_emigration_record=1.  widow_count has no emigration filter;
-    # emigration_count has no widow filter.  Neither metric alone answers it.
     if "widow" in q and "emigra" in q:
         return None
 
-    # ── Geography attribute lookup ─────────────────────────────────────────
     townland_norm = townland_resolution.get("name_norm")
 
-    # Fix 2: suppress townland filter when the resolved entity is used as an
-    # estate-scope qualifier (e.g. "the Coolattin estate") rather than naming a
-    # specific townland.  Guard: "from Ballinacor in the Coolattin estate" still
-    # filters to BALLINACOR because raw_text="Ballinacor" ≠ "Coolattin estate".
     _raw_text = townland_resolution.get("raw_text") or ""
     if _raw_text and re.search(
         r"\b" + re.escape(_raw_text) + r"\s+estate\b",
@@ -885,16 +696,9 @@ def try_rule_based_fill(
             raw_intent=question,
         )
 
-    # ── Detect metric (BEST-MATCH scoring) ────────────────────────────────
-    # Score every metric by counting how many of its entries in _METRIC_KEYWORDS
-    # appear in the question.  The metric with the most matches wins; ties break
-    # by list order (preserving the existing specificity priority).
-    # This prevents the first-match defect where an incidental keyword like
-    # "tenant" in an out-of-scope question forces a deterministic route.
     _metric_scores: dict[str, int] = {}
     for keyword, candidate in _METRIC_KEYWORDS:
         if keyword in q:
-            # Disambiguate eviction metric before scoring
             if candidate == "eviction_event_count" and any(
                 w in q for w in ["people", "person", "who", "names", "list"]
             ):
@@ -904,7 +708,6 @@ def try_rule_based_fill(
     metric_id: str | None = None
     if _metric_scores:
         _best_score = max(_metric_scores.values())
-        # Pick the highest-priority candidate that achieved the best score
         for keyword, candidate in _METRIC_KEYWORDS:
             if candidate == "eviction_event_count" and any(
                 w in q for w in ["people", "person", "who", "names", "list"]
@@ -914,15 +717,12 @@ def try_rule_based_fill(
                 metric_id = candidate
                 break
 
-    # Special rule: "how many townlands" → townland_count
     if not metric_id and "townland" in q and any(w in q for w in ["how many", "count", "total", "number"]):
         metric_id = "townland_count"
 
-    # Special rule: "how many parishes" → parish_count
     if not metric_id and "parish" in q and any(w in q for w in ["how many", "count", "total"]):
         metric_id = "parish_count"
 
-    # Special rule: "how many people"/"how many records" with surname → person_count
     if not metric_id:
         surname = analysis.get("surname")
         wants_count = analysis.get("output_mode") in {"count", "grouped"} or any(w in q for w in _COUNT_WORDS)
@@ -934,19 +734,15 @@ def try_rule_based_fill(
 
     m = METRIC_REGISTRY[metric_id]
 
-    # ── Detect filters ─────────────────────────────────────────────────────
     filters: dict[str, Any] = {}
 
-    # Townland filter from Phase 1 resolution
     if townland_norm and "townland" in m["valid_filters"]:
         filters["townland"] = townland_norm
 
-    # Year filter
     year = analysis.get("year")
     if year and "year" in m["valid_filters"]:
         filters["year"] = int(year)
 
-    # Year-range filter for known Famine years
     if any(w in q for w in ["1841", "1851", "famine", "decline"]):
         if "1861" in q and "1841" in q:
             filters.pop("year", None)
@@ -960,74 +756,61 @@ def try_rule_based_fill(
             elif "year_range" in m["valid_filters"]:
                 filters["year_range"] = [1841, 1851]
 
-    # Surname filter
     surname = analysis.get("surname")
     if surname and "surname" in m["valid_filters"]:
         filters["surname"] = str(surname).upper()
 
-    # Gender filter
     gender = _detect_gender(q)
     if gender and "gender" in m["valid_filters"]:
         filters["gender"] = gender
 
-    # is_canada
     if ("canada" in q) and "is_canada" in m["valid_filters"] and metric_id == "emigration_count":
         filters["is_canada"] = True
 
-    # ── Detect dimensions ──────────────────────────────────────────────────
     dimensions: list[str] = []
 
-    # Trend dimension — "per year", "by year", "which year had the most", etc.
     _year_dim_triggers = _TREND_WORDS | {
         "which year", "what year", "what years",
         "all years", "all census", "each census", "over the years",
     }
     if any(w in q for w in _year_dim_triggers) and "year" in m["valid_dimensions"]:
-        if "year" not in filters:   # don't group if year is already a filter
+        if "year" not in filters:
             dimensions.append("year")
 
-    # By-townland dimension
     if any(w in q for w in _BY_TOWNLAND_WORDS) and "townland" in m["valid_dimensions"]:
         dimensions.append("townland")
 
-    # Gender grouping for holding query
     if metric_id == "avg_holding_acres" and any(
         w in q for w in ["male", "female", "gender", "men", "women"]
     ) and "gender" in m["valid_dimensions"]:
         if "gender" not in dimensions:
             dimensions.append("gender")
         if "gender" in filters:
-            del filters["gender"]   # don't filter AND group by same field
+            del filters["gender"]
 
-    # Parish grouping
     if any(w in q for w in ["by parish", "per parish", "each parish"]) and "parish" in m["valid_dimensions"]:
         dimensions.append("parish")
 
-    # For ship queries
     if metric_id in ("emigration_count", "canada_emigration_count") and "ship" in q and "ship" in m["valid_dimensions"]:
         dimensions.append("ship")
 
-    # ── Determine group_mode and limit ─────────────────────────────────────
     group_mode = "aggregate"
     limit: int | None = 50
 
     if dimensions:
         group_mode = "trend" if "year" in dimensions else "grouped"
     elif not filters or len(filters) == 1 and "townland" in filters:
-        limit = None   # simple scalar — no LIMIT
+        limit = None
 
-    # For "worst year" / "highest" queries, limit to top rows
     if any(w in q for w in ["worst", "most", "highest", "peak", "top", "largest", "smallest"]):
         limit = 10
 
-    # ── Confidence scoring ────────────────────────────────────────────────
-    # Start at 1.0; reduce when multiple distinct metrics scored (competition).
     confidence = 1.0
     _competing_metrics = len(_metric_scores)
     if _competing_metrics > 1:
         confidence = max(0.82, confidence - 0.06 * (_competing_metrics - 1))
     if not filters and not dimensions:
-        confidence = min(confidence, 0.90)  # global unfiltered queries are less certain
+        confidence = min(confidence, 0.90)
 
     return SlotFill(
         metric=metric_id,
@@ -1049,19 +832,11 @@ def _detect_gender(q: str) -> str | None:
     return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LLM slot-fill prompt builder
-# ─────────────────────────────────────────────────────────────────────────────
-
 def build_slot_fill_prompt(
     question: str,
     analysis: dict[str, Any],
     townland_resolution: dict[str, Any],
 ) -> str:
-    """
-    Build the prompt sent to the LLM for slot filling.
-    The LLM returns ONLY JSON — no SQL, no prose.
-    """
     townland_hint = (
         f"Resolved townland: {townland_resolution['name_norm']} "
         f"(sql_id={townland_resolution.get('sql_id')}, "
@@ -1119,13 +894,7 @@ Rules:
 
 
 def parse_slot_fill(raw_text: str, question: str = "") -> SlotFill | None:
-    """
-    Parse an LLM JSON response into a SlotFill.
-    Returns None if the response is invalid or metric is null/unknown.
-    Never raises.
-    """
     try:
-        # Strip markdown fences
         text = re.sub(r"```(?:json)?\s*", "", raw_text, flags=re.IGNORECASE).strip()
         text = re.sub(r"```\s*$", "", text).strip()
         data = json.loads(text)
@@ -1166,12 +935,7 @@ def parse_slot_fill(raw_text: str, question: str = "") -> SlotFill | None:
     return sf
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Provenance metadata for the SSE result payload
-# ─────────────────────────────────────────────────────────────────────────────
-
 def slot_fill_meta(sf: SlotFill, compiled_sql: str) -> dict[str, Any]:
-    """Return provenance dict added to llm_meta in the SSE result."""
     return {
         "provider": "semantic_layer",
         "model": "rule_compiler" if sf.source == "rule" else "llm_slot_fill",

@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""
-Print a validation summary for persisted workhouse entity-resolution results.
-"""
 from __future__ import annotations
 
 import os

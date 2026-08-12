@@ -1,6 +1,5 @@
 import pandas as pd
 import sys, pathlib
-# Ensure the project root is on the import path
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 from coolattin.scripts.data_cleaning import standardize_dates, normalize_names
 

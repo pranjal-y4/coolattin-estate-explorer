@@ -1,11 +1,3 @@
-"""
-coolattin/repositories/census_repository.py
-
-Local database access for census records.
-
-This module is the ONLY place that reads/writes the `census_record` table.
-It does not know about SPARQL, HTTP, or business rules.
-"""
 from __future__ import annotations
 
 import json
@@ -20,10 +12,6 @@ log = logging.getLogger(__name__)
 
 
 def find(filters: CensusFilters) -> list[CensusRecord]:
-    """
-    Return census records matching the given filters from local DB.
-    Returns an empty list if nothing matches (triggers KG lookup in service).
-    """
     conditions = []
     params: list = []
 
@@ -64,15 +52,6 @@ def find(filters: CensusFilters) -> list[CensusRecord]:
 
 
 def find_townland_detail(townland_name: str) -> Optional[dict]:
-    """
-    Return full townland census detail: metadata + per-year breakdown.
-    Used by /api/census/townland endpoint.
-
-    Matching strategy:
-      1. Exact match on canonical (uppercased) name.
-      2. Prefix LIKE match — handles GeoJSON short names like "Newtown"
-         that map to disambiguated DB names like "NEWTOWN ED POWERSCOURT".
-    """
     canonical = townland_name.strip().upper()
     conn = get_db_conn()
     try:
@@ -80,7 +59,6 @@ def find_townland_detail(townland_name: str) -> Optional[dict]:
             "SELECT * FROM townland WHERE name = ?", (canonical,)
         ).fetchone()
 
-        # Fallback: prefix LIKE match (e.g. "NEWTOWN" → "NEWTOWN ED POWERSCOURT")
         if not t_row:
             t_row = conn.execute(
                 "SELECT * FROM townland WHERE name LIKE ? ORDER BY name LIMIT 1",
@@ -106,7 +84,6 @@ def find_townland_detail(townland_name: str) -> Optional[dict]:
                 "source": r["source"],
             }
 
-        # Decode cached JSON lists (images/links stored as JSON strings)
         def _json_list(val):
             if not val:
                 return []
@@ -123,9 +100,8 @@ def find_townland_detail(townland_name: str) -> Optional[dict]:
             "barony":            t_row["barony"],
             "civil_parish":      t_row["civil_parish"],
             "electoral_division": t_row["electoral_division"],
-            # Cached KG fields — populated after first successful KG fetch
             "kg_uri":            t_row["kg_uri"],
-            "uri":               t_row["kg_uri"],   # alias used by JS
+            "uri":               t_row["kg_uri"],
             "centroid_lat":      t_row["centroid_lat"],
             "centroid_lon":      t_row["centroid_lon"],
             "boundary_wkt":      t_row["wkt_geometry"],
@@ -142,9 +118,6 @@ def find_townland_detail(townland_name: str) -> Optional[dict]:
 
 
 def get_summary(year: Optional[int] = None) -> dict:
-    """
-    Return aggregated census statistics, optionally filtered by year.
-    """
     params: list = []
     year_clause = ""
     if year:
@@ -174,7 +147,6 @@ def get_summary(year: Optional[int] = None) -> dict:
 
 
 def get_townland_names() -> list[str]:
-    """Return sorted list of townland names that have census records."""
     conn = get_db_conn()
     try:
         rows = conn.execute(
@@ -191,7 +163,6 @@ def get_townland_names() -> list[str]:
 
 
 def count_records(year: Optional[int] = None) -> int:
-    """Count census records, optionally filtered by year."""
     conn = get_db_conn()
     try:
         if year:
@@ -206,17 +177,8 @@ def count_records(year: Optional[int] = None) -> int:
 
 
 def upsert_many(records: list[CensusRecord]) -> int:
-    """
-    Insert or update census records.
-    Townland rows are created automatically if missing.
-
-    Each record is processed in its own connection scope to avoid
-    SQLite "database is locked" errors from nested connections.
-    Returns count of upserted records.
-    """
     count = 0
     for rec in records:
-        # Step 1: ensure townland exists (uses its own connection, commits, closes)
         townland_id, _ = townland_repository.get_or_create(
             rec.townland_name,
             kg_uri=rec.kg_uri,
@@ -227,7 +189,6 @@ def upsert_many(records: list[CensusRecord]) -> int:
         if total is None:
             total = (rec.male or 0) + (rec.female or 0)
 
-        # Step 2: upsert census record (separate connection)
         conn = get_db_conn()
         try:
             existing = conn.execute(

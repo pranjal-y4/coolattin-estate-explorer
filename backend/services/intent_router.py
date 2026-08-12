@@ -1,23 +1,3 @@
-"""
-backend/services/intent_router.py
-
-Phase 5 — Lightweight intent router.
-
-Classifies each question into one of four route labels:
-  ANALYTICAL   — aggregate / count / trend questions       → Phase 2 (semantic layer)
-  RELATIONAL   — multi-hop / hierarchy / heritage          → Phase 3 (subgraph engine)
-  COMPARATIVE  — cross-source comparison                   → Phase 6 (fan out + fuse)
-  FALLBACK     — everything else                           → Phase 7 (LLM free-form SQL)
-
-Fast-lane checks (Phase 4 high-confidence template/metric matches) bypass this router
-entirely — they short-circuit before classify_intent is ever called.
-
-Priority order inside classify_intent:
-  1. COMPARATIVE — explicit cross-source comparison signal
-  2. RELATIONAL  — multi-hop / hierarchy / heritage signal (no pure-count override)
-  3. ANALYTICAL  — aggregate / count / metric signal
-  4. FALLBACK    — default
-"""
 from __future__ import annotations
 
 from typing import Any
@@ -70,7 +50,6 @@ _ANALYTICAL_KEYWORDS = frozenset({
 
 _ANALYTICAL_INTENTS = frozenset({"population", "eviction", "emigration", "tenancy", "people"})
 
-# Keyword sets that signal genuine relational depth (not just passing mentions).
 _STRONG_RELATIONAL = _RELATIONAL_KEYWORDS | _HIERARCHY_KEYWORDS
 
 
@@ -79,22 +58,13 @@ def classify_intent(
     analysis: dict[str, Any],
     slot_fill: Any | None,
 ) -> str:
-    """
-    Return one of ANALYTICAL, RELATIONAL, COMPARATIVE, or FALLBACK.
-
-    Called only when no Phase 4 fast-lane match is available — the fast lane
-    (high-confidence template, verified analysis, direct memory reuse, high-confidence
-    semantic slot fill) bypasses this function entirely.
-    """
     q = (question or "").lower()
     primary_intent = analysis.get("primary_intent", "")
     output_mode = analysis.get("output_mode", "")
 
-    # ── 1. COMPARATIVE — highest priority; both stores must contribute ────────
     if any(kw in q for kw in _COMPARATIVE_KEYWORDS):
         return COMPARATIVE
 
-    # ── 2. RELATIONAL — multi-hop / hierarchy / heritage / sensemaking ────────
     has_relational = any(kw in q for kw in _RELATIONAL_KEYWORDS)
     has_hierarchy = any(kw in q for kw in _HIERARCHY_KEYWORDS)
     has_heritage = any(kw in q for kw in _HERITAGE_KEYWORDS)
@@ -102,10 +72,6 @@ def classify_intent(
     geography_intent = primary_intent == "geography"
 
     if geography_intent or has_relational or has_hierarchy or has_heritage or has_sensemaking:
-        # Core Rule 1 override: a pure count question with no genuine relational
-        # depth (e.g. "how many ring forts are in the parish?") stays on the SQL
-        # path.  Only heritage/sensemaking keywords trigger this check; explicit
-        # relational or hierarchy keywords always win.
         if (has_heritage or has_sensemaking) and not (has_relational or has_hierarchy or geography_intent):
             pure_count = (
                 output_mode in {"count", "aggregate"}
@@ -114,9 +80,6 @@ def classify_intent(
             if pure_count:
                 return ANALYTICAL
 
-            # Person-detail guard: estate tenants (people) live in SQLite, not the KG.
-            # If only heritage/sensemaking keywords fired and the question names a
-            # specific person, SPARQL will return nothing — route straight to SQL.
             _has_person = bool(
                 analysis.get("surname")
                 or analysis.get("forename")
@@ -127,15 +90,13 @@ def classify_intent(
 
         return RELATIONAL
 
-    # ── 3. ANALYTICAL — aggregate / metric / count / list / record questions ──
     analytical = (
         primary_intent in _ANALYTICAL_INTENTS
         or output_mode in {"count", "aggregate", "trend", "list", "grouped"}
         or any(kw in q for kw in _ANALYTICAL_KEYWORDS)
-        or slot_fill is not None  # semantic layer found a candidate
+        or slot_fill is not None
     )
     if analytical:
         return ANALYTICAL
 
-    # ── 4. FALLBACK — free-form LLM SQL generation ────────────────────────────
     return FALLBACK

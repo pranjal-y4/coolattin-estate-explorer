@@ -291,11 +291,7 @@ def test_rrf_combines_dense_and_sparse_results(monkeypatch):
     reason="TEST_PGVECTOR_DSN not configured for live pgvector integration",
 )
 def test_live_pgvector_integration_placeholder():
-    # This test intentionally skips unless a real pgvector DSN is supplied.
     assert True
-
-
-# ─── Task 1: loud WARNING when psycopg is missing ────────────────────────────
 
 
 def _reset_warning_flag() -> None:
@@ -303,7 +299,6 @@ def _reset_warning_flag() -> None:
 
 
 def test_psycopg_missing_with_new_pipeline_emits_warning(monkeypatch, caplog):
-    """When psycopg is None and ASK_USE_NEW_PIPELINE=true, warn exactly once."""
     _reset_sync_state()
     _reset_warning_flag()
     monkeypatch.setattr(ask_pgvector, "psycopg", None)
@@ -312,7 +307,7 @@ def test_psycopg_missing_with_new_pipeline_emits_warning(monkeypatch, caplog):
 
     with caplog.at_level(logging.WARNING, logger="backend.services.ask_pgvector"):
         ask_pgvector.backend_status()
-        ask_pgvector.backend_status()  # second call must NOT emit a second warning
+        ask_pgvector.backend_status()
 
     warning_lines = [r for r in caplog.records if "psycopg not installed" in r.message]
     assert len(warning_lines) == 1, (
@@ -321,7 +316,6 @@ def test_psycopg_missing_with_new_pipeline_emits_warning(monkeypatch, caplog):
 
 
 def test_psycopg_missing_new_pipeline_false_no_warning(monkeypatch, caplog):
-    """When ASK_USE_NEW_PIPELINE=false, the missing-psycopg warning must NOT fire."""
     _reset_sync_state()
     _reset_warning_flag()
     monkeypatch.setattr(ask_pgvector, "psycopg", None)
@@ -336,7 +330,6 @@ def test_psycopg_missing_new_pipeline_false_no_warning(monkeypatch, caplog):
 
 
 def test_psycopg_present_no_warning(monkeypatch, caplog):
-    """When psycopg is available, no missing-psycopg warning is emitted."""
     _reset_sync_state()
     _reset_warning_flag()
     state = {"rows": {}, "queries": []}
@@ -349,9 +342,6 @@ def test_psycopg_present_no_warning(monkeypatch, caplog):
 
     warning_lines = [r for r in caplog.records if "psycopg not installed" in r.message]
     assert warning_lines == [], f"Expected no warning; got: {[r.message for r in warning_lines]}"
-
-
-# ─── Task 2: embedding failure status semantics ───────────────────────────────
 
 
 def _make_chunks(n: int) -> list[dict]:
@@ -371,7 +361,6 @@ def _make_chunks(n: int) -> list[dict]:
 
 
 def test_pgvector_all_embeddings_fail_returns_failed(monkeypatch):
-    """When every embedding is empty, sync must return status='failed', not 'completed'."""
     state = {"rows": {}, "queries": []}
     _reset_sync_state()
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/test")
@@ -381,7 +370,6 @@ def test_pgvector_all_embeddings_fail_returns_failed(monkeypatch):
         "backend.services.retrieval_chunks.build_retrieval_chunks",
         lambda: _make_chunks(3),
     )
-    # All embeddings are empty vectors — simulates API failure
     monkeypatch.setattr(
         "backend.services.voyage_embeddings.embed_documents",
         lambda texts: [[] for _ in texts],
@@ -398,7 +386,6 @@ def test_pgvector_all_embeddings_fail_returns_failed(monkeypatch):
 
 
 def test_pgvector_partial_embeddings_fail_returns_completed_with_failures(monkeypatch):
-    """When some embeddings fail, sync must return 'completed_with_failures' with correct counts."""
     state = {"rows": {}, "queries": []}
     _reset_sync_state()
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/test")
@@ -408,7 +395,6 @@ def test_pgvector_partial_embeddings_fail_returns_completed_with_failures(monkey
         "backend.services.retrieval_chunks.build_retrieval_chunks",
         lambda: _make_chunks(4),
     )
-    # First two succeed, last two fail
     monkeypatch.setattr(
         "backend.services.voyage_embeddings.embed_documents",
         lambda texts: [[1.0, 0.0] if i < 2 else [] for i in range(len(texts))],
@@ -426,19 +412,9 @@ def test_pgvector_partial_embeddings_fail_returns_completed_with_failures(monkey
     )
 
 
-# ─── Task 5: input_type asymmetry guard ──────────────────────────────────────
-
-
 def test_embed_input_type_asymmetry(monkeypatch):
-    """
-    Regression guard: embed_documents must call Cohere with input_type='search_document'
-    and embed_query must call with input_type='search_query'.
-    Fails if both use the same type (silent quality collapse).
-    Uses EMBEDDING_PROVIDER=cohere to exercise the Cohere path explicitly.
-    """
     from backend.services import voyage_embeddings
 
-    # Force Cohere path so the Cohere-specific monkeypatches below take effect.
     monkeypatch.setenv("EMBEDDING_PROVIDER", "cohere")
 
     recorded: list[str] = []
@@ -449,9 +425,9 @@ def test_embed_input_type_asymmetry(monkeypatch):
 
     monkeypatch.setattr(voyage_embeddings, "_api_embed", fake_api_embed)
     monkeypatch.setattr(voyage_embeddings, "COHERE_API_KEY", "fake-key")
-    monkeypatch.setattr(voyage_embeddings, "_client", object())  # non-None sentinel
-    monkeypatch.setattr(voyage_embeddings, "_key_loaded", True)  # skip real init
-    monkeypatch.setattr(voyage_embeddings, "_DOC_CACHE", {})     # ensure cache miss
+    monkeypatch.setattr(voyage_embeddings, "_client", object())
+    monkeypatch.setattr(voyage_embeddings, "_key_loaded", True)
+    monkeypatch.setattr(voyage_embeddings, "_DOC_CACHE", {})
 
     voyage_embeddings.embed_documents(["Some corpus text about Coolattin tenants."])
     voyage_embeddings.embed_query("Who is Edward Dagg from Aghowle?")
@@ -469,7 +445,6 @@ def test_embed_input_type_asymmetry(monkeypatch):
 
 
 def test_pgvector_dense_retrieve_works_after_completed_with_failures(monkeypatch):
-    """dense_retrieve must still query when sync status is 'completed_with_failures'."""
     state = {"rows": {}, "queries": []}
     _reset_sync_state()
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/test")
@@ -479,7 +454,6 @@ def test_pgvector_dense_retrieve_works_after_completed_with_failures(monkeypatch
         "backend.services.retrieval_chunks.build_retrieval_chunks",
         lambda: _make_chunks(2),
     )
-    # First succeeds, second fails
     monkeypatch.setattr(
         "backend.services.voyage_embeddings.embed_documents",
         lambda texts: [[1.0, 0.0]] + [[] for _ in texts[1:]],
@@ -499,15 +473,7 @@ def test_pgvector_dense_retrieve_works_after_completed_with_failures(monkeypatch
     assert len(rows) == 1, f"Expected the 1 stored chunk to be returned; got {len(rows)}"
 
 
-# ─── Task 1: TTL healing — failed chunks retried post-TTL without force=True ──
-
-
 def test_failed_chunks_are_retried_after_ttl_without_force(monkeypatch):
-    """
-    Failed chunks (status=completed_with_failures) are healed automatically once
-    the TTL expires: sync_retrieval_chunks(force=False) re-embeds only the missing
-    chunks.  No force=True is required.
-    """
     state = {"rows": {}, "queries": []}
     call_n: dict[str, int] = {"n": 0}
     _reset_sync_state()
@@ -522,23 +488,18 @@ def test_failed_chunks_are_retried_after_ttl_without_force(monkeypatch):
     def embed_by_call(texts: list[str]) -> list[list[float]]:
         call_n["n"] += 1
         if call_n["n"] == 1:
-            # First sync: chunk:0 and chunk:1 succeed; chunk:2 fails
             return [[1.0, 0.0], [0.0, 1.0], []]
-        # Post-TTL sync: only the 1 missing chunk is passed; all succeed
         return [[0.5, 0.5]] * len(texts)
 
     monkeypatch.setattr("backend.services.voyage_embeddings.embed_documents", embed_by_call)
 
-    # First sync — expect partial failure
     r1 = ask_pgvector.sync_retrieval_chunks(force=True)
     assert r1["status"] == "completed_with_failures", f"Unexpected initial status: {r1['status']}"
     assert len(state["rows"]) == 2
     assert "chunk:2" not in state["rows"], "chunk:2 should not be in DB after first sync"
 
-    # Simulate TTL expiry without force=True
     ask_pgvector._SYNC_STATE["synced_at"] = time.time() - ask_pgvector._SYNC_TTL_SECONDS - 1
 
-    # Normal post-TTL sync: must retry the missing chunk without force=True
     r2 = ask_pgvector.sync_retrieval_chunks(force=False)
     assert r2["status"] == "completed", (
         f"Expected 'completed' after TTL healing (force=False); got '{r2['status']}'"
@@ -552,15 +513,7 @@ def test_failed_chunks_are_retried_after_ttl_without_force(monkeypatch):
     )
 
 
-# ─── Task 3: local provider prefix asymmetry ─────────────────────────────────
-
-
 def test_local_embed_input_type_asymmetry(monkeypatch):
-    """
-    The local bge-large-en-v1.5 provider MUST prepend BGE_QUERY_INSTRUCTION to
-    queries and must NOT prepend it to documents.  This test FAILS if query and
-    document texts are sent to the model identically (i.e. the prefix is not applied).
-    """
     from backend.services import local_embeddings
     import numpy as np
 
@@ -581,18 +534,15 @@ def test_local_embed_input_type_asymmetry(monkeypatch):
 
     assert len(texts_seen) == 2, f"Expected 2 encode calls; got {len(texts_seen)}"
 
-    # Document must be encoded without any prefix
     assert texts_seen[0] == doc_text, (
         f"Document must reach model as-is (no prefix); got: {texts_seen[0]!r}"
     )
-    # Query must have the instruction prepended
     expected_query = local_embeddings.BGE_QUERY_INSTRUCTION + query_text
     assert texts_seen[1] == expected_query, (
         f"Query must have BGE_QUERY_INSTRUCTION prefix;\n"
         f"  expected: {expected_query!r}\n"
         f"  got:      {texts_seen[1]!r}"
     )
-    # The asymmetry guard: they must differ
     assert texts_seen[0] != texts_seen[1], (
         "query and document texts sent to the model must NOT be identical — "
         "prefix asymmetry is broken"

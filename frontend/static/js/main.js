@@ -73,8 +73,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const state = {
     records: [],
-    recordById: new Map(),   // record_id → record (O(1) lookup)
-    recordsByName: new Map(), // "forename|surname" → [records] (O(1) person grouping)
+    recordById: new Map(),
+    recordsByName: new Map(),
     townlandIndex: {},
     familyGroups: {},
     activeGroups: []
@@ -160,7 +160,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   function canonicalName(rec) {
     const forename = (rec.forename || "").trim();
     let surname = (rec.surname || "").trim();
-    // Treat non-letter-only surnames (blank, numeric, punctuation, etc.) as Unknown
     if (!surname || !/^[A-Za-z\s'-]+$/.test(surname)) surname = "Unknown";
     if (rec.canonical_name && rec.canonical_name.trim()) return rec.canonical_name.trim();
     return `${forename} ${surname}`.trim() || "Unknown";
@@ -235,7 +234,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       const match = state.records.find((r) => {
         const candidate = `${r.forename || ""} ${r.surname || ""}`.trim().toLowerCase();
         if (candidate !== full) return false;
-        // Prefer same townland when available
         if (townland) return !!r.has_emigration_record && (r.townland || "").trim().toLowerCase() === townland;
         return !!r.has_emigration_record;
       }) || state.records.find((r) => !!r.has_emigration_record && `${r.forename || ""} ${r.surname || ""}`.trim().toLowerCase() === full);
@@ -355,7 +353,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (value === null || value === undefined || value === "") {
           continue;
         } else if (value === true || value === "true" || value === 1 || value === "1") {
-          // Find other townlands in the data that share this mountain common
           const thisTownland = (normalized.townland || "").trim();
           const mountainNeighbours = state.records
             .filter(r =>
@@ -503,7 +500,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function workhouseBundleFromRecord(rec) {
-    // Use workhouse data already embedded in the record from /api/unified/records
     const linked = Array.isArray(rec.linked_workhouse_records) ? rec.linked_workhouse_records : [];
     const possible = Array.isArray(rec.possible_workhouse_matches) ? rec.possible_workhouse_matches : [];
     const pleaseCheck = Array.isArray(rec.please_check_records) ? rec.please_check_records : possible;
@@ -535,7 +531,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     if (!confirmed.length && !possible.length) {
       const matches = legacyMatches;
-      // Group by confidence tier
       const groups = {};
       for (const m of matches) {
         const tier = m.confidence || "Low";
@@ -733,7 +728,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     state.recordsByName = new Map();
 
     records.forEach((rec) => {
-      // O(1) lookup indexes
       if (rec.record_id != null) state.recordById.set(String(rec.record_id), rec);
       const _fn = (rec.forename || "").trim().toLowerCase();
       const _sn = (rec.surname  || "").trim().toLowerCase();
@@ -779,9 +773,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         node.chiefTenants[inferredChief].underTenants[uName].records.push(rec);
       }
 
-      // For tenancy-survey records, surname is blank but chief_tenant_surname
-      // holds the person's actual family name — use it as fallback so the
-      // "Surnames" view is populated (e.g. Aghowle Lower 1842 survey).
       const skipCTNames = new Set(["common grazing", "house lot"]);
       const ctSn = (rec.chief_tenant_surname || "").trim();
       const ctFn = (rec.chief_tenant_forename || "").trim();
@@ -863,7 +854,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     const surname  = (rec.surname  || "").trim().toLowerCase();
     const hasName  = forename || (surname && surname !== "unknown");
 
-    // O(1) lookup using the pre-built name index
     const allForPerson = hasName
       ? (state.recordsByName.get(`${forename}|${surname}`) || [rec])
       : [rec];
@@ -918,7 +908,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!panel) return;
     const isOpen = panel.style.display === "block";
     panel.style.display = isOpen ? "none" : "block";
-    // Lazy rendering: only fill data-lazy-group placeholders on first open
     if (!isOpen && panel.hasAttribute("data-lazy-group") && panel.textContent.trim() === "") {
       const idx = groupIdx !== undefined ? groupIdx : Number(panel.getAttribute("data-lazy-group"));
       const group = state.activeGroups[idx];
@@ -992,7 +981,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       </div>
     `;
 
-    // Fetch and inject census summary asynchronously
     fetchCensusStripForPanel(key);
   }
 
@@ -1031,7 +1019,6 @@ document.addEventListener("DOMContentLoaded", async () => {
           </div>
         </div>`;
     } catch (e) {
-      // silently skip — census strip is supplementary
     }
   }
 
@@ -1188,9 +1175,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     state.records = data.map((r) => ({ ...r, year: normalizeYear(r.year) }));
     buildIndexes(state.records);
-    // Re-populate surname datalist for the currently selected townland,
-    // since records arrive async and the user may have selected a townland
-    // before this load completed.
     const _surnameSuggest = document.getElementById("surnameSuggestions");
     if (_surnameSuggest !== null) {
       const _tl = (document.getElementById("townlandSelect")?.value || "").toLowerCase();
@@ -1211,7 +1195,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function loadOptions() {
     const [townlandsRes, geoRes] = await Promise.all([
       fetch("/api/unified/townlands"),
-      // Reuse already-loaded geo data (set by loadTownlandsGeo) to avoid re-downloading 6.2 MB
       townlandsGeoData ? Promise.resolve(null) : fetch("/static/data/townlands.json"),
     ]);
     const unified = townlandsRes.ok ? await townlandsRes.json() : [];
@@ -1223,7 +1206,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     const geoNames = new Set(
       (geo.features || []).map(f => String(f.properties?.TL_ENGLISH || "").trim().toLowerCase())
     );
-    // Only show entries that correspond to actual estate polygons
     const filtered = unified.filter(t => geoNames.has(t.trim().toLowerCase()));
 
     const tSelect = $("townlandSelect");
@@ -1288,9 +1270,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     input.addEventListener("input", () => {
       setSurnameError("");
       refreshSuggest();
-      // Datalist selection fires `input` but not always `change` on all browsers.
-      // After a short delay, check whether the value now exactly matches a datalist
-      // option and auto-open results if so (handles Safari / older browsers).
       clearTimeout(_surnameTimer);
       _surnameTimer = setTimeout(() => {
         const val = input.value.trim();
@@ -1340,8 +1319,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       } else {
         renderTownlandPanel(tl);
       }
-      
-      // Also highlight on map when selected from dropdown
+
       if (townlandsGeoData && tl) {
         const feature = townlandsGeoData.features.find(f => {
           const nm = String(f.properties?.TL_ENGLISH || "").trim();
@@ -1352,7 +1330,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
       }
     } else {
-      // Remove highlight when cleared
       if (selectedTownlandLayer) {
         map.removeLayer(selectedTownlandLayer);
         selectedTownlandLayer = null;
@@ -1387,12 +1364,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     interactive: false
   }).addTo(map);
   map.fitBounds(L.latLngBounds([52.70, -6.75], [53.25, -6.05]));
-  // Force Leaflet to recalculate its container size after layout stabilises.
-  // Without this, tiles may not render when the map is inside a section that
-  // is painted after the initial DOMContentLoaded measurement.
   setTimeout(() => map.invalidateSize(), 200);
 
-  // Store references for highlighting
   let townlandGeoLayer = null;
   let selectedTownlandLayer = null;
   let selectedTownlandName = null;
@@ -1898,17 +1871,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderHomeHeritageSummary(resolved);
   };
 
-  // Create glowing effect for selected townland
   function highlightTownland(feature, layer) {
-    // Remove previous highlight
     if (selectedTownlandLayer) {
       map.removeLayer(selectedTownlandLayer);
     }
-    
+
     const nm = String(feature.properties?.TL_ENGLISH || "").trim();
     selectedTownlandName = nm;
-    
-    // Create glowing overlay with outer glow
+
     const glowLayer = L.geoJSON(feature, {
       style: {
         color: '#60a5fa',
@@ -1919,8 +1889,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         lineJoin: 'round'
       }
     });
-    
-    // Create middle glow
+
     const midLayer = L.geoJSON(feature, {
       style: {
         color: '#3b82f6',
@@ -1931,8 +1900,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         lineJoin: 'round'
       }
     });
-    
-    // Create bright inner line
+
     const highlightLayer = L.geoJSON(feature, {
       style: {
         color: '#93c5fd',
@@ -1943,20 +1911,18 @@ document.addEventListener("DOMContentLoaded", async () => {
         lineJoin: 'round'
       }
     });
-    
-    // Add all layers to a group
+
     selectedTownlandLayer = L.layerGroup([glowLayer, midLayer, highlightLayer]).addTo(map);
-    
-    // Add pulsing animation
+
     let pulseState = 0;
     function animatePulse() {
       if (!selectedTownlandLayer) return;
-      
+
       pulseState += 0.05;
       const glowOpacity = 0.1 + Math.sin(pulseState) * 0.05;
       const midOpacity = 0.15 + Math.sin(pulseState) * 0.08;
       const weightChange = Math.sin(pulseState) * 2;
-      
+
       selectedTownlandLayer.eachLayer(l => {
         if (l === glowLayer.getLayers()[0]) {
           l.setStyle({ fillOpacity: glowOpacity, weight: 16 + weightChange });
@@ -1964,31 +1930,28 @@ document.addEventListener("DOMContentLoaded", async () => {
           l.setStyle({ fillOpacity: midOpacity, weight: 8 + weightChange });
         }
       });
-      
+
       requestAnimationFrame(animatePulse);
     }
     animatePulse();
-    
-    // Zoom to the selected townland
+
     const bounds = L.geoJSON(feature).getBounds();
     map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
   }
 
   async function loadTownlandsGeo() {
-    // Reuse geo data already fetched by loadOptions; fetch only if needed
     if (!townlandsGeoData) {
       const res = await fetch("/static/data/townlands.json");
       townlandsGeoData = await res.json();
     }
     const geo = townlandsGeoData;
-    
+
     townlandGeoLayer = L.geoJSON(geo, {
       style: { color: "#8b5e34", weight: 1, fillColor: "#f5efe6", fillOpacity: 0.35 },
       onEachFeature: (feature, layer) => {
         const nm = String(feature.properties?.TL_ENGLISH || "").trim();
         if (!nm) return;
 
-        // Hover tooltip — name only, no permanent label on the map
         layer.bindTooltip(nm, {
           permanent: false,
           sticky: true,
@@ -1998,12 +1961,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         });
 
         layer.on("click", () => {
-          // Highlight selected townland with glowing effect
           highlightTownland(feature, layer);
 
           const keyRaw = canonicalTownland(nm) || nm;
 
-          // Sync dropdown — match case-insensitively against loaded options
           const select = $("townlandSelect");
           let matchedVal = keyRaw;
           for (let opt of select.options) {
@@ -2014,10 +1975,6 @@ document.addEventListener("DOMContentLoaded", async () => {
           }
           select.value = matchedVal;
 
-          // Directly render the panel for the clicked townland regardless of
-          // whether the dropdown options have finished loading.  The change
-          // event also fires so surname autocomplete and other listeners stay
-          // in sync, but we do not depend on it reaching renderTownlandPanel.
           selectedTownlandName = matchedVal || keyRaw;
           if (homeHeritageState.mode === "heritage") {
             renderHomeHeritageSummary(selectedTownlandName);
@@ -2029,13 +1986,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     }).addTo(map);
 
-    // Centroid label markers removed — names are shown via hover tooltips above.
   }
 
   (async () => {
-    // Kick off geo render and unified records fetch in parallel — they are independent.
-    // loadTownlandsGeo (6.2 MB) and loadUnifiedData (4.4 MB) previously downloaded
-    // sequentially; running them together cuts total wait time roughly in half.
     const unifiedDataP = loadUnifiedData();
 
     try {
@@ -2044,8 +1997,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       console.error("Townland map load failed:", e);
     }
 
-    // Unified records are already in flight; await the shared promise.
-    // URL param handling also lives here because it depends on loaded options.
     queueMicrotask(async () => {
       try {
         await unifiedDataP;
@@ -2059,15 +2010,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
       }
 
-      // If a townland was passed via ?townland= (e.g. linked from census page),
-      // auto-select it in the dropdown and scroll the map explorer into view.
       const urlParams = new URLSearchParams(window.location.search);
       const tlParam = urlParams.get("townland");
       const viewParam = (urlParams.get("view") || "").toLowerCase();
       if (tlParam) {
         const select = $("townlandSelect");
         if (select) {
-          // Match case-insensitively against loaded options
           let matched = "";
           for (const opt of select.options) {
             if (opt.value.toLowerCase() === tlParam.toLowerCase()) {
@@ -2077,13 +2025,11 @@ document.addEventListener("DOMContentLoaded", async () => {
           }
           if (matched) {
             select.value = matched;
-            // Strip the param so a page refresh doesn't re-select the townland
             window.history.replaceState({}, "", window.location.pathname);
             select.dispatchEvent(new Event("change"));
             if (viewParam === "heritage") {
               window.openHistoricLandscapeInMap(matched);
             }
-            // Scroll to the explore section smoothly
             document.getElementById("explore")?.scrollIntoView({ behavior: "smooth", block: "start" });
           }
         }

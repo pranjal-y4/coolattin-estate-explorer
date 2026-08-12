@@ -1,32 +1,3 @@
-"""
-coolattin/jobs/census_ingest.py
-
-Census ingestion job — full Wicklow census ingest from VRTI KG.
-
-=================================================================
-RUN THIS TO POPULATE THE DATABASE FROM THE KNOWLEDGE GRAPH.
-=================================================================
-
-Usage (from project root):
-  python -m coolattin.jobs.census_ingest
-  python -m coolattin.jobs.census_ingest --year 1841
-
-What this does:
-  1. Probes the VRTI SPARQL endpoint (fails fast if unreachable)
-  2. Fetches all Wicklow census records from the KG
-  3. Normalises townland names via townland_service
-  4. Upserts records into the local SQLite database
-  5. Generates an Excel export in exports/census/
-  6. Updates the refresh_state table
-
-When to run:
-  - First setup (DB is empty)
-  - After the KG is updated with new census data
-  - On a schedule (e.g. nightly via cron) when census data changes frequently
-
-After this runs, the web app serves data from the local DB
-without calling the KG on every request.
-"""
 from __future__ import annotations
 
 import argparse
@@ -38,10 +9,6 @@ log = logging.getLogger(__name__)
 
 
 def run_census_ingest(year: int | None = None) -> int:
-    """
-    Full census ingestion pipeline.
-    Returns the count of records ingested (0 on failure).
-    """
     from backend.integrations import vrti_sparql
     from backend.repositories import census_repository, refresh_state_repository
     from backend.services.census_service import DATASET_KEY_PREFIX
@@ -52,7 +19,6 @@ def run_census_ingest(year: int | None = None) -> int:
 
     log.info("census_ingest.start | year=%s", year)
 
-    # Step 1: Probe endpoint
     if not vrti_sparql.probe_endpoint():
         log.error(
             "census_ingest.endpoint_unreachable | %s — aborting.",
@@ -62,7 +28,6 @@ def run_census_ingest(year: int | None = None) -> int:
 
     log.info("census_ingest.endpoint_ok | %s", vrti_sparql.SPARQL_ENDPOINT)
 
-    # Step 2: Fetch from KG
     kg_dtos = vrti_sparql.get_census_records_for_county(county="Wicklow", year=year)
     log.info("census_ingest.kg_fetched | count=%d", len(kg_dtos))
 
@@ -74,7 +39,6 @@ def run_census_ingest(year: int | None = None) -> int:
         records = load_standard_census_seed_records(years=[year] if year else None)
         source = "csv_seed"
     else:
-        # Step 3: Normalise
         records = [
             CensusRecord(
                 townland_name=canonical_name(dto.townland_name),
@@ -96,17 +60,14 @@ def run_census_ingest(year: int | None = None) -> int:
         log.error("census_ingest.no_records — nothing to persist.")
         return 0
 
-    # Step 4: Persist to DB
     count = census_repository.upsert_many(records)
     log.info("census_ingest.persisted | count=%d", count)
 
-    # Step 5: Export to Excel
     dataset_key = f"{DATASET_KEY_PREFIX}_{year}" if year else DATASET_KEY_PREFIX
     filters = CensusFilters(year=year, limit=len(records))
     export_path = export_service.export_census(records, filters)
     log.info("census_ingest.exported | path=%s", export_path)
 
-    # Step 6: Update refresh state
     refresh_state_repository.upsert(
         dataset_key,
         source=source,

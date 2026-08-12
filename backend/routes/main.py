@@ -1,8 +1,3 @@
-"""
-coolattin/routes/main.py
-
-Page routes — serve HTML templates.
-"""
 from __future__ import annotations
 import logging
 from flask import Blueprint, render_template, request

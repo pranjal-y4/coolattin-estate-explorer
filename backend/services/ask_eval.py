@@ -1,44 +1,3 @@
-"""
-backend/services/ask_eval.py
-
-Eval harness for the Ask pipeline — Phases 0, 1, 2, …
-
-Tests the deterministic components of the pipeline (no LLM calls) against a
-golden set of questions spanning all template categories:
-  emigration · evictions · census/population · geography · people/names
-  tenancy · heritage · overview · entity-linking (Phase 1)
-  relational/hierarchy · comparative · fallback (Phase 5 lanes)
-
-Metrics reported — global
---------------------------
-  routing_accuracy        — % of cases where the pipeline chose the correct lane
-  aggregation_correctness — % where the numeric answer exactly matches ground truth
-  sql_exec_success        — % where the compiled SQL executed without error
-  entity_resolution_acc   — % where entity resolved to correct label_norm
-  sql_id_resolution_rate  — % of townland cases where sql_id is populated (Phase 1+)
-  kg_uri_resolution_rate  — % of townland cases where kg_uri is populated (Phase 1+)
-  p50_latency_ms          — median per-question wall time
-  p95_latency_ms          — 95th-percentile wall time
-  llm_calls               — LLM calls needed (0 for deterministic-only cases)
-
-Per-lane metrics (Phase 5+)
------------------------------
-  analytical_n / analytical_agg_acc  — ANALYTICAL lane coverage + aggregation accuracy
-  relational_n / subgraph_recall     — RELATIONAL lane coverage + subgraph retrieval recall
-  comparative_n / comparative_sqlite_capture / comparative_kg_capture
-  fallback_n / fallback_routing_acc  — FALLBACK lane coverage + routing accuracy
-
-Usage
------
-  python3 -m backend.services.ask_eval --phase phase2
-
-  # Compare phases:
-  python3 -m backend.services.ask_eval --compare \\
-      backend/services/eval_results/eval_phase2.json \\
-      backend/services/eval_results/eval_phase5.json
-
-Ground-truth values were verified directly against coolattin.db on 2026-06-01.
-"""
 from __future__ import annotations
 
 import json
@@ -52,36 +11,27 @@ from pathlib import Path
 from typing import Any
 
 
-# ── Dataclasses ───────────────────────────────────────────────────────────────
-
 @dataclass
 class EvalCase:
     id: str
     question: str
-    category: str          # emigration|eviction|census|geography|people|tenancy|heritage|overview|entity|relational|comparative|fallback
-    expected_route: str    # "verified_analysis" | "template" | "llm"
+    category: str
+    expected_route: str
     townland_hint: str | None = None
-    # Entity resolution
-    expected_entity_norm: str | None = None   # UPPER townland norm e.g. "BALLINACOR"
-    expected_surname: str | None = None        # e.g. "BYRNE"
-    # Phase 1: enhanced entity checks
-    expected_sql_id: int | None = None         # expected townland.id
-    expected_kg_uri_prefix: str | None = None  # expected kg_uri prefix
-    # Template expected
+    expected_entity_norm: str | None = None
+    expected_surname: str | None = None
+    expected_sql_id: int | None = None
+    expected_kg_uri_prefix: str | None = None
     expected_template_id: str | None = None
-    # Ground truth for aggregation check
-    ground_truth_sql: str | None = None        # canonical SQL for the correct answer
-    ground_truth_value: Any = None             # expected scalar or list check
-    ground_truth_key: str | None = None        # column name for scalar check
-    ground_truth_type: str | None = None       # "scalar"|"sum_all"|"row_key_value"|None
+    ground_truth_sql: str | None = None
+    ground_truth_value: Any = None
+    ground_truth_key: str | None = None
+    ground_truth_type: str | None = None
     expected_answer_facts: list[str] = field(default_factory=list)
-    # Phase 5: lane + subgraph + comparative fields
-    expected_lane: str | None = None           # "analytical"|"relational"|"comparative"|"fallback"
-    expected_subgraph_facts: list[str] = field(default_factory=list)  # strings expected in linearized subgraph
-    expected_comparative_sources: list[str] = field(default_factory=list)  # ["sqlite", "kg"]
-    # Catalogue classification for gold set  A|A-trend|R|C|H|I|G|X|P
+    expected_lane: str | None = None
+    expected_subgraph_facts: list[str] = field(default_factory=list)
+    expected_comparative_sources: list[str] = field(default_factory=list)
     catalogue_code: str | None = None
-    # True for G-series: questions genuinely outside the DB scope
     is_out_of_scope: bool = False
 
 
@@ -89,13 +39,13 @@ class EvalCase:
 class CaseResult:
     id: str
     category: str
-    question: str          # truncated for display
+    question: str
     expected_route: str
-    actual_route: str      # verified_analysis|template|template_miss
+    actual_route: str
     route_ok: bool
     entity_ok: bool | None
-    sql_id_ok: bool | None  # Phase 1: sql_id populated and matches expected
-    kg_uri_ok: bool | None  # Phase 1: kg_uri populated with VRTI prefix
+    sql_id_ok: bool | None
+    kg_uri_ok: bool | None
     sql_ok: bool | None
     agg_ok: bool | None
     agg_actual: Any
@@ -103,19 +53,18 @@ class CaseResult:
     template_id: str | None
     latency_ms: int
     error: str | None = None
-    # Phase 5 diagnostics
-    lane: str | None = None                    # actual lane from classify_intent
+    lane: str | None = None
     lane_ok: bool | None = None
-    subgraph_ok: bool | None = None            # did subgraph contain expected facts?
-    subgraph_recall: float | None = None       # fraction of expected_subgraph_facts found
-    comparative_sqlite_ok: bool | None = None  # SQLite returned non-empty result
-    comparative_kg_ok: bool | None = None      # SPARQL/GraphDB returned non-empty result
-    compiled_sql_actual: str | None = None     # SQL actually compiled by the pipeline
-    entity_label_expected: str | None = None   # for miss-detail printing
+    subgraph_ok: bool | None = None
+    subgraph_recall: float | None = None
+    comparative_sqlite_ok: bool | None = None
+    comparative_kg_ok: bool | None = None
+    compiled_sql_actual: str | None = None
+    entity_label_expected: str | None = None
     entity_label_actual: str | None = None
     entity_sql_id_actual: int | None = None
     entity_kg_uri_actual: str | None = None
-    answer_facts_ok: bool | None = None        # expected_answer_facts found in SQL result rows
+    answer_facts_ok: bool | None = None
 
 
 @dataclass
@@ -125,25 +74,8 @@ class EvalResult:
     timestamp: str
 
 
-# ── Golden cases (70 existing + 5 new G-series = 75 total) ───────────────────
-# Ground-truth SQL uses the actual DB column `count` for clearances_record,
-# not the template alias `eviction_count` (handled by _clearances_count_column).
-# All aggregate values verified against coolattin.db on 2026-06-01.
-#
-# catalogue_code maps to the evaluation taxonomy used in gold_answers.csv:
-#   A        Pure analytical aggregate (count/sum, single table/join)
-#   A-trend  Time-series / per-year breakdown
-#   R        Relational / hierarchy / sensemaking
-#   C        Comparative (across groups within the DB)
-#   H        Heritage (monument, holy well, ring fort)
-#   I        Identity / entity resolution
-#   G        General / out-of-scope (should reach honest refusal / template_miss)
-#   X        Cross-source (SQLite vs VRTI KG agreement check)
-#   P        People / persons / surname queries
-
 GOLDEN_CASES: list[EvalCase] = [
 
-    # ── EMIGRATION (8) ─────────────────────────────────────────────────────────
 
     EvalCase(
         id="emi_01_total",
@@ -153,7 +85,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_template_id="emigration_total",
         expected_lane="analytical",
         catalogue_code="A",
-        # Phase 2: semantic layer alias = "emigration_count"
         ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS emigration_count FROM unified_record WHERE has_emigration_record=1",
         ground_truth_value=6016,
         ground_truth_key="emigration_count",
@@ -166,13 +97,10 @@ GOLDEN_CASES: list[EvalCase] = [
         question="How many people emigrated from Ballynultagh?",
         category="emigration",
         expected_route="template",
-        # Phase 0: emigration_total beats emigration_from_townland (score tie). agg_ok=✗.
-        # Phase 2: semantic layer routes to emigration_count + townland filter. agg_ok=✓.
         expected_template_id="emigration_from_townland",
         expected_lane="analytical",
         townland_hint="Ballynultagh",
         expected_entity_norm="BALLYNULTAGH",
-        # ground_truth_key uses semantic layer alias "emigration_count"
         ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS emigration_count FROM unified_record WHERE has_emigration_record=1 AND townland_norm='BALLYNULTAGH'",
         ground_truth_value=400,
         ground_truth_key="emigration_count",
@@ -185,7 +113,6 @@ GOLDEN_CASES: list[EvalCase] = [
         question="How many people emigrated from Killinure?",
         category="emigration",
         expected_route="template",
-        # Same as emi_02 — routing bug fixed in Phase 2 by semantic layer.
         expected_template_id="emigration_from_townland",
         expected_lane="analytical",
         townland_hint="Killinure",
@@ -204,7 +131,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_route="template",
         expected_template_id="emigration_per_year",
         expected_lane="analytical",
-        # Semantic layer returns year + emigration_count; just check SQL executes
         ground_truth_sql=None,
         ground_truth_value=None,
         ground_truth_type=None,
@@ -218,7 +144,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_route="verified_analysis",
         expected_template_id="canada_emigration_peak_period",
         expected_lane="analytical",
-        # Template returns per-year breakdown, not a single total — agg check N/A
         ground_truth_sql=None,
         ground_truth_value=None,
         ground_truth_type=None,
@@ -249,7 +174,7 @@ GOLDEN_CASES: list[EvalCase] = [
         ground_truth_sql="SELECT COUNT(DISTINCT ship_name) AS n FROM unified_record WHERE ship_name IS NOT NULL AND TRIM(ship_name)!=''",
         ground_truth_value=27,
         ground_truth_key="n",
-        ground_truth_type=None,   # template returns list rows, not this count
+        ground_truth_type=None,
         expected_answer_facts=["Star", "Glenlyon"],
     ),
 
@@ -258,8 +183,6 @@ GOLDEN_CASES: list[EvalCase] = [
         question="How many people emigrated in 1848?",
         category="emigration",
         expected_route="template",
-        # Phase 0: emigration_total wins over emigration_in_year. agg_ok=✗.
-        # Phase 2: semantic layer → emigration_count + year=1848 filter. agg_ok=✓.
         expected_template_id="emigration_in_year",
         expected_lane="analytical",
         ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS emigration_count FROM unified_record WHERE has_emigration_record=1 AND year=1848",
@@ -269,7 +192,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_answer_facts=["1290"],
     ),
 
-    # ── EVICTIONS (6) ──────────────────────────────────────────────────────────
 
     EvalCase(
         id="evic_01_total",
@@ -278,7 +200,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_route="template",
         expected_template_id="eviction_total",
         expected_lane="analytical",
-        # Semantic layer alias: "total_evictions" (avoids normalizer collision with "eviction_count")
         ground_truth_sql="SELECT SUM(count) AS total_evictions FROM clearances_record",
         ground_truth_value=7763,
         ground_truth_key="total_evictions",
@@ -312,7 +233,7 @@ GOLDEN_CASES: list[EvalCase] = [
         ground_truth_sql="SELECT SUM(c.count) AS n FROM clearances_record c JOIN townland t ON c.townland_id=t.id WHERE UPPER(t.name)='BALLINACOR'",
         ground_truth_value=122,
         ground_truth_key="n",
-        ground_truth_type=None,   # template returns per-year rows, not total
+        ground_truth_type=None,
         expected_answer_facts=["Ballinacor"],
     ),
 
@@ -350,28 +271,25 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_route="template",
         expected_template_id="eviction_in_year",
         expected_lane="analytical",
-        # Template returns per-townland rows for that year, NOT a total
         ground_truth_sql="SELECT SUM(count) AS n FROM clearances_record WHERE year=1849",
         ground_truth_value=1016,
         ground_truth_key="n",
-        ground_truth_type=None,   # template returns list, not total — intentional mismatch test
+        ground_truth_type=None,
         expected_answer_facts=["1849"],
     ),
 
-    # ── CENSUS / POPULATION (8) ────────────────────────────────────────────────
 
     EvalCase(
         id="cen_01_estate_1841",
         question="What was the total population of the estate in 1841?",
         category="census",
         expected_route="template",
-        # census_total_year has higher score than census_1841 due to "total"+"estate" optional matches
         expected_template_id="census_total_year",
         expected_lane="analytical",
         ground_truth_sql="SELECT SUM(total) AS n FROM census_record WHERE year=1841",
         ground_truth_value=119300,
         ground_truth_key="n",
-        ground_truth_type=None,   # template returns all years, not just 1841
+        ground_truth_type=None,
         expected_answer_facts=["119300", "1841"],
     ),
 
@@ -385,7 +303,7 @@ GOLDEN_CASES: list[EvalCase] = [
         ground_truth_sql="SELECT SUM(total) AS n FROM census_record WHERE year=1851",
         ground_truth_value=91860,
         ground_truth_key="n",
-        ground_truth_type=None,   # template returns per-townland list
+        ground_truth_type=None,
         expected_answer_facts=["1851"],
     ),
 
@@ -398,7 +316,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_lane="analytical",
         townland_hint="Ballinacor",
         expected_entity_norm="BALLINACOR",
-        # Phase 2: semantic layer → population metric, townland+year filters. Alias="population".
         ground_truth_sql="SELECT SUM(c.total) AS population FROM census_record c JOIN townland t ON c.townland_id=t.id WHERE UPPER(t.name)='BALLINACOR' AND c.year=1841",
         ground_truth_value=55,
         ground_truth_key="population",
@@ -413,7 +330,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_route="template",
         expected_template_id="census_decline_famine",
         expected_lane="analytical",
-        # Template returns per-townland rows (change col), not estate-wide total — type=None
         ground_truth_sql=None,
         ground_truth_value=None,
         ground_truth_key=None,
@@ -428,7 +344,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_route="verified_analysis",
         expected_template_id="population_trend_1841_1861",
         expected_lane="analytical",
-        # Phase 2: semantic layer → population, dim=year, year_range=[1841,1861]. Alias="population".
         ground_truth_sql="SELECT c.year AS year, SUM(c.total) AS population FROM census_record c JOIN townland t ON c.townland_id=t.id WHERE c.year BETWEEN 1841 AND 1861 GROUP BY c.year ORDER BY c.year",
         ground_truth_value=81429,
         ground_truth_key="population",
@@ -455,9 +370,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_route="template",
         expected_template_id="census_total_year",
         expected_lane="analytical",
-        # Phase 2: semantic layer → population, dim=year, alias="population"
-        # Known miss: "across" fuzzy-matches CROSS townland → spurious filter applied.
-        # See written_finding() for full diagnosis.
         ground_truth_sql="SELECT c.year AS year, SUM(c.total) AS population FROM census_record c JOIN townland t ON c.townland_id=t.id GROUP BY c.year ORDER BY c.year",
         ground_truth_value=119300,
         ground_truth_key="population",
@@ -477,7 +389,6 @@ GOLDEN_CASES: list[EvalCase] = [
         ground_truth_type=None,
     ),
 
-    # ── GEOGRAPHY (7) ─────────────────────────────────────────────────────────
 
     EvalCase(
         id="geo_01_total_townlands",
@@ -486,7 +397,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_route="template",
         expected_template_id="townlands_total_count",
         expected_lane="analytical",
-        # Phase 2: semantic layer alias = "townland_count"
         ground_truth_sql="SELECT COUNT(*) AS townland_count FROM townland",
         ground_truth_value=4225,
         ground_truth_key="townland_count",
@@ -501,7 +411,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_route="template",
         expected_template_id="parishes_count",
         expected_lane="analytical",
-        # Phase 2: semantic layer alias = "parish_count"
         ground_truth_sql="SELECT COUNT(DISTINCT civil_parish) AS parish_count FROM townland WHERE civil_parish IS NOT NULL AND TRIM(civil_parish)!=''",
         ground_truth_value=22,
         ground_truth_key="parish_count",
@@ -526,19 +435,15 @@ GOLDEN_CASES: list[EvalCase] = [
         question="Which parish is Ballinacor in?",
         category="geography",
         expected_route="template",
-        # Phase 0: parishes_list wins over townland_parish_lookup. agg_ok=✗.
-        # Phase 2: semantic layer detects "which parish" → townland_attribute metric. agg_ok=✓.
         expected_template_id="townland_parish_lookup",
-        expected_lane="relational",   # hierarchy question → RELATIONAL intent
+        expected_lane="relational",
         townland_hint="Ballinacor",
         expected_entity_norm="BALLINACOR",
         expected_sql_id=355,
         expected_kg_uri_prefix="https://kg.virtualtreasury.ie",
-        # SQLite says civil_parish="Kilbride"; VRTI KG says parish="Ballinacor".
-        # This is a real SQLite/KG data discrepancy exposed here for Phase 6.
-        expected_subgraph_facts=["Ballinacor"],  # KG parish name (VRTI-authoritative)
+        expected_subgraph_facts=["Ballinacor"],
         ground_truth_sql="SELECT civil_parish FROM townland WHERE UPPER(name)='BALLINACOR' LIMIT 1",
-        ground_truth_value="Kilbride",           # SQLite value (may differ from KG)
+        ground_truth_value="Kilbride",
         ground_truth_key="civil_parish",
         ground_truth_type="scalar",
         expected_answer_facts=["Kilbride"],
@@ -563,7 +468,7 @@ GOLDEN_CASES: list[EvalCase] = [
         category="geography",
         expected_route="template",
         expected_template_id="townland_nearby",
-        expected_lane="relational",   # "near" → spatial/relational
+        expected_lane="relational",
         townland_hint="Coolattin",
         expected_entity_norm="COOLATTIN",
         ground_truth_sql=None,
@@ -583,7 +488,6 @@ GOLDEN_CASES: list[EvalCase] = [
         ground_truth_type=None,
     ),
 
-    # ── PEOPLE / NAMES (8) ────────────────────────────────────────────────────
 
     EvalCase(
         id="ppl_01_total_records",
@@ -595,7 +499,7 @@ GOLDEN_CASES: list[EvalCase] = [
         ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS n FROM unified_record",
         ground_truth_value=13707,
         ground_truth_key="n",
-        ground_truth_type=None,   # template returns two-column summary
+        ground_truth_type=None,
         expected_answer_facts=["13707"],
     ),
 
@@ -603,8 +507,6 @@ GOLDEN_CASES: list[EvalCase] = [
         id="ppl_02_byrne_records",
         question="How many records mention the surname Byrne?",
         category="people",
-        # Phase 0/1: output_mode="grouped" bypasses verified_analysis count path → list result. agg_ok=✗.
-        # Phase 2: semantic layer detects "how many"→aggregate + surname → person_count. agg_ok=✓.
         expected_route="template",
         expected_lane="analytical",
         expected_surname="BYRNE",
@@ -636,7 +538,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_route="verified_analysis",
         expected_template_id="widows_count",
         expected_lane="analytical",
-        # Phase 2: semantic layer alias = "widow_count"
         ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS widow_count FROM unified_record WHERE is_widow=1",
         ground_truth_value=811,
         ground_truth_key="widow_count",
@@ -695,7 +596,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_answer_facts=["1847"],
     ),
 
-    # ── TENANCY (6) ───────────────────────────────────────────────────────────
 
     EvalCase(
         id="ten_01_total",
@@ -704,7 +604,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_route="template",
         expected_template_id="tenants_total",
         expected_lane="analytical",
-        # Phase 2: semantic layer alias = "tenancy_count"
         ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS tenancy_count FROM unified_record WHERE has_tenancy_record=1",
         ground_truth_value=5247,
         ground_truth_key="tenancy_count",
@@ -718,7 +617,7 @@ GOLDEN_CASES: list[EvalCase] = [
         category="tenancy",
         expected_route="verified_analysis",
         expected_template_id="tenant_land_gender_average",
-        expected_lane="comparative",  # "versus" → COMPARATIVE intent
+        expected_lane="comparative",
         ground_truth_sql=None,
         ground_truth_value=None,
         ground_truth_type=None,
@@ -775,7 +674,6 @@ GOLDEN_CASES: list[EvalCase] = [
         ground_truth_type=None,
     ),
 
-    # ── HERITAGE (5) ──────────────────────────────────────────────────────────
 
     EvalCase(
         id="her_01_holy_well_population",
@@ -783,7 +681,7 @@ GOLDEN_CASES: list[EvalCase] = [
         category="heritage",
         expected_route="verified_analysis",
         expected_template_id="holy_well_population_relationship",
-        expected_lane="relational",   # heritage signal → RELATIONAL
+        expected_lane="relational",
         ground_truth_sql=None,
         ground_truth_value=None,
         ground_truth_type=None,
@@ -807,15 +705,13 @@ GOLDEN_CASES: list[EvalCase] = [
         id="her_03_holy_well_count",
         question="How many holy wells are recorded in the estate?",
         category="heritage",
-        # Routes to holy_well_population_relationship (required: "holy","well") — returns
-        # population comparison NOT a count. This intentionally tests template routing mismatch.
         expected_route="verified_analysis",
         expected_template_id="holy_well_population_relationship",
-        expected_lane="analytical",   # pure count → ANALYTICAL (Core Rule 1)
+        expected_lane="analytical",
         ground_truth_sql="SELECT COUNT(*) AS n FROM heritage_feature WHERE feature_group='holy_well'",
         ground_truth_value=68,
         ground_truth_key="n",
-        ground_truth_type=None,   # template returns comparison rows, not count
+        ground_truth_type=None,
         expected_answer_facts=["holy well"],
     ),
 
@@ -823,7 +719,6 @@ GOLDEN_CASES: list[EvalCase] = [
         id="her_04_ring_fort_count",
         question="How many ring forts are there in the estate?",
         category="heritage",
-        # Same intentional mismatch as her_03
         expected_route="verified_analysis",
         expected_template_id="ring_fort_population_relationship",
         expected_lane="analytical",
@@ -848,7 +743,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_answer_facts=["holy well"],
     ),
 
-    # ── OVERVIEW / COMBINED (5) ────────────────────────────────────────────────
 
     EvalCase(
         id="ov_01_famine_impact",
@@ -856,7 +750,7 @@ GOLDEN_CASES: list[EvalCase] = [
         category="overview",
         expected_route="template",
         expected_template_id="famine_impact",
-        expected_lane="relational",   # sensemaking → RELATIONAL
+        expected_lane="relational",
         ground_truth_sql=None,
         ground_truth_value=None,
         ground_truth_type=None,
@@ -885,7 +779,7 @@ GOLDEN_CASES: list[EvalCase] = [
         ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS n FROM unified_record WHERE has_emigration_record=1 AND has_eviction_record=1",
         ground_truth_value=0,
         ground_truth_key="n",
-        ground_truth_type=None,   # template returns list not scalar
+        ground_truth_type=None,
         expected_answer_facts=[],
     ),
 
@@ -895,7 +789,7 @@ GOLDEN_CASES: list[EvalCase] = [
         category="overview",
         expected_route="template",
         expected_template_id="emigration_and_population",
-        expected_lane="comparative",  # "compare" → COMPARATIVE
+        expected_lane="comparative",
         ground_truth_sql=None,
         ground_truth_value=None,
         ground_truth_type=None,
@@ -915,9 +809,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_answer_facts=["1847"],
     ),
 
-    # ── PHASE 1 — Entity resolution (sql_id + kg_uri) ──────────────────────────
-    # These cases specifically test the vector-linking introduced in Phase 1.
-    # They use townland hints and check that sql_id and kg_uri are populated.
 
     EvalCase(
         id="er_01_exact_ballinacor",
@@ -941,8 +832,8 @@ GOLDEN_CASES: list[EvalCase] = [
         category="entity",
         expected_route="template",
         expected_lane="analytical",
-        townland_hint="Ballinacour",      # deliberate misspelling
-        expected_entity_norm="BALLINACOR",  # should resolve to canonical
+        townland_hint="Ballinacour",
+        expected_entity_norm="BALLINACOR",
         expected_sql_id=355,
         expected_kg_uri_prefix="https://kg.virtualtreasury.ie",
         ground_truth_sql=None,
@@ -956,7 +847,7 @@ GOLDEN_CASES: list[EvalCase] = [
         category="entity",
         expected_route="template",
         expected_lane="analytical",
-        townland_hint="Ballynultach",     # common alternate spelling
+        townland_hint="Ballynultach",
         expected_entity_norm="BALLYNULTAGH",
         expected_kg_uri_prefix="https://kg.virtualtreasury.ie",
         ground_truth_sql=None,
@@ -997,34 +888,26 @@ GOLDEN_CASES: list[EvalCase] = [
         category="entity",
         expected_route="template",
         expected_lane="analytical",
-        expected_surname="KAVANAGH",   # Kavanah → Kavanagh via vector
+        expected_surname="KAVANAGH",
         ground_truth_sql=None,
         ground_truth_value=None,
         ground_truth_type=None,
     ),
 
-    # ── PHASE 5 — RELATIONAL / HIERARCHY (5 new) ──────────────────────────────
-    # These exercise the subgraph engine (Phase 3) and intent router (Phase 5).
-    # Expected subgraph facts are checked against the linearized subgraph text
-    # returned by retrieve_subgraph().  VRTI connectivity failures score 0 recall
-    # but are not counted as routing errors.
 
     EvalCase(
         id="rel_01_ballinacor_barony",
         question="Which barony does Ballinacor belong to?",
         category="relational",
-        expected_route="template",         # semantic_layer compiles townland_attribute
-        expected_lane="relational",        # hierarchy keyword → RELATIONAL intent
+        expected_route="template",
+        expected_lane="relational",
         townland_hint="Ballinacor",
         expected_entity_norm="BALLINACOR",
         expected_sql_id=355,
         expected_kg_uri_prefix="https://kg.virtualtreasury.ie",
-        # SQLite says barony="Arklow"; VRTI KG says barony="Ballinacor South".
-        # This is a real SQLite/KG data discrepancy — Phase 6 must reconcile.
-        # agg check (Arklow) validates SQLite; subgraph check (Ballinacor South) validates KG.
-        expected_subgraph_facts=["Ballinacor South"],  # KG barony (VRTI-authoritative)
+        expected_subgraph_facts=["Ballinacor South"],
         ground_truth_sql="SELECT barony FROM townland WHERE UPPER(name)='BALLINACOR' LIMIT 1",
-        ground_truth_value="Arklow",          # SQLite value (disagrees with KG)
+        ground_truth_value="Arklow",
         ground_truth_key="barony",
         ground_truth_type="scalar",
         expected_answer_facts=["Arklow"],
@@ -1035,10 +918,10 @@ GOLDEN_CASES: list[EvalCase] = [
         question="What county and barony does Ballynultagh fall within?",
         category="relational",
         expected_route="template",
-        expected_lane="relational",        # "falls within" → RELATIONAL
+        expected_lane="relational",
         townland_hint="Ballynultagh",
         expected_entity_norm="BALLYNULTAGH",
-        expected_subgraph_facts=["Wicklow", "Shillelagh"],  # county + barony
+        expected_subgraph_facts=["Wicklow", "Shillelagh"],
         ground_truth_sql="SELECT barony, county FROM townland WHERE UPPER(name)='BALLYNULTAGH' LIMIT 1",
         ground_truth_value="Wicklow",
         ground_truth_key="county",
@@ -1051,14 +934,12 @@ GOLDEN_CASES: list[EvalCase] = [
         question="What other townlands are in the same parish as Ballinacor?",
         category="relational",
         expected_route="template",
-        expected_lane="relational",        # "same parish" → RELATIONAL
+        expected_lane="relational",
         townland_hint="Ballinacor",
         expected_entity_norm="BALLINACOR",
-        # KG parish for BALLINACOR is "Ballinacor" (not "Kilbride" as in SQLite).
-        # Sibling townlands shown in subgraph are from the KG parish.
-        expected_subgraph_facts=["Ballinacor"],   # KG parish name (siblings listed under it)
+        expected_subgraph_facts=["Ballinacor"],
         ground_truth_sql="SELECT civil_parish FROM townland WHERE UPPER(name)='BALLINACOR' LIMIT 1",
-        ground_truth_value="Kilbride",           # SQLite value (differs from KG)
+        ground_truth_value="Kilbride",
         ground_truth_key="civil_parish",
         ground_truth_type="scalar",
         expected_answer_facts=["Kilbride"],
@@ -1068,8 +949,8 @@ GOLDEN_CASES: list[EvalCase] = [
         id="rel_04_estate_overview",
         question="Tell me about the Coolattin estate and its history",
         category="relational",
-        expected_route="template",         # famine_impact or estate_summary may match
-        expected_lane="relational",        # "tell me about" + sensemaking → RELATIONAL
+        expected_route="template",
+        expected_lane="relational",
         expected_subgraph_facts=["Coolattin", "estate"],
         ground_truth_sql=None,
         ground_truth_value=None,
@@ -1081,8 +962,8 @@ GOLDEN_CASES: list[EvalCase] = [
         id="rel_05_historical_monuments",
         question="Tell me about the historical monuments in Ballinacor",
         category="heritage",
-        expected_route="template",         # template catches "historical" before verified_analysis fires
-        expected_lane="relational",        # "historical" + "monuments" → RELATIONAL
+        expected_route="template",
+        expected_lane="relational",
         townland_hint="Ballinacor",
         expected_entity_norm="BALLINACOR",
         expected_subgraph_facts=["Ballinacor"],
@@ -1092,23 +973,16 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_answer_facts=["Ballinacor"],
     ),
 
-    # ── PHASE 5 — COMPARATIVE (3 new) ─────────────────────────────────────────
-    # Questions where BOTH SQLite and the KG (GraphDB co: ontology) should return
-    # the same metric for the same entity.  Phase 6 will reconcile discrepancies;
-    # here we only verify both sources are captured (non-empty results).
-    #
-    # cmp_01 and cmp_02 expect AGREEMENT (same data source loaded into both).
-    # cmp_03 uses eviction data which may differ between estate ledger and KG.
 
     EvalCase(
         id="cmp_01_emigration_vs_kg",
         question="Compare the emigration count from Ballynultagh in the estate records versus the knowledge graph",
         category="comparative",
         expected_route="template",
-        expected_lane="comparative",       # "compare...versus" → COMPARATIVE
+        expected_lane="comparative",
         townland_hint="Ballynultagh",
         expected_entity_norm="BALLYNULTAGH",
-        expected_comparative_sources=["sqlite", "kg"],  # both sources should return data
+        expected_comparative_sources=["sqlite", "kg"],
         ground_truth_sql="SELECT COUNT(DISTINCT record_id) AS emigration_count FROM unified_record WHERE has_emigration_record=1 AND townland_norm='BALLYNULTAGH'",
         ground_truth_value=400,
         ground_truth_key="emigration_count",
@@ -1121,7 +995,7 @@ GOLDEN_CASES: list[EvalCase] = [
         question="How does the 1841 population of Ballinacor in the estate records compare to the VRTI knowledge graph?",
         category="comparative",
         expected_route="template",
-        expected_lane="comparative",       # "compare to" → COMPARATIVE
+        expected_lane="comparative",
         townland_hint="Ballinacor",
         expected_entity_norm="BALLINACOR",
         expected_comparative_sources=["sqlite", "kg"],
@@ -1137,31 +1011,22 @@ GOLDEN_CASES: list[EvalCase] = [
         question="Compare the eviction total for Ballinacor from the estate records versus the knowledge graph",
         category="comparative",
         expected_route="template",
-        expected_lane="comparative",       # "compare...versus" → COMPARATIVE
+        expected_lane="comparative",
         townland_hint="Ballinacor",
         expected_entity_norm="BALLINACOR",
-        expected_comparative_sources=["sqlite", "kg"],  # may disagree — KG has different data granularity
-        # The semantic layer compiles this as "total_evictions" alias (eviction_event_count metric)
+        expected_comparative_sources=["sqlite", "kg"],
         ground_truth_sql="SELECT SUM(c.count) AS n FROM clearances_record c JOIN townland t ON c.townland_id=t.id WHERE UPPER(t.name)='BALLINACOR'",
         ground_truth_value=122,
-        ground_truth_key="total_evictions",  # alias used by eviction_event_count metric
+        ground_truth_key="total_evictions",
         ground_truth_type="scalar",
         expected_answer_facts=["122"],
     ),
 
-    # ── PHASE 5 — FALLBACK / LOW-CONFIDENCE (3 new) ───────────────────────────
-    # These questions have no semantic-layer metric match AND no template match,
-    # so they must reach template_miss (the LLM free-form SQL generation path).
-    # The eval verifies routing only — it does not call the LLM.
 
     EvalCase(
         id="fbl_01_rent",
         question="What was the average rent paid by tenants on the Coolattin estate?",
         category="fallback",
-        # "tenant" triggers tenancy_count metric, but "rent" implies avg_holding_acres
-        # or a rent-specific metric that doesn't exist.  Depending on routing, may
-        # land on semantic_layer (tenancy_count) or template — annotated as expected_route="llm"
-        # to mark this as intended fallback territory.
         expected_route="llm",
         expected_lane="fallback",
         catalogue_code="G",
@@ -1197,11 +1062,6 @@ GOLDEN_CASES: list[EvalCase] = [
         ground_truth_type=None,
     ),
 
-    # ── G-SERIES — Honest-refusal / out-of-scope (5 new) ──────────────────────
-    # These questions are genuinely outside the scope of the Coolattin DB
-    # (no mortality, religion, weather, cross-estate, or political records).
-    # The eval verifies they correctly reach template_miss rather than producing
-    # a plausible-sounding but unsupported deterministic answer.
 
     EvalCase(
         id="gen_01_mortality",
@@ -1268,12 +1128,6 @@ GOLDEN_CASES: list[EvalCase] = [
         ground_truth_type=None,
     ),
 
-    # ── WORKHOUSE ENTITY-RESOLUTION COVERAGE (4 new — RQ3) ────────────────────
-    # These questions target workhouse_unified_links / source_mentions tables
-    # created by the workhouse ER subsystem.  No semantic-layer metric covers
-    # these tables, so all four must reach template_miss, confirming the fallback
-    # path is exercised and that ER data is queryable.
-    # Ground-truth verified against coolattin.db on 2026-06-10.
 
     EvalCase(
         id="er_wh_01_linked_count",
@@ -1335,11 +1189,6 @@ GOLDEN_CASES: list[EvalCase] = [
         expected_answer_facts=["8214"],
     ),
 
-    # ── IN-SCOPE FALLBACK (4 new — data exists, no semantic-layer metric) ────────
-    # These questions have data in the DB but no compiled template or metric.
-    # If the semantic layer routes them deterministically that is an over-routing
-    # bug; if they reach template_miss they confirm the fallback path.
-    # Ground-truth verified against coolattin.db on 2026-06-10.
 
     EvalCase(
         id="fbl_04_children_emigrated",
@@ -1403,12 +1252,7 @@ GOLDEN_CASES: list[EvalCase] = [
 ]
 
 
-# ── Catalogue code lookup (cases not annotated inline use this map) ───────────
-# Codes: A=analytical  A-trend=time-series  R=relational  C=comparative
-#        H=heritage  I=identity  G=general/out-of-scope  X=cross-source  P=people
-
 _CATALOGUE_CODE_MAP: dict[str, str] = {
-    # Emigration
     "emi_01_total": "A",
     "emi_02_townland_ballynultagh": "A",
     "emi_03_townland_killinure": "A",
@@ -1417,14 +1261,12 @@ _CATALOGUE_CODE_MAP: dict[str, str] = {
     "emi_06_canada_ship": "A",
     "emi_07_ships_list": "A",
     "emi_08_in_1848": "A",
-    # Evictions
     "evic_01_total": "A",
     "evic_02_worst_year": "A",
     "evic_03_townland_ballinacor": "A",
     "evic_04_per_year": "A-trend",
     "evic_05_people_list": "P",
     "evic_06_in_1849": "A",
-    # Census
     "cen_01_estate_1841": "A",
     "cen_02_estate_1851": "A",
     "cen_03_ballinacor_1841": "A",
@@ -1433,7 +1275,6 @@ _CATALOGUE_CODE_MAP: dict[str, str] = {
     "cen_06_uninhabited": "A",
     "cen_07_all_years": "A-trend",
     "cen_08_by_parish": "A",
-    # Geography
     "geo_01_total_townlands": "A",
     "geo_02_parish_count": "A",
     "geo_03_parish_list": "A",
@@ -1441,7 +1282,6 @@ _CATALOGUE_CODE_MAP: dict[str, str] = {
     "geo_05_baronies": "A",
     "geo_06_nearby_coolattin": "R",
     "geo_07_by_county": "A",
-    # People
     "ppl_01_total_records": "A",
     "ppl_02_byrne_records": "P",
     "ppl_03_murphy_list": "P",
@@ -1450,43 +1290,36 @@ _CATALOGUE_CODE_MAP: dict[str, str] = {
     "ppl_06_heads_of_household": "P",
     "ppl_07_ballynultagh_people": "P",
     "ppl_08_in_1847": "A",
-    # Tenancy
     "ten_01_total": "A",
     "ten_02_gender_avg": "C",
     "ten_03_coolattin_tenants": "P",
     "ten_04_largest_holdings": "A",
     "ten_05_smallest_plots": "A",
     "ten_06_per_townland": "A",
-    # Heritage
     "her_01_holy_well_population": "H",
     "her_02_ring_fort_population": "H",
     "her_03_holy_well_count": "H",
     "her_04_ring_fort_count": "H",
     "her_05_holy_well_townlands": "H",
-    # Overview
     "ov_01_famine_impact": "R",
     "ov_02_estate_summary": "R",
     "ov_03_emi_and_evic": "A",
     "ov_04_emi_vs_population": "C",
     "ov_05_records_per_year": "A-trend",
-    # Entity resolution
     "er_01_exact_ballinacor": "I",
     "er_02_spelling_variant": "I",
     "er_03_spelling_ballynultach": "I",
     "er_04_coolattin_kg_uri": "I",
     "er_05_surname_byrne_exact": "I",
     "er_06_surname_fuzzy": "I",
-    # Relational
     "rel_01_ballinacor_barony": "R",
     "rel_02_ballynultagh_county": "R",
     "rel_03_ballinacor_parish_siblings": "R",
     "rel_04_estate_overview": "R",
     "rel_05_historical_monuments": "H",
-    # Cross-source
     "cmp_01_emigration_vs_kg": "X",
     "cmp_02_population_vs_kg": "X",
     "cmp_03_eviction_agree": "X",
-    # G-series (also annotated inline)
     "fbl_01_rent": "G",
     "fbl_02_crops": "G",
     "fbl_03_fitzwilliam": "G",
@@ -1495,12 +1328,10 @@ _CATALOGUE_CODE_MAP: dict[str, str] = {
     "gen_03_other_estates": "G",
     "gen_04_weather": "G",
     "gen_05_politics": "G",
-    # Workhouse ER (RQ3)
     "er_wh_01_linked_count": "I",
     "er_wh_02_confirmed_matches": "I",
     "er_wh_03_review_needed": "I",
     "er_wh_04_mentions_count": "I",
-    # In-scope fallback (data exists, no semantic metric)
     "fbl_04_children_emigrated": "A",
     "fbl_05_avg_rent_owed": "A",
     "fbl_06_widows_emigrated": "A",
@@ -1509,19 +1340,11 @@ _CATALOGUE_CODE_MAP: dict[str, str] = {
 
 
 def _catalogue_code(case_id: str, case_code: str | None = None) -> str:
-    """Return the catalogue code for a case ID, falling back to the map."""
     return case_code or _CATALOGUE_CODE_MAP.get(case_id, "?")
 
 
-# ── HELD-OUT EVALUATION SET (35 questions) ────────────────────────────────────
-# Authored without consulting routing keywords or template IDs.
-# Ground-truth values verified against coolattin.db on 2026-06-10.
-# Catalogue codes follow the same taxonomy as GOLDEN_CASES.
-# This set is never used for threshold/keyword tuning; it is the held-out split.
-
 HELDOUT_CASES: list[EvalCase] = [
 
-    # ── EMIGRATION (3) ────────────────────────────────────────────────────────
 
     EvalCase(
         id="hh_emi_01_carnew",
@@ -1569,7 +1392,6 @@ HELDOUT_CASES: list[EvalCase] = [
         expected_answer_facts=["2211"],
     ),
 
-    # ── EVICTION (3) ──────────────────────────────────────────────────────────
 
     EvalCase(
         id="hh_evic_01_1850",
@@ -1617,7 +1439,6 @@ HELDOUT_CASES: list[EvalCase] = [
         expected_answer_facts=["Tinahely"],
     ),
 
-    # ── CENSUS (4) ────────────────────────────────────────────────────────────
 
     EvalCase(
         id="hh_cen_01_tinahely_1841",
@@ -1687,7 +1508,6 @@ HELDOUT_CASES: list[EvalCase] = [
         expected_answer_facts=["1871"],
     ),
 
-    # ── PEOPLE / SURNAMES (4) ─────────────────────────────────────────────────
 
     EvalCase(
         id="hh_ppl_01_doyle",
@@ -1749,7 +1569,6 @@ HELDOUT_CASES: list[EvalCase] = [
         expected_answer_facts=["Tinahely"],
     ),
 
-    # ── TENANCY (4) ───────────────────────────────────────────────────────────
 
     EvalCase(
         id="hh_ten_01_tinahely",
@@ -1813,7 +1632,6 @@ HELDOUT_CASES: list[EvalCase] = [
         expected_answer_facts=["822"],
     ),
 
-    # ── GEOGRAPHY (3) ─────────────────────────────────────────────────────────
 
     EvalCase(
         id="hh_geo_01_shillelagh",
@@ -1868,7 +1686,6 @@ HELDOUT_CASES: list[EvalCase] = [
         expected_answer_facts=["Carnew"],
     ),
 
-    # ── HERITAGE (2) ──────────────────────────────────────────────────────────
 
     EvalCase(
         id="hh_her_01_ringfort_townlands",
@@ -1900,7 +1717,6 @@ HELDOUT_CASES: list[EvalCase] = [
         expected_answer_facts=["Tinahely"],
     ),
 
-    # ── ENTITY RESOLUTION (3) ─────────────────────────────────────────────────
 
     EvalCase(
         id="hh_er_01_tynehely",
@@ -1948,7 +1764,6 @@ HELDOUT_CASES: list[EvalCase] = [
         ground_truth_type=None,
     ),
 
-    # ── CROSS-SOURCE / COMPARATIVE (2) ────────────────────────────────────────
 
     EvalCase(
         id="hh_cmp_01_tinahely_1841",
@@ -1984,7 +1799,6 @@ HELDOUT_CASES: list[EvalCase] = [
         expected_answer_facts=["54"],
     ),
 
-    # ── IN-SCOPE FALLBACK (2) — data exists, no semantic-layer metric ─────────
 
     EvalCase(
         id="hh_fbl_01_tenant_widows",
@@ -2016,7 +1830,6 @@ HELDOUT_CASES: list[EvalCase] = [
         expected_answer_facts=["540"],
     ),
 
-    # ── G-SERIES — Honest-refusal (5) ─────────────────────────────────────────
 
     EvalCase(
         id="hh_gen_01_agent",
@@ -2084,14 +1897,10 @@ HELDOUT_CASES: list[EvalCase] = [
     ),
 ]
 
-# Combined lookup used by _compute_metrics for lane classification
 _ALL_KNOWN_CASES: list[EvalCase] = GOLDEN_CASES + HELDOUT_CASES
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
 def _close_enough(a: Any, b: Any, rtol: float = 0.01) -> bool:
-    """Numeric near-equality or exact string equality."""
     if a is None or b is None:
         return a == b
     try:
@@ -2104,14 +1913,12 @@ def _close_enough(a: Any, b: Any, rtol: float = 0.01) -> bool:
 
 
 def _extract_scalar(rows: list[dict], key: str) -> Any:
-    """Return rows[0][key] if present."""
     if rows and key in rows[0]:
         return rows[0][key]
     return None
 
 
 def _any_row_has_value(rows: list[dict], key: str, value: Any) -> bool:
-    """Return True if any row has row[key] == value (approx)."""
     for row in rows:
         if key in row and _close_enough(row[key], value):
             return True
@@ -2119,7 +1926,6 @@ def _any_row_has_value(rows: list[dict], key: str, value: Any) -> bool:
 
 
 def _check_agg(case: EvalCase, cols: list[str], rows: list[dict]) -> tuple[bool | None, Any]:
-    """Return (agg_ok, actual_value) for the case's aggregation check."""
     if case.ground_truth_type is None or case.ground_truth_value is None:
         return None, None
 
@@ -2149,7 +1955,6 @@ def _check_agg(case: EvalCase, cols: list[str], rows: list[dict]) -> tuple[bool 
 
 
 def _check_entity_resolution(case: EvalCase, resolution: dict[str, Any]) -> bool | None:
-    """Return True/False if entity resolved to expected label_norm; None if no check."""
     if case.expected_entity_norm:
         actual = resolution.get("name_norm")
         return actual == case.expected_entity_norm
@@ -2157,7 +1962,6 @@ def _check_entity_resolution(case: EvalCase, resolution: dict[str, Any]) -> bool
 
 
 def _check_surname_extraction(case: EvalCase, analysis: dict[str, Any]) -> bool | None:
-    """Return True/False if surname extraction matches expected; None if no check."""
     if case.expected_surname:
         actual = analysis.get("surname")
         if actual is None:
@@ -2167,19 +1971,17 @@ def _check_surname_extraction(case: EvalCase, analysis: dict[str, Any]) -> bool 
 
 
 def _check_sql_id(case: EvalCase, resolution: dict[str, Any]) -> bool | None:
-    """Phase 1: check that sql_id is populated (and matches expected if set)."""
     if not case.expected_entity_norm:
-        return None  # no townland hint → nothing to check
+        return None
     actual_id = resolution.get("sql_id")
     if actual_id is None:
         return False
     if case.expected_sql_id is not None:
         return int(actual_id) == int(case.expected_sql_id)
-    return True  # just check it's non-None
+    return True
 
 
 def _check_kg_uri(case: EvalCase, resolution: dict[str, Any]) -> bool | None:
-    """Phase 1: check that kg_uri is a valid VRTI URI."""
     if not case.expected_entity_norm:
         return None
     actual_uri = resolution.get("kg_uri")
@@ -2193,11 +1995,6 @@ def _check_answer_facts(
     case: EvalCase,
     result_rows: list[dict],
 ) -> bool | None:
-    """
-    Check whether all expected_answer_facts appear in the SQL result rows
-    (serialized to lower-case string).  Returns None when there are no facts
-    to check, False when rows are empty, True when all facts are found.
-    """
     if not case.expected_answer_facts:
         return None
     if not result_rows:
@@ -2209,7 +2006,6 @@ def _check_answer_facts(
 
 
 def _check_lane(case: EvalCase, actual_lane: str | None) -> bool | None:
-    """Phase 5: check that the intent router returned the expected lane."""
     if case.expected_lane is None or actual_lane is None:
         return None
     return actual_lane == case.expected_lane
@@ -2220,14 +2016,6 @@ def _check_subgraph(
     linearized: str,
     hierarchy: dict,
 ) -> tuple[bool | None, float | None]:
-    """
-    Phase 5: check whether expected_subgraph_facts appear in the subgraph.
-    Returns (subgraph_ok, recall_fraction).
-
-    Facts are searched case-insensitively in:
-      1. the linearized subgraph text
-      2. the hierarchy dict values (parish, barony, county)
-    """
     if not case.expected_subgraph_facts:
         return None, None
 
@@ -2240,7 +2028,7 @@ def _check_subgraph(
     )
     total = len(case.expected_subgraph_facts)
     recall = found / total if total > 0 else 1.0
-    ok = recall >= 0.5  # at least half the expected facts found
+    ok = recall >= 0.5
     return ok, round(recall, 3)
 
 
@@ -2250,18 +2038,9 @@ def _run_subgraph_retrieval(
     analysis: dict[str, Any],
     resolution: dict[str, Any],
 ) -> tuple[bool | None, float | None, str, dict]:
-    """
-    Phase 5: run retrieve_subgraph for RELATIONAL cases.
-    Returns (subgraph_ok, recall, linearized, hierarchy).
-    Never raises — returns empty results on any failure.
-    """
     if not case.expected_subgraph_facts:
         return None, None, "", {}
 
-    # For cases where we can answer from SQLite hierarchy alone (no VRTI needed),
-    # build a minimal hierarchy dict directly from the resolution payload.
-    # Use sql_id or name_norm regardless of the `matched` flag — if either is
-    # present, we can look up the row.
     hier: dict = {}
     sql_id = resolution.get("sql_id")
     name_norm = resolution.get("name_norm")
@@ -2289,7 +2068,6 @@ def _run_subgraph_retrieval(
         except Exception:
             pass
 
-    # Attempt full subgraph retrieval (VRTI + GraphDB).
     linearized = ""
     try:
         from backend.services.subgraph_engine import retrieve_subgraph
@@ -2297,16 +2075,15 @@ def _run_subgraph_retrieval(
             question=question,
             analysis=analysis,
             townland_resolution=resolution,
-            sources=("vrti",),    # skip GraphDB for eval speed
+            sources=("vrti",),
         )
         linearized = result.linearized or ""
         if result.hierarchy:
-            # Merge KG hierarchy (KG wins over SQLite if available)
             for k, v in result.hierarchy.items():
                 if v:
                     hier[k] = v
     except Exception:
-        pass   # offline or unavailable — fall back to SQLite hier
+        pass
 
     subgraph_ok, recall = _check_subgraph(case, linearized, hier)
     return subgraph_ok, recall, linearized, hier
@@ -2317,21 +2094,12 @@ def _run_comparative_check(
     sl_fill: Any | None,
     clearances_col: str,
 ) -> tuple[bool | None, bool | None]:
-    """
-    Phase 5: for COMPARATIVE cases, attempt to compile and execute both
-    SQLite SQL and the SPARQL equivalent.
-    Returns (sqlite_ok, kg_ok).
-    sqlite_ok: True if SQLite returned ≥1 row, None if no metric.
-    kg_ok:     True if GraphDB SPARQL returned ≥1 row,
-               None if GraphDB offline or no SPARQL equivalent.
-    """
     if not case.expected_comparative_sources:
         return None, None
 
     sqlite_ok: bool | None = None
     kg_ok: bool | None = None
 
-    # ── SQLite path ───────────────────────────────────────────────────────────
     if sl_fill is not None and "sqlite" in case.expected_comparative_sources:
         try:
             from backend.services.semantic_layer import compile_sql
@@ -2345,7 +2113,6 @@ def _run_comparative_check(
         except Exception:
             sqlite_ok = False
 
-    # ── KG / SPARQL path ──────────────────────────────────────────────────────
     if sl_fill is not None and "kg" in case.expected_comparative_sources:
         try:
             from backend.services.semantic_layer import compile_sparql
@@ -2355,14 +2122,12 @@ def _run_comparative_check(
                 rows = _gdb.query(sparql)
                 kg_ok = bool(rows)
             else:
-                kg_ok = None   # GraphDB offline or no SPARQL equivalent
+                kg_ok = None
         except Exception:
             kg_ok = None
 
     return sqlite_ok, kg_ok
 
-
-# ── Case runner ───────────────────────────────────────────────────────────────
 
 def _run_case(
     case: EvalCase,
@@ -2377,7 +2142,6 @@ def _run_case(
     error: str | None = None
 
     try:
-        # 1. Entity resolution + analysis
         resolution = resolve_townland_context_fn(case.question, case.townland_hint)
         canonical_townland = resolution.get("name_norm")
         analysis = analyse_question_fn(case.question, canonical_townland or case.townland_hint)
@@ -2391,17 +2155,14 @@ def _run_case(
         else:
             entity_ok = None
 
-        # Phase 1: check sql_id and kg_uri enrichment
         sql_id_ok = _check_sql_id(case, resolution)
         kg_uri_ok = _check_kg_uri(case, resolution)
 
-        # Capture entity details for per-miss diagnostics
         entity_label_expected = case.expected_entity_norm or case.expected_surname
         entity_label_actual = resolution.get("name_norm") or analysis.get("surname")
         entity_sql_id_actual = resolution.get("sql_id")
         entity_kg_uri_actual = resolution.get("kg_uri")
 
-        # 2. Route detection — mirrors the pipeline: semantic layer → verified_analysis → template
         raw_sql = ""
         compiled_sql_actual: str | None = None
         template_id = None
@@ -2409,7 +2170,6 @@ def _run_case(
         _sl_fill = None
         _sl_sql: str | None = None
 
-        # Phase 2: try semantic layer first
         try:
             from backend.services.semantic_layer import try_rule_based_fill as _try_sl, compile_sql as _compile_sl
             from backend.services.ask_service import _clearances_count_column as _ccol
@@ -2426,7 +2186,6 @@ def _run_case(
             compiled_sql_actual = _sl_sql
             template_id = f"semantic:{_sl_fill.metric}" if _sl_fill else "semantic"
         else:
-            # Fall through to verified_analysis → template
             verified = try_verified_analysis_fn(case.question, canonical_townland, analysis)
             if verified:
                 actual_route = "verified_analysis"
@@ -2441,18 +2200,13 @@ def _run_case(
                     compiled_sql_actual = raw_sql or None
                     template_id = tmpl.get("id")
 
-        # Routing correctness:
-        # "verified_analysis" accepts semantic_layer or verified_analysis
-        # "template" accepts semantic_layer, template, or verified_analysis (all deterministic)
-        # "llm" expects template_miss
         if case.expected_route == "verified_analysis":
             route_ok = actual_route in {"verified_analysis", "semantic_layer"}
         elif case.expected_route == "template":
             route_ok = actual_route in {"template", "verified_analysis", "semantic_layer"}
-        else:  # "llm"
+        else:
             route_ok = (actual_route == "template_miss")
 
-        # 3. SQL execution
         sql_ok: bool | None = None
         result_cols: list[str] = []
         result_rows: list[dict] = []
@@ -2465,11 +2219,9 @@ def _run_case(
                 sql_ok = False
                 error = str(exc)[:120]
 
-        # 4. Ground-truth aggregation check against the template/verified SQL result
         agg_ok, agg_actual = _check_agg(case, result_cols, result_rows)
         answer_facts_ok = _check_answer_facts(case, result_rows)
 
-        # 5. Phase 5: intent router lane classification
         actual_lane: str | None = None
         try:
             from backend.services.intent_router import classify_intent
@@ -2478,7 +2230,6 @@ def _run_case(
             pass
         lane_ok = _check_lane(case, actual_lane)
 
-        # 6. Phase 5: subgraph retrieval for RELATIONAL / HERITAGE cases
         subgraph_ok: bool | None = None
         subgraph_recall: float | None = None
         if case.expected_subgraph_facts:
@@ -2491,7 +2242,6 @@ def _run_case(
                 subgraph_ok = None
                 subgraph_recall = None
 
-        # 7. Phase 5: comparative source capture
         comparative_sqlite_ok: bool | None = None
         comparative_kg_ok: bool | None = None
         if case.expected_comparative_sources:
@@ -2556,20 +2306,12 @@ def _run_case(
     )
 
 
-# ── Eval runner ───────────────────────────────────────────────────────────────
-
 def run_eval(
     phase_label: str = "baseline",
     case_list: list[EvalCase] | None = None,
 ) -> EvalResult:
-    """
-    Run cases through the deterministic pipeline.
-    Must be called inside a Flask application context.
-    Defaults to GOLDEN_CASES; pass HELDOUT_CASES or a combined list as needed.
-    """
     from datetime import datetime, timezone
 
-    # Import deterministic functions from ask_service
     from backend.services.ask_service import (
         _try_verified_analysis,
         _match_and_build_template,
@@ -2600,8 +2342,6 @@ def run_eval(
     )
 
 
-# ── Metrics calculation ───────────────────────────────────────────────────────
-
 def _compute_metrics(result: EvalResult) -> dict[str, Any]:
     cases = result.cases
     n = len(cases)
@@ -2622,17 +2362,14 @@ def _compute_metrics(result: EvalResult) -> dict[str, Any]:
     latencies = sorted([c.latency_ms for c in cases])
     llm_required = sum(1 for c in cases if c.actual_route == "template_miss")
 
-    # ── p90 latency ───────────────────────────────────────────────────────────
     p90_latency_ms = latencies[min(int(n * 0.90), n - 1)]
 
-    # ── Execution accuracy by route ───────────────────────────────────────────
     exec_by_route: dict[str, float | None] = {}
     for _route in ("template", "verified_analysis", "semantic_layer", "template_miss"):
         _rc = [c for c in cases if c.actual_route == _route and c.sql_ok is not None]
         _ok = [c for c in _rc if c.sql_ok]
         exec_by_route[_route] = round(100 * len(_ok) / len(_rc), 1) if _rc else None
 
-    # ── Routing confusion matrix ──────────────────────────────────────────────
     confusion: dict[str, dict[str, int]] = {}
     for c in cases:
         exp = c.expected_route
@@ -2640,21 +2377,18 @@ def _compute_metrics(result: EvalResult) -> dict[str, Any]:
         confusion.setdefault(exp, {})
         confusion[exp][act] = confusion[exp].get(act, 0) + 1
 
-    # ── Answer facts found rate (hallucination proxy for deterministic routes) ─
     facts_tested = [c for c in cases if c.answer_facts_ok is not None]
     facts_ok_list = [c for c in facts_tested if c.answer_facts_ok]
     answer_facts_found_rate = (
         round(100 * len(facts_ok_list) / len(facts_tested), 1) if facts_tested else None
     )
 
-    # ── Honest-refusal rate: G-series questions reaching template_miss ─────────
     g_cases = [c for c in cases if c.expected_route == "llm"]
     g_refusals = [c for c in g_cases if c.actual_route == "template_miss"]
     honest_refusal_rate = (
         round(100 * len(g_refusals) / len(g_cases), 1) if g_cases else None
     )
 
-    # ── Per-lane metrics ──────────────────────────────────────────────────────
     _lane_lookup: dict[str, str | None] = {
         ec.id: ec.expected_lane for ec in _ALL_KNOWN_CASES
     }
@@ -2682,7 +2416,6 @@ def _compute_metrics(result: EvalResult) -> dict[str, Any]:
     fallback = _lane_cases("fallback")
     fallback_routing_ok = [c for c in fallback if c.route_ok]
 
-    # ── Lane routing accuracy ─────────────────────────────────────────────────
     lane_tested = [c for c in cases if c.lane_ok is not None]
     lane_ok_list = [c for c in lane_tested if c.lane_ok]
 
@@ -2698,7 +2431,6 @@ def _compute_metrics(result: EvalResult) -> dict[str, Any]:
         "p95_latency_ms": latencies[min(int(n * 0.95), n - 1)],
         "llm_calls_required": llm_required,
         "template_hit_rate": round(100 * (n - llm_required) / n, 1),
-        # Per-lane
         "lane_routing_acc": round(100 * len(lane_ok_list) / len(lane_tested), 1) if lane_tested else None,
         "analytical_n": len(analytical),
         "analytical_agg_acc": round(100 * len(analytical_agg_ok) / len(analytical_agg_tested), 1) if analytical_agg_tested else None,
@@ -2709,7 +2441,6 @@ def _compute_metrics(result: EvalResult) -> dict[str, Any]:
         "comparative_kg_capture": round(100 * len(cmp_kg_ok) / len(cmp_kg_tested), 1) if cmp_kg_tested else None,
         "fallback_n": len(fallback),
         "fallback_routing_acc": round(100 * len(fallback_routing_ok) / len(fallback), 1) if fallback else None,
-        # New metrics
         "p90_latency_ms": p90_latency_ms,
         "answer_facts_found_rate": answer_facts_found_rate,
         "honest_refusal_rate": honest_refusal_rate,
@@ -2722,15 +2453,7 @@ def _compute_metrics(result: EvalResult) -> dict[str, Any]:
     }
 
 
-# ── Per-miss diagnostic detail ────────────────────────────────────────────────
-
 def print_miss_detail(result: EvalResult) -> None:
-    """
-    Step 1 diagnostic: for every failing case, print per-question detail covering:
-      • expected vs actual resolved entity (label, sql_id, kg_uri)
-      • expected vs actual compiled SQL
-      • expected vs actual numeric answer
-    """
     failures = [
         c for c in result.cases
         if not c.route_ok or c.entity_ok is False or c.agg_ok is False
@@ -2744,7 +2467,6 @@ def print_miss_detail(result: EvalResult) -> None:
     print("  PER-MISS DIAGNOSTIC DETAIL")
     print(f"{'═' * W}")
 
-    # Look up case objects by id for ground_truth_sql
     case_map: dict[str, EvalCase] = {c.id: c for c in GOLDEN_CASES}
 
     for cr in failures:
@@ -2752,18 +2474,15 @@ def print_miss_detail(result: EvalResult) -> None:
         print(f"\n  Case: {cr.id}  [{cr.category}]")
         print(f"  Question: {cr.question}")
 
-        # Route
         route_sym = "✓" if cr.route_ok else "✗"
         print(f"  Route [{route_sym}]: expected={cr.expected_route!r}  actual={cr.actual_route!r}")
 
-        # Entity
         if cr.entity_ok is not None:
             ent_sym = "✓" if cr.entity_ok else "✗"
             print(f"  Entity [{ent_sym}]:")
             print(f"    expected label={cr.entity_label_expected!r}")
             print(f"    actual  label={cr.entity_label_actual!r}  sql_id={cr.entity_sql_id_actual}  kg_uri={str(cr.entity_kg_uri_actual or '')[:60]}")
 
-        # Aggregation / SQL
         if cr.agg_ok is not None:
             agg_sym = "✓" if cr.agg_ok else "✗"
             print(f"  Aggregation [{agg_sym}]:")
@@ -2773,11 +2492,9 @@ def print_miss_detail(result: EvalResult) -> None:
                 print(f"    ground-truth SQL: {ec.ground_truth_sql[:100]}")
             if cr.compiled_sql_actual:
                 print(f"    compiled SQL:     {cr.compiled_sql_actual[:100]}")
-            # Diagnose the cause
             if ec and ec.ground_truth_sql and cr.compiled_sql_actual:
                 if ec.ground_truth_sql.strip() != cr.compiled_sql_actual.strip():
                     print(f"    ⚠ SQL MISMATCH — pipeline compiled a different query than ground truth.")
-                    # Check for spurious filters
                     gt_where = _extract_where(ec.ground_truth_sql)
                     act_where = _extract_where(cr.compiled_sql_actual)
                     if act_where and act_where != gt_where:
@@ -2792,16 +2509,11 @@ def print_miss_detail(result: EvalResult) -> None:
 
 
 def _extract_where(sql: str) -> str:
-    """Extract the WHERE clause from a SQL string (rough heuristic)."""
     m = re.search(r'\bWHERE\b(.+?)(?:\bGROUP\b|\bORDER\b|\bLIMIT\b|$)', sql, re.IGNORECASE | re.DOTALL)
     return m.group(1).strip() if m else ""
 
 
 def written_finding(result: EvalResult) -> str:
-    """
-    Step 1 written finding: what is actually driving the aggregation misses?
-    Returns a multi-line diagnostic summary string.
-    """
     cases = result.cases
     case_map: dict[str, EvalCase] = {c.id: c for c in GOLDEN_CASES}
 
@@ -2858,7 +2570,6 @@ def written_finding(result: EvalResult) -> str:
                     lines.append(f"    Cause: FALSE-POSITIVE TOWNLAND EXTRACTION")
                     lines.append(f"    Ground-truth WHERE : {gt_w or '(none)'}")
                     lines.append(f"    Compiled     WHERE : {act_w or '(none)'}")
-                    # Identify spurious entity
                     entity_in_filter = cr.entity_label_actual or "(unknown)"
                     lines.append(f"    Spurious entity    : {entity_in_filter!r}")
                     if cr.id == "emi_01_total":
@@ -2889,10 +2600,7 @@ def written_finding(result: EvalResult) -> str:
     return "\n".join(lines)
 
 
-# ── Display ───────────────────────────────────────────────────────────────────
-
 def print_case_table(result: EvalResult) -> None:
-    """Print per-case results table."""
     _W = 84
     print(f"\n{'─' * _W}")
     print(f"  CASE RESULTS  [{result.phase_label}]  {result.timestamp[:19]}")
@@ -2928,7 +2636,6 @@ def print_metrics_table(
     results: list[EvalResult],
     labels: list[str] | None = None,
 ) -> None:
-    """Print a before/after metrics comparison table."""
     if not results:
         return
     labels = labels or [r.phase_label for r in results]
@@ -2988,7 +2695,6 @@ def print_metrics_table(
                 cell = "N/A"
             else:
                 cell = str(v)
-            # Mark improvement / regression relative to first column
             if i > 0 and vals[0] is not None and v is not None and higher_is_better:
                 try:
                     delta = float(v) - float(vals[0])
@@ -3005,7 +2711,6 @@ def print_metrics_table(
 
 
 def print_confusion_matrix(result: EvalResult) -> None:
-    """Print a compact routing confusion matrix (expected vs actual route)."""
     metrics = _compute_metrics(result)
     confusion = metrics.get("routing_confusion_matrix", {})
     if not confusion:
@@ -3032,7 +2737,6 @@ def print_confusion_matrix(result: EvalResult) -> None:
 
 
 def generate_markdown_report(result: EvalResult) -> str:
-    """Generate a markdown baseline report from eval results."""
     from datetime import datetime, timezone
     metrics = _compute_metrics(result)
     case_map: dict[str, EvalCase] = {c.id: c for c in _ALL_KNOWN_CASES}
@@ -3131,7 +2835,6 @@ def generate_markdown_report(result: EvalResult) -> str:
             f"| {c.actual_route[:16]} | {_s(c.route_ok)} | {_s(c.agg_ok)} | {_s(c.lane_ok)} | {c.latency_ms} |"
         )
 
-    # Failures section
     failures = [c for c in result.cases if not c.route_ok or c.agg_ok is False]
     if failures:
         lines += [
@@ -3184,21 +2887,7 @@ def generate_markdown_report(result: EvalResult) -> str:
     return "\n".join(lines)
 
 
-# ── Faithfulness gate (offline test — no LLM required) ────────────────────────
-
 def test_faithfulness_gate_offline() -> dict[str, Any]:
-    """
-    Verify the numeric-consistency gate using regex only (no LLM call).
-
-    The gate extracts every number from a synthesised answer and checks it
-    against an allowlist built from the SQL result rows.  This function runs
-    six synthetic test cases and reports how many violations were caught and
-    how many correct answers were correctly passed.
-
-    Faithfulness finding (D10a):
-      - Violations caught / total violations expected  → catch_rate
-      - Correct passes / total correct answers         → pass_rate
-    """
     try:
         from backend.services.ask_service import (
             _extract_numeric_tokens,      # type: ignore[attr-defined]
@@ -3241,9 +2930,6 @@ def test_faithfulness_gate_offline() -> dict[str, Any]:
         {
             "name": "correct_single_value",
             "rows": [{"population": 55}],
-            # The year 1841 comes from the question — it is historical context,
-            # not an LLM hallucination.  With the question passed to the gate
-            # its numeric tokens are allowlisted and the false positive is fixed.
             "question": "What was the population of Ballinacor in 1841?",
             "answer": "The population in 1841 was 55 people.",
             "expected_violation": False,
@@ -3298,15 +2984,6 @@ def _run_fallback_ground_truth(
     run_query_fn,
     sanitize_fn,
 ) -> list[dict[str, Any]]:
-    """
-    For template_miss (LLM fallback) cases that have ground_truth_sql, execute
-    the oracle SQL directly and verify the ground_truth_value.
-
-    This does NOT call the LLM — it confirms the oracle answer is reachable
-    from the DB, establishing the target for future LLM evaluation.
-
-    Returns one dict per fallback case with: id, gt_sql_ok, gt_agg_ok, gt_actual.
-    """
     results = []
     for case in cases:
         if not (case.expected_route == "llm" and case.ground_truth_sql):
@@ -3335,33 +3012,12 @@ def _run_fallback_ground_truth(
     return results
 
 
-# ── Evaluation pack (D9 / D10) ─────────────────────────────────────────────────
-
 def generate_evaluation_pack(
     result: EvalResult,
     gate_result: dict[str, Any],
     fallback_gt: list[dict[str, Any]],
     output_path: "Path | None" = None,
 ) -> str:
-    """
-    Write the full D9 / D10 dissertation evaluation pack as a Markdown file.
-
-    Sections
-    --------
-    D9  — Automated Pipeline Evaluation
-      D9a  Routing accuracy + confusion matrix
-      D9b  Execution accuracy by route
-      D9c  Per-lane breakdown
-      D9d  Honest-refusal rate (G-series)
-      D9e  Latency (p50 / p90)
-      D9f  Over-routing finding (fallback cases reaching deterministic paths)
-      D9g  Fallback oracle ground-truth verification
-    D10 — Faithfulness and Hallucination Analysis
-      D10a Numeric-consistency gate (offline test)
-      D10b Cross-verifier implementation status
-      D10c Hallucination proxy (answer_facts_found_rate)
-    Outstanding — D11 User Study (flag only; human task)
-    """
     from pathlib import Path as _Path
 
     metrics = _compute_metrics(result)
@@ -3388,7 +3044,6 @@ def generate_evaluation_pack(
         "",
     ]
 
-    # D9a — Routing accuracy
     lines += [
         "### D9a — Routing Accuracy and Confusion Matrix",
         "",
@@ -3414,7 +3069,6 @@ def generate_evaluation_pack(
             lines.append(row)
     lines.append("")
 
-    # D9b — Execution accuracy by route
     lines += [
         "### D9b — Execution Accuracy by Route",
         "",
@@ -3438,7 +3092,6 @@ def generate_evaluation_pack(
         "",
     ]
 
-    # D9c — Per-lane breakdown
     lines += [
         "### D9c — Per-Lane Breakdown",
         "",
@@ -3451,7 +3104,6 @@ def generate_evaluation_pack(
         "",
     ]
 
-    # D9d — Honest-refusal rate
     g_n = metrics.get("g_series_n", 0)
     honest_rate = metrics.get("honest_refusal_rate")
     lines += [
@@ -3463,7 +3115,6 @@ def generate_evaluation_pack(
         f"| Honest-refusal rate (reached template_miss) | {honest_rate if honest_rate is not None else 'N/A'}% |",
         "",
     ]
-    # Analyse what happened to llm-expected cases
     llm_cases = [c for c in result.cases if c.expected_route == "llm"]
     if llm_cases:
         route_dist: dict[str, int] = {}
@@ -3477,7 +3128,6 @@ def generate_evaluation_pack(
             lines.append(f"| {route} | {cnt} |")
         lines.append("")
 
-    # D9e — Latency
     lines += [
         "### D9e — Latency",
         "",
@@ -3492,7 +3142,6 @@ def generate_evaluation_pack(
         "",
     ]
 
-    # D9f — Over-routing finding
     llm_routed_wrong = [c for c in result.cases
                         if c.expected_route == "llm" and c.actual_route != "template_miss"]
     lines += [
@@ -3530,7 +3179,6 @@ def generate_evaluation_pack(
             "",
         ]
 
-    # D9g — Fallback ground-truth verification
     lines += [
         "### D9g — Fallback Oracle Ground-Truth Verification",
         "",
@@ -3547,7 +3195,6 @@ def generate_evaluation_pack(
         )
     lines.append("")
 
-    # D10 — Faithfulness and Hallucination
     lines += [
         "---",
         "",
@@ -3555,7 +3202,6 @@ def generate_evaluation_pack(
         "",
     ]
 
-    # D10a — Numeric gate
     lines += [
         "### D10a — Numeric-Consistency Gate (Offline Test)",
         "",
@@ -3594,7 +3240,6 @@ def generate_evaluation_pack(
             "",
         ]
 
-    # D10b — Cross-verifier
     lines += [
         "### D10b — Cross-Verifier (LLM-Based)",
         "",
@@ -3616,7 +3261,6 @@ def generate_evaluation_pack(
         "",
     ]
 
-    # D10c — Hallucination proxy
     facts_rate = metrics.get("answer_facts_found_rate")
     lines += [
         "### D10c — Hallucination Proxy (Answer-Facts Found Rate)",
@@ -3636,7 +3280,6 @@ def generate_evaluation_pack(
         "",
     ]
 
-    # D11 — Outstanding
     lines += [
         "---",
         "",
@@ -3672,19 +3315,6 @@ def generate_evaluation_pack(
 
 
 def generate_manual_scoring_sheet(output_path: "Path | None" = None) -> str:
-    """
-    Produce a CSV scoring sheet for human raters.
-
-    Columns
-    -------
-    id, catalogue_code, category, question, gold_answer, expected_route,
-    correctness, faithfulness, rater_1_notes, rater_2_notes, kappa_subset
-
-    correctness values: Correct / Partial / Incorrect / No-answer /
-                        Appropriate-refusal / Hallucinated
-    faithfulness values: Pass / Fail
-    kappa_subset: Y for 20% random stratified sample (for inter-rater agreement)
-    """
     import csv
     import io
     import random
@@ -3777,7 +3407,6 @@ def generate_manual_scoring_sheet(output_path: "Path | None" = None) -> str:
         "fbl_07_er_candidate_count": "22928",
     }
 
-    # Stratified 20% kappa subset: ~17 rows, picking ~2 per catalogue code
     random.seed(42)
     by_code: dict[str, list[str]] = {}
     for case in GOLDEN_CASES:
@@ -3805,10 +3434,10 @@ def generate_manual_scoring_sheet(output_path: "Path | None" = None) -> str:
             case.question,
             gold,
             case.expected_route,
-            "",   # correctness — human fills
-            "",   # faithfulness — human fills
-            "",   # rater_1_notes
-            "",   # rater_2_notes
+            "",
+            "",
+            "",
+            "",
             "Y" if case.id in kappa_ids else "",
         ])
 
@@ -3818,8 +3447,6 @@ def generate_manual_scoring_sheet(output_path: "Path | None" = None) -> str:
         _Path(output_path).write_text(csv_text, encoding="utf-8")
     return csv_text
 
-
-# ── CLI ────────────────────────────────────────────────────────────────────────
 
 def _save_result(result: EvalResult, path: Path) -> None:
     data = {
@@ -3906,8 +3533,6 @@ def main() -> None:
         print_metrics_table(loaded)
         return
 
-    # Resolve output directory: Coolattin-app/eval_results/
-    # parents[0]=services  parents[1]=backend  parents[2]=Coolattin-app
     _root = Path(__file__).resolve().parents[2]
     _eval_dir = _root / "eval_results"
     _eval_dir.mkdir(exist_ok=True)
@@ -3938,7 +3563,6 @@ def main() -> None:
                 HELDOUT_CASES, _run_read_only_query, _sanitize_and_validate_sql
             )
 
-    # ── Output ────────────────────────────────────────────────────────────────
     gate_result = test_faithfulness_gate_offline()
 
     if args.eval_set == "tuned":
@@ -3985,8 +3609,7 @@ def main() -> None:
         md_path.write_text(md, encoding="utf-8")
         print(f"Held-out report  → {md_path}")
 
-    else:  # both
-        # Print tuned set first, then held-out, then side-by-side comparison
+    else:
         print_case_table(result_tuned)
         print_case_table(result_heldout)
         print_metrics_table(
@@ -4006,7 +3629,6 @@ def main() -> None:
         json_path_t.with_suffix(".md").write_text(md_t, encoding="utf-8")
         json_path_h.with_suffix(".md").write_text(md_h, encoding="utf-8")
 
-        # Side-by-side comparison report
         cmp_path = _eval_dir / f"eval_{args.phase}_tuned_vs_heldout.md"
         _write_comparison_report(result_tuned, result_heldout, args.phase, cmp_path)
         print(f"Tuned report     → {json_path_t.with_suffix('.md')}")
@@ -4020,10 +3642,6 @@ def _write_comparison_report(
     phase: str,
     output_path: Path,
 ) -> None:
-    """
-    Write a Markdown side-by-side comparison of tuned vs held-out metrics.
-    The gap between tuned and held-out generalisation numbers is a dissertation finding.
-    """
     from datetime import datetime, timezone
 
     mt = _compute_metrics(tuned)

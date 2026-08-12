@@ -1,8 +1,3 @@
-"""
-backend/services/entity_resolution/normalise.py
-
-Pure normalisation helpers for workhouse entity resolution.
-"""
 from __future__ import annotations
 
 import re
@@ -41,20 +36,12 @@ _SURNAME_VARIANTS = {
 
 
 def clean_estate_name_field(value: Any) -> str:
-    """
-    Strip editorial annotations from unified estate record name fields
-    before entity-resolution normalisation.
-
-    Removes: [?] / [illegible] / (In Lease) / (Sic) / (Junior) etc.
-    Treats a field that is only dashes or punctuation as empty (unknown forename).
-    Applied only to unified estate records — workhouse raw_name is left untouched.
-    """
     if value is None:
         return ""
     text = str(value).strip()
-    text = _BRACKET_RE.sub('', text)   # [?], [Next Word Illegible], …
-    text = _PAREN_RE.sub('', text)     # (In Lease), (Sic), (Junior), …
-    text = re.sub(r'\?+', '', text)    # stray ? / ??
+    text = _BRACKET_RE.sub('', text)
+    text = _PAREN_RE.sub('', text)
+    text = re.sub(r'\?+', '', text)
     text = re.sub(r'\s+', ' ', text).strip()
     if _PLACEHOLDER_RE.match(text) or not text:
         return ""

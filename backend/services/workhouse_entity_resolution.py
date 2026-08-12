@@ -1,12 +1,3 @@
-"""
-backend/services/workhouse_entity_resolution.py
-
-Persisted workhouse-to-unified-record entity resolution.
-
-This pipeline is deliberately independent from Ask-page pgvector retrieval.
-It uses deterministic normalisation, fuzzy blocking, transparent scoring, and
-reviewable candidate links stored in SQLite.
-"""
 from __future__ import annotations
 
 import csv
@@ -41,7 +32,6 @@ _PAYLOAD_JUNK_VALUES = frozenset({"", '"', "'", ",", ".", "-", "--"})
 
 
 def _extract_workhouse_detail(source_payload_json: str | None) -> dict[str, Any]:
-    """Decode source_payload_json and return only non-null, displayable fields."""
     if not source_payload_json:
         return {}
     try:
@@ -310,7 +300,6 @@ def link_workhouse_records(
 ) -> dict[str, Any]:
     mentions = build_source_mentions(limit=limit)
     unified_records = _load_unified_records()
-    # Pre-build blocking index once; avoids O(n_workhouse × n_unified) scan
     unified_idx = build_unified_index(unified_records)
 
     conn = get_db_conn()
@@ -479,16 +468,9 @@ def get_record_resolution(record_id: str) -> dict[str, Any]:
 
 
 def get_resolution_map(record_ids: list[str]) -> dict[str, dict[str, Any]]:
-    """
-    Return a map of record_id → resolution dict for all given record IDs.
-    Uses a single batched SQL query instead of one query per record, so it
-    is safe to call with thousands of IDs (e.g. the unfiltered records page).
-    """
     if not record_ids:
         return {}
 
-    # Only query records that actually have links — avoids a huge IN clause
-    # when most records have no workhouse match.
     linked_ids: set[str] = set()
     conn = get_db_conn()
     try:
@@ -507,7 +489,6 @@ def get_resolution_map(record_ids: list[str]) -> dict[str, dict[str, Any]]:
     finally:
         conn.close()
 
-    # Group rows by unified_record_id in memory
     from collections import defaultdict
     rows_by_id: dict[str, list[dict]] = defaultdict(list)
     for row in rows_all:

@@ -1,9 +1,7 @@
-{# coolattin/templates/index.html #}
 {% extends "base.html" %}
 {% block content %}
 
 <section class="hero" id="home">
-  <!-- Centred text overlay only — no widgets -->
   <div class="hero-centre">
     <div class="hero-eyebrow">
       <span class="hero-dot"></span>
@@ -29,7 +27,6 @@
     </div>
   </div>
 
-  <!-- Scroll indicator -->
   <div class="hero-scroll-hint">
     <svg width="20" height="20" fill="none" stroke="rgba(255,255,255,0.55)" stroke-width="2" viewBox="0 0 24 24">
       <path d="M12 5v14M5 12l7 7 7-7"/>
@@ -37,7 +34,6 @@
   </div>
 </section>
 
-<!-- ── Photo cards (below the fold) ── -->
 <section class="section section-below-hero">
   <div class="container" style="max-width:960px;">
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:40px;">
@@ -75,10 +71,6 @@
 </section>
 
 
-
-<!-- ===========================
-     OLD RECORD MODAL
-=========================== -->
 <div id="oldRecordModal" class="modal-overlay">
   <div class="old-record-modal">
     <div class="modal-header">
@@ -87,15 +79,11 @@
       <div class="modal-sub" data-i18n="historicalFamilyRecord">Historical Family Record • Coolattin Estate</div>
     </div>
     <div class="modal-body" id="modalBody">
-      <!-- Dynamic Content -->
     </div>
 
   </div>
 </div>
 
-<!-- ===========================
-     SINGLE RECORD MODAL
-=========================== -->
 <div id="recordDetailModal" class="modal-overlay">
   <div class="old-record-modal" style="max-width: 1100px; width: min(1100px, 100%);">
     <div class="modal-header">
@@ -104,14 +92,10 @@
       <div class="modal-sub" data-i18n="specificEntry">Specific Entry • Coolattin Estate</div>
     </div>
     <div class="modal-body" id="recordModalBody">
-      <!-- Dynamic Scope -->
     </div>
   </div>
 </div>
 
-<!-- ===========================
-     GLOSSARY MODAL
-=========================== -->
 <div id="glossaryModal" class="modal-overlay">
   <div class="old-record-modal" style="max-width: 600px; width: min(600px, 100%);">
     <div class="modal-header">
@@ -120,14 +104,10 @@
       <div class="modal-sub" data-i18n="glossarySubtitle">Glossary of Historical & Data Fields</div>
     </div>
     <div class="modal-body" id="glossaryModalBody" style="max-height: 60vh; overflow-y: auto;">
-      <!-- Populated dynamically by JS -->
     </div>
   </div>
 </div>
 
-<!-- ===========================
-     KEY STRENGTH CALLOUT (above map)
-=========================== -->
 <section class="section" id="census-callout" style="padding-top:0; padding-bottom:24px;">
   <div class="container">
     <div class="panel" style="background: linear-gradient(135deg, #1a4a2e 0%, #234B3A 100%); border:none; display:flex; align-items:center; gap:28px; flex-wrap:wrap; padding:28px 32px;">
@@ -148,16 +128,12 @@
   </div>
 </section>
 
-<!-- ===========================
-     MAP EXPLORER (UPDATED)
-=========================== -->
 <section class="band" id="explore">
   <div class="container band-head">
     <h2 class="band-title" data-i18n="mapExplorer">Map Explorer · County Wicklow</h2>
   </div>
 
   <div class="container explore-layout">
-    <!-- FILTER PANEL -->
     <aside class="panel filters-panel">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
         <div class="panel-title" style="margin: 0;" data-i18n="searchFilters">Search Filters</div>
@@ -186,16 +162,13 @@
 
     </aside>
 
-    <!-- MAP + STORY + STATS -->
     <div class="panel map-panel">
       <div class="panel-title" id="exploreMapPanelTitle" data-i18n="countyWicklowMap">County Wicklow: Townlands & Families</div>
       <p id="exploreMapPanelSubtitle" class="explore-panel-note"></p>
 
-      <!-- Map + Story -->
       <div style="display:grid; grid-template-columns: 3fr 1.2fr; gap:14px;">
         <div style="position:relative;">
           <div id="wicklowMap" class="map-container" style="height:540px;"></div>
-          <!-- Layer switcher — populated by map.js on DOMContentLoaded -->
           <div id="wicklow-map-layer-switcher" style="position:absolute;top:10px;right:10px;z-index:1000;"></div>
         </div>
 
@@ -267,7 +240,6 @@ function exploreOnMap(townland, surname) {
   const exploreSection = document.getElementById('explore');
   if (exploreSection) exploreSection.scrollIntoView({ behavior: 'smooth' });
 
-  // Retry until townland options are loaded (data arrives async)
   let attempts = 0;
   function tryApply() {
     attempts++;
@@ -276,10 +248,8 @@ function exploreOnMap(townland, surname) {
     const applyBtn = document.getElementById('applyFiltersBtn');
     if (!tlSelect || !snInput || !applyBtn) { if (attempts < 20) setTimeout(tryApply, 200); return; }
 
-    // Options populated = more than just "All townlands"
     if (tlSelect.options.length <= 1 && attempts < 20) { setTimeout(tryApply, 200); return; }
 
-    // Match townland name case-insensitively
     for (let i = 0; i < tlSelect.options.length; i++) {
       if (tlSelect.options[i].value.toLowerCase() === townland.toLowerCase()) {
         tlSelect.value = tlSelect.options[i].value;

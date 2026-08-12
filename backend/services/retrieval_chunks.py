@@ -1,11 +1,3 @@
-"""
-backend/services/retrieval_chunks.py
-
-Shared Ask-page retrieval chunk builders.
-
-This module is intentionally storage-agnostic: it prepares rich chunk documents
-for either in-memory fallback retrieval or persistent pgvector indexing.
-"""
 from __future__ import annotations
 
 import logging
@@ -417,12 +409,6 @@ def _build_source_summary_chunks(conn) -> list[dict[str, Any]]:
 
 
 def build_retrieval_chunks() -> list[dict[str, Any]]:
-    """
-    Build the shared Ask-page retrieval corpus.
-
-    The returned docs are intentionally JSON-safe and contain only the fields
-    needed by either the in-memory retriever or the persistent pgvector store.
-    """
     conn = get_db_conn()
     try:
         chunks: list[dict[str, Any]] = []

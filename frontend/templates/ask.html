@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
 
-<!-- Fixed loading banner — stays visible without scrolling -->
 <div id="askLoadingBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;
   background:linear-gradient(90deg,#0f766e,#0369a1);color:#fff;padding:11px 20px;
   align-items:center;gap:12px;box-shadow:0 2px 10px rgba(0,0,0,.25);font-size:13px;font-weight:700;">
@@ -35,7 +34,6 @@
     margin-bottom: 6px;
   }
 
-  /* Townland autocomplete dropdown */
   #askTownlandWrap { position: relative; }
   #askTownlandDropdown {
     display: none;
@@ -66,7 +64,6 @@
   .tl-option-name { font-weight: 700; }
   .tl-option-meta { font-size: 11px; color: #94a3b8; }
 
-  /* ── Scoped markdown styles for the LLM answer box ─── */
   .ask-md { font-size: 14px; line-height: 1.75; color: #1e293b; }
   .ask-md p { margin: 0 0 10px; line-height: 1.75; }
   .ask-md p:last-child { margin-bottom: 0; }
@@ -126,12 +123,10 @@
       Every answer shows which tables and record IDs were used so you can verify accuracy.
     </p>
 
-    <!-- LLM status badge only -->
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;min-height:24px;align-items:center;">
       <div id="llmStatus"></div>
     </div>
 
-    <!-- Input panel -->
     <div class="panel soft" style="margin-top:14px;padding:18px;">
       <label for="askQuestion" style="display:block;font-weight:700;color:#0f172a;margin-bottom:8px;">
         Your question
@@ -158,7 +153,6 @@
         </div>
       </div>
 
-      <!-- Inline loading indicator — visible without scrolling while query runs -->
       <div id="askInlineStatus" style="display:none;margin-top:10px;padding:9px 14px;border-radius:10px;
         background:linear-gradient(135deg,#f0fdf4,#eff6ff);border:1px solid #a7f3d0;
         align-items:center;gap:10px;">
@@ -169,7 +163,6 @@
         <span id="askInlineStage" style="margin-left:auto;font-size:11px;color:#64748b;font-weight:400;"></span>
       </div>
 
-      <!-- Example questions -->
       <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap;">
         <span style="font-size:11px;color:#64748b;align-self:center;font-weight:600;">Examples:</span>
         <button class="btn btn-soft ask-example" style="font-size:11px;" data-q="how many people have emigrated from this townland?">Townland emigration count</button>
@@ -192,16 +185,13 @@
       </div>
     </div>
 
-    <!-- Status + progress -->
     <div id="askStatus" style="margin-top:10px;font-size:12px;color:#64748b;font-weight:600;"></div>
     <div id="askProgress" style="margin-top:6px;display:grid;gap:4px;"></div>
     <div id="askError"
          style="margin-top:8px;display:none;padding:10px 12px;border-radius:10px;background:#fff1f2;border:1px solid #fecdd3;color:#9f1239;font-size:13px;"></div>
 
-    <!-- ═══════════════════════════════════════════════════════ RESULT PANEL -->
     <section id="askResult" class="panel" style="display:none;margin-top:16px;padding:0;overflow:hidden;">
 
-      <!-- Top bar -->
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px;border-bottom:2px solid #f1f5f9;">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <h2 style="margin:0;font-size:17px;color:#0f172a;font-weight:800;">Answer</h2>
@@ -215,7 +205,6 @@
         </a>
       </div>
 
-      <!-- ══ SECTION 1: LLM INTERPRETATION ═══════════════════════════════════ -->
       <div style="padding:16px 18px;border-bottom:2px solid #f1f5f9;background:linear-gradient(135deg,#f0fdf4 0%,#f8fafc 100%);">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
           <div style="width:4px;height:18px;border-radius:2px;background:#059669;"></div>
@@ -223,16 +212,13 @@
           <span style="font-size:10px;color:#94a3b8;margin-left:auto;">AI-generated summary of the data below</span>
         </div>
         <div id="askLlmAnswer" class="ask-md" style="padding:14px 16px;border:1px solid #a7f3d0;background:#fff;border-radius:12px;font-weight:500;"></div>
-        <!-- Warnings shown here, below the interpretation -->
         <div id="askWarnings"></div>
-        <!-- Insights -->
         <div id="askInsightsBlock" style="display:none;margin-top:10px;">
           <div style="font-size:11px;font-weight:700;color:#065f46;margin-bottom:4px;">Related Insights</div>
           <div id="askInsights" style="display:grid;gap:6px;"></div>
         </div>
       </div>
 
-      <!-- ══ SECTION 2: SQLITE DATABASE RESULT ════════════════════════════════ -->
       <div style="padding:16px 18px;border-bottom:2px solid #f1f5f9;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
           <div style="width:4px;height:18px;border-radius:2px;background:#0369a1;"></div>
@@ -240,7 +226,6 @@
           <div id="askSourceTables" style="font-size:11px;color:#94a3b8;font-style:italic;margin-left:auto;"></div>
         </div>
 
-        <!-- SQL result table -->
         <div style="margin-bottom:10px;">
           <div style="font-size:11px;font-weight:700;color:#334155;margin-bottom:4px;display:flex;align-items:center;gap:6px;">
             <span style="background:#0f172a;color:#22c55e;padding:2px 7px;border-radius:4px;font-family:monospace;font-size:10px;">SQL</span>
@@ -253,7 +238,6 @@
           <div id="askActualAnswer" style="margin-top:6px;font-size:12px;color:#475467;font-style:italic;display:none;"></div>
         </div>
 
-        <!-- Estate overview panel (shown only for All-Townlands estate-wide queries) -->
         <div id="askEstateOverview" style="display:none;margin-bottom:14px;padding:14px 16px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:12px;">
           <div style="font-size:13px;font-weight:700;color:#1e3a8a;margin-bottom:4px;">County Wicklow &amp; Coolattin Estate Overview</div>
           <div style="font-size:12px;color:#3b82f6;margin-bottom:10px;">No townland filter applied. Showing estate-wide and county-level statistics from the database.</div>
@@ -261,7 +245,6 @@
         </div>
       </div>
 
-      <!-- ══ SECTION 2b: KNOWLEDGE GRAPH RESULT ════════════════════════════════ -->
       <div id="askKgSection" style="display:none;padding:16px 18px;border-bottom:2px solid #f1f5f9;background:linear-gradient(135deg,#faf5ff 0%,#f8fafc 100%);">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
           <div style="width:4px;height:18px;border-radius:2px;background:#6b21a8;"></div>
@@ -269,7 +252,6 @@
           <span style="font-size:10px;color:#94a3b8;margin-left:auto;">Virtual Record Treasury of Ireland (VRTI)</span>
         </div>
 
-        <!-- KG / SPARQL result table -->
         <div id="askKgResultBlock" style="display:none;">
           <div style="font-size:11px;font-weight:700;color:#6b21a8;margin-bottom:4px;display:flex;align-items:center;gap:6px;">
             <span style="background:#6b21a8;color:#fff;padding:2px 7px;border-radius:4px;font-family:monospace;font-size:10px;">KG</span>
@@ -281,35 +263,30 @@
           </div>
         </div>
 
-        <!-- KG geographic townland detail cards -->
         <div id="askKgBlock" style="display:none;margin-top:10px;">
           <div style="font-size:11px;font-weight:700;color:#6b21a8;margin-bottom:4px;">Knowledge Graph: Geographic Context</div>
           <div id="askKgContent" style="display:grid;gap:6px;"></div>
         </div>
       </div>
 
-      <!-- ══ SECTION 3: EXPLAINABILITY & JUSTIFICATION ═══════════════════════ -->
       <div id="askExplainBlock" style="padding:16px 18px;border-bottom:2px solid #f1f5f9;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
           <div style="width:4px;height:18px;border-radius:2px;background:#b45309;"></div>
           <div class="ask-section-label" style="margin:0;color:#92400e;">3 · Explainability &amp; Provenance</div>
         </div>
         <div id="askExplainContent" style="display:grid;gap:6px;"></div>
-        <!-- Suggestions if data is missing -->
         <div id="askSuggestionsBlock" style="display:none;margin-top:8px;">
           <div style="font-size:11px;font-weight:700;color:#92400e;margin-bottom:4px;">If Data Is Missing</div>
           <div id="askSuggestions" style="display:grid;gap:6px;"></div>
         </div>
       </div>
 
-      <!-- ══ SECTION 4: GENERATED QUERIES ═══════════════════════════════════ -->
       <div style="padding:16px 18px;border-bottom:2px solid #f1f5f9;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
           <div style="width:4px;height:18px;border-radius:2px;background:#7c3aed;"></div>
           <div class="ask-section-label" style="margin:0;color:#5b21b6;">4 · Generated Queries</div>
           <span style="font-size:10px;color:#94a3b8;margin-left:auto;">Queries executed against the database and knowledge graph</span>
         </div>
-        <!-- SQL query -->
         <div style="margin-bottom:10px;">
           <div style="padding:6px 10px;background:#0f172a;border-radius:8px 8px 0 0;display:flex;align-items:center;gap:8px;">
             <span style="font-size:10px;font-weight:700;background:#22c55e;color:#0f172a;padding:2px 6px;border-radius:4px;font-family:monospace;">SQL</span>
@@ -318,7 +295,6 @@
           </div>
           <pre id="askSqliteQuery" style="margin:0;padding:12px;background:#1e293b;color:#e2e8f0;overflow:auto;font-size:11px;line-height:1.6;max-height:220px;white-space:pre-wrap;border-radius:0 0 8px 8px;"></pre>
         </div>
-        <!-- SPARQL query (shown only when present) -->
         <div id="askSparqlBlock" style="display:none;">
           <div style="padding:6px 10px;background:#4c1d95;border-radius:8px 8px 0 0;display:flex;align-items:center;gap:8px;">
             <span style="font-size:10px;font-weight:700;background:#a78bfa;color:#1e1b4b;padding:2px 6px;border-radius:4px;font-family:monospace;">SPARQL</span>
@@ -329,7 +305,6 @@
         </div>
       </div>
 
-      <!-- ══ SECTION 5: CHART ════════════════════════════════════════════════ -->
       <div id="askChartBlock" style="display:none;padding:16px 18px;border-bottom:2px solid #f1f5f9;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
           <div style="width:4px;height:18px;border-radius:2px;background:#0f766e;"></div>
@@ -338,32 +313,27 @@
         <div id="askChart" style="padding:12px 14px;border:1px solid #e2e8f0;background:#fff;border-radius:10px;overflow:auto;"></div>
       </div>
 
-      <!-- ══ SECTION 6: HIDDEN — LLM & Data Workflow ═══════════════════════ -->
       <details style="border-top:1px solid #f1f5f9;">
         <summary class="ask-detail-summary" style="padding:10px 18px;">
           ▸ LLM Connection · Data Workflow · Query Provenance · Context Used
         </summary>
         <div style="padding:0 18px 16px;display:grid;gap:14px;">
 
-          <!-- LLM Connection + Data Workflow -->
           <div>
             <div class="ask-section-label">LLM Connection &amp; Data Workflow</div>
             <div id="askLlmMeta" style="display:grid;gap:5px;font-size:12px;color:#475467;"></div>
           </div>
 
-          <!-- Query Provenance -->
           <div>
             <div class="ask-section-label">Query Provenance</div>
             <div id="askProvenance" style="display:grid;gap:5px;font-size:12px;color:#475467;"></div>
           </div>
 
-          <!-- Summarised stats block -->
           <div>
             <div class="ask-section-label">Summarised Statistics</div>
             <div id="askSummary" style="padding:12px 14px;border:1px solid #dbeafe;background:#eff6ff;border-radius:10px;color:#1e3a8a;font-size:12px;line-height:1.6;"></div>
           </div>
 
-          <!-- Supporting Context used by LLM -->
           <div id="askSupportContextBlock" style="display:none;">
             <div class="ask-section-label">Context Used by LLM</div>
             <div id="askSupportContext" style="display:grid;gap:6px;"></div>
@@ -372,7 +342,6 @@
         </div>
       </details>
 
-      <!-- ══ SECTION 7: FEEDBACK ════════════════════════════════════════════ -->
       <div style="padding:20px 18px;background:#fafaf9;border-top:2px solid #e2e8f0;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
           <div style="width:4px;height:18px;border-radius:2px;background:#6b7280;"></div>

@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-"""
-scripts/preprocess_heritage.py
-
-Converts the raw NMS extra_datasets CSVs into Wicklow-only GeoJSON files
-ready for the Historic Landscape page.
-
-Run from project root:
-    python scripts/preprocess_heritage.py
-
-Output:
-    frontend/static/data/asi_wicklow.geojson
-    frontend/static/data/holywells_wicklow.geojson
-    frontend/static/data/monuments_wicklow.geojson
-"""
 
 import csv
 import json
@@ -21,7 +7,6 @@ import os
 EXTRA = "extra_datasets"
 OUT = "frontend/static/data"
 
-# Ireland bounding box — reject clearly wrong coordinates
 IRELAND_LAT = (51.2, 55.5)
 IRELAND_LNG = (-10.7, -5.3)
 
@@ -70,7 +55,6 @@ def csv_to_geojson_wicklow(csv_path, lat_field, lng_field, county_field, propert
 def main():
     os.makedirs(OUT, exist_ok=True)
 
-    # ── ASI (Archaeological Survey of Ireland) ────────────────────────────
     print("Processing ASI …")
     asi = csv_to_geojson_wicklow(
         f"{EXTRA}/NMS_OpenData_20230823.csv",
@@ -94,7 +78,6 @@ def main():
         json.dump(asi, f, separators=(",", ":"))
     print(f"  → {OUT}/asi_wicklow.geojson ({len(asi['features'])} features)\n")
 
-    # ── Holy Wells ────────────────────────────────────────────────────────
     print("Processing Holy Wells …")
     hw = csv_to_geojson_wicklow(
         f"{EXTRA}/NMS_OpenData_20230420_HolyWell_csv.csv",
@@ -118,7 +101,6 @@ def main():
         json.dump(hw, f, separators=(",", ":"))
     print(f"  → {OUT}/holywells_wicklow.geojson ({len(hw['features'])} features)\n")
 
-    # ── Monuments to Visit ────────────────────────────────────────────────
     print("Processing Monuments to Visit …")
     mtv = csv_to_geojson_wicklow(
         f"{EXTRA}/NMSMonumentsToVisit.csv",

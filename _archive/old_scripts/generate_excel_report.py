@@ -4,7 +4,6 @@ import os
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
-# Add project root to path to import services
 sys.path.append(os.getcwd())
 
 from coolattin.services.fuzzy import norm_key, _score
@@ -23,7 +22,6 @@ def generate_excel_report():
     print("Generating Excel report...")
     wb = Workbook()
     
-    # --- Sheet 1: Mapping Audit ---
     ws_audit = wb.active
     ws_audit.title = "Mapping Audit"
     
@@ -33,7 +31,6 @@ def generate_excel_report():
     ]
     ws_audit.append(headers)
     
-    # Styles
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
     
@@ -42,7 +39,6 @@ def generate_excel_report():
         cell.fill = header_fill
         cell.alignment = Alignment(horizontal="center")
 
-    # Sort data for better readability in Excel
     df = df.sort_values(["surname_canon", "townland_norm", "year_norm"])
 
     for _, row in df.iterrows():
@@ -69,7 +65,6 @@ def generate_excel_report():
             canon, raw, fr, yr, town, src, rid, norm, score, notes
         ])
 
-    # --- Sheet 2: Cluster Summary ---
     ws_summary = wb.create_sheet("Cluster Summary")
     ws_summary.append(["Cluster (Canon)", "Record Count", "Unique Raw Surnames", "Sources involved"])
     
@@ -86,7 +81,6 @@ def generate_excel_report():
         cell.font = header_font
         cell.fill = header_fill
 
-    # Adjust column widths
     for sheet in [ws_audit, ws_summary]:
         for col in sheet.columns:
             max_length = 0

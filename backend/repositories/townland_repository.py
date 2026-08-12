@@ -1,11 +1,3 @@
-"""
-coolattin/repositories/townland_repository.py
-
-Local database access for townland records.
-
-This module is the ONLY place that reads/writes the `townland` table.
-It does not know about SPARQL, HTTP, or business rules.
-"""
 from __future__ import annotations
 
 import json
@@ -20,7 +12,6 @@ log = logging.getLogger(__name__)
 
 
 def find_by_name(name: str) -> Optional[Townland]:
-    """Return a townland by its canonical name, or None."""
     canonical = name.strip().upper()
     conn = get_db_conn()
     try:
@@ -33,7 +24,6 @@ def find_by_name(name: str) -> Optional[Townland]:
 
 
 def find_by_entity_id(entity_id: str) -> Optional[Townland]:
-    """Return a townland by its UUID entity_id, or None."""
     conn = get_db_conn()
     try:
         row = conn.execute(
@@ -45,7 +35,6 @@ def find_by_entity_id(entity_id: str) -> Optional[Townland]:
 
 
 def find_all() -> list[Townland]:
-    """Return all townlands ordered by name."""
     conn = get_db_conn()
     try:
         rows = conn.execute("SELECT * FROM townland ORDER BY name").fetchall()
@@ -55,7 +44,6 @@ def find_all() -> list[Townland]:
 
 
 def find_all_as_dicts() -> list[dict]:
-    """Return all townlands as plain dicts (for the resolution engine)."""
     conn = get_db_conn()
     try:
         rows = conn.execute("SELECT * FROM townland ORDER BY name").fetchall()
@@ -74,12 +62,6 @@ def count() -> int:
 
 
 def upsert(townland: Townland) -> int:
-    """
-    Insert or update a townland record.
-
-    On insert, assigns a UUID entity_id if the model has none.
-    Returns the rowid of the inserted/updated row.
-    """
     canonical   = townland.name.strip().upper()
     images_json = json.dumps(townland.images or [])
     links_json  = json.dumps(townland.links  or [])
@@ -200,7 +182,6 @@ def upsert(townland: Townland) -> int:
 
 
 def upsert_many(townlands: list[Townland]) -> int:
-    """Upsert a batch of townlands. Returns count of processed rows."""
     count = 0
     for t in townlands:
         upsert(t)
@@ -210,10 +191,6 @@ def upsert_many(townlands: list[Townland]) -> int:
 
 
 def save_kg_cache(name: str, kg_dto) -> None:
-    """
-    Write KG-fetched fields back to the townland table.
-    Only updates KG-sourced columns — never overwrites GeoJSON measurements.
-    """
     canonical   = name.strip().upper()
     images_json = json.dumps(kg_dto.images or [])
     links_json  = json.dumps(kg_dto.links  or [])
@@ -266,7 +243,6 @@ def save_kg_cache(name: str, kg_dto) -> None:
 
 
 def get_or_create(name: str, **kwargs) -> tuple[int, bool]:
-    """Returns (townland_id, created).  Creates the townland if it doesn't exist."""
     canonical = name.strip().upper()
     conn = get_db_conn()
     try:

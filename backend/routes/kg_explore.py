@@ -1,13 +1,3 @@
-"""
-backend/routes/kg_explore.py
-
-Routes for the D8 Explore Knowledge page.
-
-GET  /api/kg/graph           — graph topology (nodes + edges) for D3.js
-GET  /api/kg/scenarios       — canned SQL vs SPARQL comparison scenarios
-POST /api/kg/compare         — run a single scenario: {id, custom_sql, custom_sparql}
-GET  /api/kg/rdf-status      — rdflib graph health (triple count, file present)
-"""
 from __future__ import annotations
 
 import logging
@@ -59,7 +49,7 @@ def kg_compare():
     import time
 
     result: dict = {}
-    DISPLAY_CAP = 500  # rows sent to browser
+    DISPLAY_CAP = 500
 
     if sql_text:
         t0 = time.perf_counter()
@@ -79,7 +69,6 @@ def kg_compare():
         t0 = time.perf_counter()
         sparql_cols, sparql_rows, sparql_err = run_sparql(sparql_text)
         sparql_ms = int((time.perf_counter() - t0) * 1000)
-        # Cap to DISPLAY_CAP rows for browser performance
         capped = len(sparql_rows) > DISPLAY_CAP
         result["sparql"] = {
             "query": sparql_text,
@@ -104,14 +93,6 @@ def kg_compare():
 
 @bp.post("/explain-mismatch")
 def kg_explain_mismatch():
-    """
-    POST body: {
-      sql_query, sparql_query,
-      sql_rows, sparql_rows,          (first few rows as list of dicts)
-      sql_row_count, sparql_row_count
-    }
-    Returns LLM analysis of why the two result sets differ.
-    """
     body = request.get_json(silent=True) or {}
     sql_query = (body.get("sql_query") or "").strip()
     sparql_query = (body.get("sparql_query") or "").strip()
@@ -137,7 +118,6 @@ def kg_explain_mismatch():
 
 @bp.get("/graphdb-status")
 def kg_graphdb_status():
-    """Live connectivity check against the GraphDB SPARQL endpoint."""
     from backend.integrations import graphdb_sparql as _gdb
     available = _gdb.probe()
     triple_count = _gdb.triple_count() if available else -1
@@ -153,7 +133,6 @@ def kg_graphdb_status():
 
 @bp.get("/townland/<path:name>")
 def kg_townland_persons(name: str):
-    """Return person records for a specific townland (detail drill-down from graph)."""
     from backend.services.kg_service import get_townland_persons
     data = get_townland_persons(name)
     return jsonify(data)
@@ -161,10 +140,6 @@ def kg_townland_persons(name: str):
 
 @bp.get("/townland-rich/<path:name>")
 def kg_townland_rich(name: str):
-    """
-    Return enriched geographical detail for a townland:
-    local DB stats, VRTI KG data, LLM-generated SPARQL query, and a rich narrative.
-    """
     from backend.services.kg_service import get_townland_rich_detail
     data = get_townland_rich_detail(name)
     return jsonify(data)

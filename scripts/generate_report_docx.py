@@ -1,21 +1,8 @@
-"""
-scripts/generate_report_docx.py
-
-Generate a fully-formatted Word (.docx) technical implementation report
-for the Coolattin Estate Records Explorer.
-
-Usage:
-    python3 scripts/generate_report_docx.py
-
-Output:
-    docs/Coolattin_Technical_Report.docx
-"""
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-# ── Ensure project root is on sys.path ───────────────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -29,14 +16,13 @@ import datetime
 
 OUT_PATH = ROOT / "docs" / "Coolattin_Technical_Report.docx"
 
-# ── Colour palette ─────────────────────────────────────────────────────────
-DARK_NAVY   = RGBColor(0x0F, 0x17, 0x2A)   # headings
-ACCENT_BLUE = RGBColor(0x1D, 0x4E, 0xD8)   # sub-headings
-DEEP_GREEN  = RGBColor(0x16, 0x6A, 0x34)   # accent text
-TABLE_HEAD  = RGBColor(0x1E, 0x3A, 0x5F)   # table header bg
-TABLE_ALT   = RGBColor(0xF0, 0xF4, 0xFF)   # alternating row bg
-CODE_BG     = RGBColor(0xF8, 0xFA, 0xFC)   # code block bg
-GREY_TEXT   = RGBColor(0x47, 0x54, 0x67)   # body secondary
+DARK_NAVY   = RGBColor(0x0F, 0x17, 0x2A)
+ACCENT_BLUE = RGBColor(0x1D, 0x4E, 0xD8)
+DEEP_GREEN  = RGBColor(0x16, 0x6A, 0x34)
+TABLE_HEAD  = RGBColor(0x1E, 0x3A, 0x5F)
+TABLE_ALT   = RGBColor(0xF0, 0xF4, 0xFF)
+CODE_BG     = RGBColor(0xF8, 0xFA, 0xFC)
+GREY_TEXT   = RGBColor(0x47, 0x54, 0x67)
 
 
 def _set_cell_bg(cell, rgb: RGBColor):
@@ -117,7 +103,6 @@ def add_table(doc: Document, headers: list[str], rows: list[list[str]],
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.LEFT
 
-    # Header row
     hdr_cells = table.rows[0].cells
     for i, h in enumerate(headers):
         cell = hdr_cells[i]
@@ -128,7 +113,6 @@ def add_table(doc: Document, headers: list[str], rows: list[list[str]],
         run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
         cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
 
-    # Data rows
     for r_idx, row in enumerate(rows):
         cells = table.rows[r_idx + 1].cells
         bg = TABLE_ALT if r_idx % 2 == 0 else RGBColor(0xFF, 0xFF, 0xFF)
@@ -139,14 +123,13 @@ def add_table(doc: Document, headers: list[str], rows: list[list[str]],
             run.font.size = Pt(9)
             cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
-    # Column widths
     if col_widths:
         for r_idx, row in enumerate(table.rows):
             for c_idx, width in enumerate(col_widths):
                 if c_idx < len(row.cells):
                     row.cells[c_idx].width = Inches(width)
 
-    doc.add_paragraph()  # spacing after table
+    doc.add_paragraph()
     return table
 
 
@@ -158,27 +141,18 @@ def add_divider(doc: Document):
     _set_para_spacing(para, before=6, after=6)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# DOCUMENT BUILD
-# ═══════════════════════════════════════════════════════════════════════════════
-
 def build():
     doc = Document()
 
-    # ── Page margins ──────────────────────────────────────────────────────────
     for section in doc.sections:
         section.top_margin    = Cm(2.5)
         section.bottom_margin = Cm(2.5)
         section.left_margin   = Cm(2.8)
         section.right_margin  = Cm(2.8)
 
-    # ── Default paragraph font ────────────────────────────────────────────────
     doc.styles["Normal"].font.name = "Calibri"
     doc.styles["Normal"].font.size = Pt(10.5)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # TITLE PAGE
-    # ══════════════════════════════════════════════════════════════════════════
     doc.add_paragraph()
     doc.add_paragraph()
 
@@ -205,7 +179,6 @@ def build():
     doc.add_paragraph()
     doc.add_paragraph()
 
-    # Abstract / summary box (as a 1-cell table)
     abs_table = doc.add_table(rows=1, cols=1)
     abs_table.style = "Table Grid"
     abs_cell = abs_table.rows[0].cells[0]
@@ -226,9 +199,6 @@ def build():
     doc.add_paragraph()
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 1 — PROJECT OVERVIEW
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "1. Project Overview", 1)
     add_body(doc,
         "The Coolattin Estate Records Explorer is a full-stack web application providing "
@@ -264,9 +234,6 @@ def build():
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 2 — TECHNOLOGY STACK
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "2. Technology Stack", 1)
 
     add_heading(doc, "2.1 Backend", 2)
@@ -315,9 +282,6 @@ def build():
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 3 — SYSTEM ARCHITECTURE
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "3. System Architecture", 1)
 
     add_heading(doc, "3.1 Layered Architecture", 2)
@@ -365,9 +329,6 @@ def build():
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 4 — DATABASE DESIGN
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "4. Database Design", 1)
     add_body(doc,
         "The SQLite database (coolattin.db) contains five tables, all created idempotently "
@@ -468,9 +429,6 @@ def build():
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 5 — DATA INGESTION PIPELINE
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "5. Data Ingestion Pipeline", 1)
     add_body(doc,
         "Data flows from three primary sources into the SQLite database through dedicated ingest jobs. "
@@ -507,9 +465,6 @@ def build():
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 6 — FEATURE: UNIFIED ESTATE RECORDS SEARCH
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "6. Feature: Unified Estate Records Search", 1)
     add_body(doc,
         "The primary search interface over all 13,707 estate records. Users can filter by surname, "
@@ -540,9 +495,6 @@ def build():
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 7 — FEATURE: INTERACTIVE MAP
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "7. Feature: Interactive Map", 1)
     add_body(doc,
         "A Leaflet.js interactive map displaying all 152 estate townland boundaries from the GeoJSON, "
@@ -568,9 +520,6 @@ def build():
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 8 — FEATURE: CENSUS EXPLORER
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "8. Feature: Census Explorer", 1)
     add_body(doc,
         "The census explorer shows population data across twelve survey years (1827–1891). "
@@ -604,9 +553,6 @@ def build():
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 9 — FEATURE: ANALYTICS DASHBOARD
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "9. Feature: Analytics Dashboard", 1)
     add_body(doc,
         "A pluggable analytics dashboard showing KPIs and Chart.js visualisations for each dataset. "
@@ -638,9 +584,6 @@ def build():
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 10 — FEATURE: NATURAL-LANGUAGE ASK (LLM Q&A)
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "10. Feature: Natural-Language Ask (LLM Q&A)", 1)
     add_body(doc,
         "The Ask page accepts a free-text historical research question, processes it through an "
@@ -741,9 +684,6 @@ def build():
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 11 — FEATURE: KNOWLEDGE GRAPH VISUALISER
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "11. Feature: Knowledge Graph Visualiser", 1)
     add_body(doc,
         "An interactive D3.js v7 force-directed graph visualising the entire Coolattin Estate "
@@ -830,9 +770,6 @@ def build():
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 12 — FEATURE: GRAPHDB SPARQL INTEGRATION
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "12. Feature: GraphDB SPARQL Integration", 1)
 
     add_heading(doc, "12.1 RDF Ontology", 2)
@@ -877,9 +814,6 @@ def build():
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 13 — ADDITIONAL FEATURES
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "13. Additional Features", 1)
 
     add_heading(doc, "13.1 PDF Export", 2)
@@ -945,9 +879,6 @@ def build():
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 14 — SECURITY & PERFORMANCE
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "14. Security and Performance", 1)
 
     add_heading(doc, "14.1 Security Measures", 2)
@@ -982,9 +913,6 @@ def build():
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 15 — COMPLETE API REFERENCE
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "15. Complete API Reference", 1)
 
     add_heading(doc, "15.1 Page Routes", 2)
@@ -1064,9 +992,6 @@ def build():
 
     doc.add_page_break()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 16 — CODEBASE METRICS & SUMMARY
-    # ══════════════════════════════════════════════════════════════════════════
     add_heading(doc, "16. Codebase Metrics and Summary", 1)
 
     add_heading(doc, "16.1 Code Scale", 2)
@@ -1136,9 +1061,6 @@ def build():
         col_widths=[0.4, 2.8, 2.8]
     )
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # FOOTER / CLOSING
-    # ══════════════════════════════════════════════════════════════════════════
     doc.add_page_break()
     add_divider(doc)
 
@@ -1152,7 +1074,6 @@ def build():
     r.font.color.rgb = GREY_TEXT
     r.italic = True
 
-    # ── Save ─────────────────────────────────────────────────────────────────
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(OUT_PATH))
     print(f"Report saved → {OUT_PATH}")

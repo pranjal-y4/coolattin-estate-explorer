@@ -1,10 +1,3 @@
-"""
-coolattin/services/refresh_service.py
-
-Refresh orchestration — coordinates forced re-ingestion from KG.
-
-Called by POST /api/census/refresh and POST /api/townlands/wicklow/refresh.
-"""
 from __future__ import annotations
 
 import logging
@@ -13,10 +6,6 @@ log = logging.getLogger(__name__)
 
 
 def trigger_census_refresh(year: int | None = None) -> dict:
-    """
-    Force a synchronous census refresh from the VRTI KG.
-    Returns a status dict for the API response.
-    """
     from backend.services.census_service import force_refresh
     from backend.models.census_models import CensusFilters
 
@@ -26,10 +15,6 @@ def trigger_census_refresh(year: int | None = None) -> dict:
 
 
 def trigger_townlands_refresh() -> dict:
-    """
-    Force a synchronous townland refresh from the VRTI KG.
-    Returns a status dict for the API response.
-    """
     from backend.integrations import vrti_sparql
     from backend.repositories import townland_repository, refresh_state_repository
     from backend.services.townland_service import normalize_townland_name, reconcile_with_reference
@@ -55,7 +40,6 @@ def trigger_townlands_refresh() -> dict:
         if dto.name
     ]
 
-    # Enrich with barony/parish from reference
     townlands = reconcile_with_reference(townlands)
 
     count = townland_repository.upsert_many(townlands)
