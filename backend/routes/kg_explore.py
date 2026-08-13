@@ -121,7 +121,7 @@ def kg_graphdb_status():
     from backend.integrations import graphdb_sparql as _gdb
     available = _gdb.probe()
     triple_count = _gdb.triple_count() if available else -1
-    from config import ActiveConfig
+    from backend.config import ActiveConfig
     return jsonify({
         "enabled": ActiveConfig.GRAPHDB_ENABLED,
         "endpoint": ActiveConfig.GRAPHDB_SPARQL_ENDPOINT,

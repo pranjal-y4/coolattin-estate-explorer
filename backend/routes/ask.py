@@ -138,7 +138,7 @@ def ollama_status():
 
 @bp.get("/estate-overview")
 def estate_overview():
-    from extensions import get_db_conn
+    from backend.extensions import get_db_conn
     try:
         conn = get_db_conn()
         cur = conn.cursor()
@@ -271,7 +271,7 @@ def estate_overview():
 
 @bp.get("/pdf/<path:filename>")
 def ask_pdf_download(filename: str):
-    from config import ActiveConfig
+    from backend.config import ActiveConfig
     safe_name = Path(filename).name
     if not safe_name.lower().endswith(".pdf"):
         abort(400, description="Only PDF files may be downloaded from this endpoint.")

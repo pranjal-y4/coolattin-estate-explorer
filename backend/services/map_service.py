@@ -64,7 +64,7 @@ def get_layer_config() -> dict:
 
 def build_centroids(geojson_path: Path | None = None) -> dict[str, tuple[float, float]]:
     from backend.services.townland_service import build_centroids_from_geojson
-    from config import ActiveConfig
+    from backend.config import ActiveConfig
 
     if geojson_path is None:
         geojson_path = ActiveConfig.STATIC_DATA_DIR / "townlands.json"

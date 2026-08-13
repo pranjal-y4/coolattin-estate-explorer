@@ -72,6 +72,39 @@ One Python 3.12 application handles ingestion, entity resolution, graph construc
 
 Hand-written SQL is used instead of an ORM so that executed queries remain visible in logs, evaluation outputs and the Ask interface. VRTI, GraphDB, cloud embeddings and language-model providers remain optional or externally maintained.
 
+### Repository layout
+
+```
+app.py                     WSGI entry point (gunicorn app:app); calls the factory
+backend/                   Python application package
+  app.py                   Flask application factory, blueprints, security headers
+  config.py                Layered configuration; BASE_DIR anchors the project root
+  extensions.py            SQLite connection handling and schema bootstrap
+  routes/                  HTTP blueprints (main, census, unified, map, townlands,
+                           exports, ask, kg_explore)
+  services/                Domain logic: Ask pipeline, GraphRAG, entity resolution,
+                           embeddings, exports, census/townland/workhouse services
+  repositories/            SQL access per aggregate
+  integrations/            External endpoints (VRTI, GraphDB, townlands reference)
+  jobs/                    Ingestion and seeding entry points
+  models/                  Dataclasses shared across layers
+  analytics/               Pluggable dashboard datasets, discovered at request time
+frontend/                  Presentation assets served by Flask
+  templates/               Jinja2 templates
+  static/                  css/, js/, images/, data/ (CSV, GeoJSON, XLSX)
+data/                      Seed data, RDF/SHACL, KG context, source snapshots
+scripts/                   Operational CLIs (graph build, ingest, reports, validation)
+tests/                     Pytest suite
+eval/                      Evaluation harness and gold standards
+eval_results/              Recorded evaluation runs; legacy/ holds superseded runs
+docs/                      Dissertation and technical documentation
+```
+
+`backend/` is imported as a package (`from backend.config import ActiveConfig`), so the
+project root must be on `sys.path`; the CLIs under `scripts/` and `eval/` insert it
+themselves. Application code resolves files from `BASE_DIR` rather than by walking
+parent directories, so modules can be moved without breaking path resolution.
+
 ## Data integration (SRQ1)
 
 Estate GeoJSON, unified person CSV, workhouse Excel records, heritage GeoJSON and selected VRTI results are combined in one SQLite database. There is no single monolithic rebuild command: core townland and census records use explicit ingest jobs, person and heritage tables use fingerprint-controlled seeders, and workhouse linkage, graph construction and RDF uplift are separate offline operations.

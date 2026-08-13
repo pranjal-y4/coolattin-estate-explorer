@@ -141,7 +141,7 @@ def materialise_nodes(conn) -> tuple[dict[str, int], set[str]]:
     log.info("step2: places | townlands=%d parishes=%d baronies=%d", len(townland_rows), len(parishes), len(baronies))
 
     import pandas as pd
-    from config import ActiveConfig
+    from backend.config import ActiveConfig
 
     csv_path = ActiveConfig.STATIC_DATA_DIR / "unified_processed.csv"
     if csv_path.exists():
@@ -272,7 +272,7 @@ def write_reconciliation_gaps(conn) -> int:
 
 def materialise_edges(conn, node_set: set[str]) -> tuple[dict[str, int], list[dict]]:
     import pandas as pd
-    from config import ActiveConfig
+    from backend.config import ActiveConfig
 
     skipped_edges: list[dict] = []
 
@@ -735,10 +735,10 @@ def main() -> None:
     parser.add_argument("--wipe", action="store_true", help="Drop and rebuild from scratch")
     args = parser.parse_args()
 
-    from config import _load_local_env_files, ActiveConfig
+    from backend.config import _load_local_env_files, ActiveConfig
     _load_local_env_files()
 
-    from extensions import init_db, get_db_conn, ensure_schema
+    from backend.extensions import init_db, get_db_conn, ensure_schema
     init_db(ActiveConfig.DATABASE_PATH)
     ensure_schema()
 

@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from flask import Flask
 
-from config import ActiveConfig
+from backend.config import ActiveConfig
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def create_app(config_class=None) -> Flask:
     if config_class is None:
         config_class = ActiveConfig
 
-    _root = Path(__file__).resolve().parent
+    _root = Path(__file__).resolve().parents[1]
 
     app = Flask(
         __name__,
@@ -41,7 +41,7 @@ def create_app(config_class=None) -> Flask:
     app.config["EXPORTS_DIR"] = config_class.EXPORTS_DIR
     app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 86400
 
-    from extensions import init_db, ensure_schema
+    from backend.extensions import init_db, ensure_schema
     init_db(config_class.DATABASE_PATH)
     ensure_schema()
 

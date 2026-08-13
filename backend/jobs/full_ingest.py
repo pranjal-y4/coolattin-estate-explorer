@@ -35,7 +35,7 @@ def run_full_ingest(dry_run: bool = False) -> dict:
     from backend.jobs.census_seed import load_standard_census_seed_records
     from backend.models.census_models import Townland, CensusRecord, ClearancesRecord
     from backend.services.townland_service import canonical_name, normalize_townland_name
-    from config import ActiveConfig
+    from backend.config import ActiveConfig
 
     stats = {
         "townlands_processed": 0,
@@ -330,7 +330,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    from create_app import create_app
+    from backend.app import create_app
     app = create_app()
     with app.app_context():
         summary = run_full_ingest(dry_run=args.dry_run)

@@ -3,23 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import pandas as pd
 
+from .utils import find_data_file
 from .base import AnalyticsResult, KPI, Chart
-
-
-def find_data_file(filename: str) -> Path:
-    project_root = Path(__file__).resolve().parents[2]
-    package_root = Path(__file__).resolve().parents[1]
-
-    candidates = [
-        project_root / "data" / filename,
-        package_root / "data" / filename,
-        project_root / filename,
-        package_root / filename,
-    ]
-    for p in candidates:
-        if p.exists():
-            return p
-    return package_root / "data" / filename
 
 
 DATA_PATH = find_data_file("tenancies.csv")

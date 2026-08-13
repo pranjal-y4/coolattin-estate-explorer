@@ -35,14 +35,14 @@ jobs:
             -x "venv/*" -x ".venv/*" -x "antenv/*" \
             -x "__pycache__/*" -x "*.pyc" \
             -x ".env.local" -x ".env" \
-            -x "*.db-wal" -x "*.db-shm" -x "*.db-wal.bak" -x "*.db.bak" \
-            -x "node_modules/*" -x "exports/*" \
+            -x "*.db-wal" -x "*.db-shm" -x "*.bak" \
+            -x "exports/*" \
             -x "eval_results/*" -x "*.zip" \
-            -x "_archive/*" -x "docs/*" -x "eval/*" \
+            -x "docs/*" -x "eval/*" \
             -x "tests/*" -x "scripts/*" \
             -x "extra_datasets/NMS_OpenData_20230823.csv" \
             -x "data/entity_index.pkl" -x "data/source_snapshots/*" \
-            -x ".pytest_cache/*" -x "package-lock.json" \
+            -x ".pytest_cache/*" \
             -x "requirements-azure.txt"
 
       - name: Deploy to Azure via zip (Oryx builds packages on Azure)

@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import config
+from backend import config
 
 
 def test_load_local_env_files_reads_env_local_without_overriding_process_env(

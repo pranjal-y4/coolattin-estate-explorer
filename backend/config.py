@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[1]
 
 
 def _load_local_env_files(root: Path = BASE_DIR) -> None:

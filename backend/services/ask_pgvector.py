@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Any
 
-from config import ActiveConfig
+from backend.config import ActiveConfig
 
 log = logging.getLogger(__name__)
 

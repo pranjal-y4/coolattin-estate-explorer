@@ -23,7 +23,7 @@ build/
 .mypy_cache/
 .ruff_cache/
 
-# ── Node ─────────────────────────────────────────────────────────────────────
+# ── Node (front end loads Leaflet/Chart.js/D3 from CDN; no build step) ───────
 node_modules/
 npm-debug.log*
 
@@ -32,10 +32,11 @@ npm-debug.log*
 *.db-wal
 *.db-shm
 
-# ── Generated exports (runtime output, not source) ───────────────────────────
+# ── Generated exports & local backups (runtime output, not source) ───────────
 exports/*
 !exports/.gitkeep
-coolattin-app.zip
+*.bak
+*.zip
 data/coolattin_sample.ttl
 
 # ── Large data files (>100 MB, exceed GitHub's file size limit) ──────────────

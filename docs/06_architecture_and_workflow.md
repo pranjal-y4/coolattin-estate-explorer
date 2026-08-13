@@ -488,7 +488,7 @@ These tables are built by `scripts/build_graph.py` and loaded at runtime into a 
 ### 6.1 Entry point (`app.py`)
 
 ```python
-from create_app import create_app
+from backend.app import create_app
 app = create_app()
 app.run(host="0.0.0.0", port=5001, debug=True)
 ```

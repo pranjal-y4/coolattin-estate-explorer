@@ -24,7 +24,7 @@ _OCC_KEYWORDS = {
 
 
 def _data_dir() -> Path:
-    from config import ActiveConfig
+    from backend.config import ActiveConfig
     return ActiveConfig.STATIC_DATA_DIR
 
 

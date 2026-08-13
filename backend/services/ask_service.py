@@ -20,8 +20,8 @@ try:
 except Exception:  # pragma: no cover - optional fallback for environments without rapidfuzz
     fuzz = None
 
-from config import ActiveConfig
-from extensions import get_db_conn
+from backend.config import ActiveConfig
+from backend.extensions import get_db_conn
 
 log = logging.getLogger(__name__)
 

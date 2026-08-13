@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from create_app import create_app
+from backend.app import create_app
 from backend.services.entity_resolution.normalise import (
     normalise_person_fields,
     normalise_place_name,
@@ -132,7 +132,7 @@ def test_api_returns_please_check_records_and_ambiguity(monkeypatch, tmp_path):
     monkeypatch.setattr("backend.services.unified_service.get_unified", lambda: sample_df.copy())
 
     with app.app_context():
-        from extensions import get_db_conn
+        from backend.extensions import get_db_conn
 
         conn = get_db_conn()
         try:

@@ -333,7 +333,7 @@ def record_reviewer_decision(
 
 def get_wicklow_townlands() -> dict:
     from backend.repositories import townland_repository, refresh_state_repository
-    from config import ActiveConfig
+    from backend.config import ActiveConfig
     from datetime import datetime, timezone
 
     now_iso = datetime.now(timezone.utc).isoformat() + "Z"
@@ -470,7 +470,7 @@ def _ensure_alias_map_loaded() -> None:
     global _ALIAS_MAP, _ALIAS_MAP_LOADED
     if _ALIAS_MAP_LOADED:
         return
-    from config import ActiveConfig
+    from backend.config import ActiveConfig
     alias_path = ActiveConfig.DATA_SEED_DIR / "townland_aliases.json"
     if alias_path.exists():
         try:
@@ -487,7 +487,7 @@ def _ensure_alias_map_loaded() -> None:
 
 
 def _write_reconciliation_gaps(gaps: list[str]) -> None:
-    from config import ActiveConfig
+    from backend.config import ActiveConfig
     path = ActiveConfig.DATA_SNAPSHOT_DIR / "reconciliation_gaps.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:

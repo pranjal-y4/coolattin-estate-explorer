@@ -18,7 +18,7 @@ def about():
 
 @bp.get("/analytics")
 def analytics():
-    from analytics.registry import discover_modules
+    from backend.analytics.registry import discover_modules
 
     dataset_id = request.args.get("d", "")
     modules: dict = {}

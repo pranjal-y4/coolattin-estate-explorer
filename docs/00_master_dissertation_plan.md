@@ -75,14 +75,15 @@ The system is built for the MSc dissertation and is deployed live on Azure. It i
 
 ```
 Coolattin-app/                      ← project root / working directory
-├── app.py                          entry point — calls create_app(), runs dev server on :5001
-├── create_app.py                   Flask application factory — registers all blueprints
-├── config.py                       all env-overridable config (DB path, VRTI URL, timeouts)
-├── extensions.py                   DB singleton (init_db, get_db_conn, ensure_schema)
+├── app.py                          WSGI entry point — calls create_app(), runs dev server on :5001
 ├── requirements.txt                Python dependencies (Flask, pandas, requests, openpyxl, rapidfuzz…)
 ├── .env.example                    template for .env.local (OPENROUTER_API_KEY etc.)
 │
 ├── backend/
+│   ├── app.py                      Flask application factory — registers all blueprints
+│   ├── config.py                   all env-overridable config (DB path, VRTI URL, timeouts)
+│   ├── extensions.py               DB singleton (init_db, get_db_conn, ensure_schema)
+│   │
 │   ├── routes/                     Flask Blueprints — one file per URL prefix
 │   │   ├── main.py                 GET / · /about · /analytics · /census · /info · /ask · /heritage
 │   │   ├── ask.py                  POST /api/ask/query · POST /feedback · GET /llm-status · GET /pdf/<name>
@@ -115,21 +116,21 @@ Coolattin-app/                      ← project root / working directory
 │   │   ├── vrti_sparql.py          676 lines — centralised SPARQL client (the ONLY place with SPARQL)
 │   │   └── townlands_reference.py  111 lines — Townlands.ie canonical reference
 │   │
-│   └── jobs/                       one-shot ingest jobs — run manually or at startup
-│       ├── full_ingest.py          ingest from estate GeoJSON + VRTI KG → townland + census + clearances
-│       ├── census_ingest.py        incremental census refresh from VRTI KG
-│       ├── census_seed.py          seed census from local CSV when KG unavailable
-│       └── townlands_ingest.py     townland table refresh from Townlands.ie reference
-│
-├── analytics/                      pluggable analytics modules
-│   ├── base.py                     Protocol: AnalyticsModule · KPI · Chart · AnalyticsResult dataclasses
-│   ├── registry.py                 auto-discovery via importlib glob (finds any file exposing MODULE)
-│   ├── emigrations.py              EmigrationAnalytics — timeline + top destinations
-│   ├── evictions.py                EvictionsAnalytics — clearances per year per townland
-│   ├── tenancies.py                TenanciesAnalytics — top townlands + surname distribution
-│   ├── townland_geo.py             TownlandGeoAnalytics — estate spatial overview
-│   ├── unified.py                  UnifiedAnalytics — cross-source KPIs + charts
-│   └── workhouse.py               WorkhouseAnalytics — workhouse match rates
+│   ├── jobs/                       one-shot ingest jobs — run manually or at startup
+│   │   ├── full_ingest.py          ingest from estate GeoJSON + VRTI KG → townland + census + clearances
+│   │   ├── census_ingest.py        incremental census refresh from VRTI KG
+│   │   ├── census_seed.py          seed census from local CSV when KG unavailable
+│   │   └── townlands_ingest.py     townland table refresh from Townlands.ie reference
+│   │
+│   └── analytics/                  pluggable analytics modules
+│       ├── base.py                 Protocol: AnalyticsModule · KPI · Chart · AnalyticsResult dataclasses
+│       ├── registry.py             auto-discovery via importlib glob (finds any file exposing MODULE)
+│       ├── utils.py                safe_compute() + find_data_file() resolved from config.BASE_DIR
+│       ├── emigrations.py          EmigrationAnalytics — timeline + top destinations
+│       ├── evictions.py            EvictionsAnalytics — clearances per year per townland
+│       ├── tenancies.py            TenanciesAnalytics — top townlands + surname distribution
+│       ├── townland_geo.py         TownlandGeoAnalytics — estate spatial overview
+│       └── unified.py              UnifiedAnalytics — cross-source KPIs + charts
 │
 ├── frontend/
 │   ├── templates/                  Jinja2 HTML (base.html + one per page)
@@ -172,7 +173,6 @@ Coolattin-app/                      ← project root / working directory
 │
 ├── exports/                       runtime output — Excel and PDF (gitignored)
 ├── scripts/                       one-off data processing scripts
-├── _archive/                      deprecated code (kept for reference, never imported)
 └── docs/                          dissertation planning documents (this folder)
     ├── 00_master_dissertation_plan.md   ← this document
     ├── 01_contribution_statement.md

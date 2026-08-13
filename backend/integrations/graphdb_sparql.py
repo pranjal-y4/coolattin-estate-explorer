@@ -7,7 +7,7 @@ from typing import Optional
 
 import requests
 
-from config import ActiveConfig
+from backend.config import ActiveConfig
 
 log = logging.getLogger(__name__)
 

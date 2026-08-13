@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from extensions import get_db_conn
+from backend.extensions import get_db_conn
 from backend.models.census_models import ClearancesRecord
 from backend.repositories import townland_repository
 

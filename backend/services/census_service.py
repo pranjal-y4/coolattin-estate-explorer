@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from config import ActiveConfig
+from backend.config import ActiveConfig
 from backend.models.census_models import (
     CensusFilters,
     CensusRecord,

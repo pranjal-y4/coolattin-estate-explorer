@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from extensions import get_db_conn
+from backend.extensions import get_db_conn
 from backend.models.census_models import RefreshState
 
 log = logging.getLogger(__name__)

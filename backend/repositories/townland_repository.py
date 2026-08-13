@@ -5,7 +5,7 @@ import logging
 import uuid
 from typing import Optional
 
-from extensions import get_db_conn
+from backend.extensions import get_db_conn
 from backend.models.census_models import Townland
 
 log = logging.getLogger(__name__)

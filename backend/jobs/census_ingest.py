@@ -86,7 +86,7 @@ if __name__ == "__main__":
                         help="Census year to ingest (e.g. 1841). Omit for all years.")
     args = parser.parse_args()
 
-    from create_app import create_app
+    from backend.app import create_app
     app = create_app()
     with app.app_context():
         n = run_census_ingest(year=args.year)

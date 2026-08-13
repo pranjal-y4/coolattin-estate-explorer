@@ -77,7 +77,7 @@ def _jaro_winkler(a: str, b: str) -> float:
 
 
 def _fetch_mentions(raw_name: str) -> list[Mention]:
-    from extensions import get_db_conn
+    from backend.extensions import get_db_conn
 
     parts = raw_name.strip().split()
     surname_guess = parts[-1] if parts else raw_name

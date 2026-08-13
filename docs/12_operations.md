@@ -46,7 +46,7 @@ Populates the database from the VRTI Knowledge Graph and the estate seed data. T
 ```bash
 source venv/bin/activate
 python3 -c "
-from create_app import create_app
+from backend.app import create_app
 app = create_app()
 with app.app_context():
     from backend.jobs.full_ingest import run_full_ingest
@@ -59,7 +59,7 @@ Verify the row counts afterwards:
 
 ```bash
 python3 -c "
-from extensions import init_db, get_db_conn
+from backend.extensions import init_db, get_db_conn
 from pathlib import Path
 init_db(Path('coolattin.db'))
 conn = get_db_conn()
@@ -89,12 +89,11 @@ source venv/bin/activate
 
 find . -name "*.py" \
   -not -path "./venv/*" \
-  -not -path "./_archive/*" \
   -not -path "./__pycache__/*" \
   | sort \
   | xargs -I{} sh -c 'python3 -m py_compile "{}" || echo "FAIL: {}"'
 
-python3 -c "import config; import extensions; import create_app; print('imports OK')"
+python3 -c "from backend import config, extensions, app; print('imports OK')"
 ```
 
 ## 6. Common failures

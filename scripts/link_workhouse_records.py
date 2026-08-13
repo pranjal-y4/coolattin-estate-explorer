@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from create_app import create_app
+from backend.app import create_app
 
 
 def main() -> int:

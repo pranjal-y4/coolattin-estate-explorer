@@ -87,7 +87,7 @@ def api_workhouse_by_townland():
     if not townland:
         return jsonify({"records": [], "linked": [], "unlinked": [], "error": "townland required"})
 
-    from extensions import get_db_conn
+    from backend.extensions import get_db_conn
     conn = get_db_conn()
     try:
         tn = townland.upper().replace("'", "''")

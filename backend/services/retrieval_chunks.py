@@ -4,7 +4,7 @@ import logging
 from collections import defaultdict
 from typing import Any
 
-from extensions import get_db_conn
+from backend.extensions import get_db_conn
 
 log = logging.getLogger(__name__)
 

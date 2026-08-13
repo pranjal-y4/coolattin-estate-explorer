@@ -86,7 +86,7 @@ def run_bulk_ingest() -> None:
     import warnings
     warnings.filterwarnings("ignore")
 
-    from create_app import create_app
+    from backend.app import create_app
     app = create_app()
 
     from backend.services.ask_pgvector import (

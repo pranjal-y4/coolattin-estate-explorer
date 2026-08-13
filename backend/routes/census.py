@@ -8,7 +8,7 @@ from backend.models.census_models import CensusFilters
 def _require_admin(fn):
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        from config import ActiveConfig
+        from backend.config import ActiveConfig
         required = (ActiveConfig.ADMIN_API_KEY or "").strip()
         if not required:
             return jsonify({"error": "Admin operations are disabled — set ADMIN_API_KEY in the environment."}), 403

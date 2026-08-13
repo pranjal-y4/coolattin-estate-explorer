@@ -142,7 +142,7 @@ COMPARISON_SCENARIOS: list[dict] = [
 
 
 def _ttl_path() -> Path:
-    from config import BASE_DIR
+    from backend.config import BASE_DIR
     return BASE_DIR / "data" / "coolattin_sample.ttl"
 
 
@@ -199,7 +199,7 @@ def run_sparql(sparql_body: str) -> tuple[list[str], list[dict], str | None]:
 
 
 def run_sql(sql: str, max_rows: int = 500) -> tuple[list[str], list[dict], str | None]:
-    from extensions import get_db_conn
+    from backend.extensions import get_db_conn
     sql_upper = sql.strip().upper()
     if not sql_upper.startswith("SELECT"):
         return [], [], "Only SELECT queries are permitted."
@@ -233,7 +233,7 @@ def reset_graph_cache() -> None:
 
 
 def _build_geographic_graph() -> dict:
-    from extensions import get_db_conn
+    from backend.extensions import get_db_conn
 
     nodes: list[dict] = []
     edges: list[dict] = []
@@ -378,7 +378,7 @@ def _build_geographic_graph() -> dict:
 
 
 def get_townland_persons(townland_name: str, limit: int = 50) -> dict:
-    from extensions import get_db_conn
+    from backend.extensions import get_db_conn
     conn = get_db_conn()
     try:
         total = conn.execute(
@@ -414,7 +414,7 @@ def get_townland_persons(townland_name: str, limit: int = 50) -> dict:
 def get_townland_rich_detail(townland_name: str) -> dict:
     import os, json, requests as _req, concurrent.futures, time as _time
 
-    from extensions import get_db_conn
+    from backend.extensions import get_db_conn
     conn = get_db_conn()
     db_data: dict = {}
     try:

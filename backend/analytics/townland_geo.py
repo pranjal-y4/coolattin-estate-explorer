@@ -3,10 +3,11 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from .utils import find_data_file
 from .base import AnalyticsResult, KPI, Chart
 
 
-DATA_PATH = Path(__file__).resolve().parents[2] / "data" / "townlands.json"
+DATA_PATH = find_data_file("townlands.json")
 
 
 class TownlandsGeoAnalytics:

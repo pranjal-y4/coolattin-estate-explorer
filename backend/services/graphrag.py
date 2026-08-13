@@ -20,7 +20,7 @@ def _load_graph() -> None:
     try:
         import networkx as nx
         import numpy as np
-        from extensions import get_db_conn
+        from backend.extensions import get_db_conn
 
         conn = get_db_conn()
         try:
@@ -113,7 +113,7 @@ class GraphRAGResult:
 
 def is_available() -> bool:
     try:
-        from config import ActiveConfig
+        from backend.config import ActiveConfig
         if not getattr(ActiveConfig, "GRAPHRAG_ENABLED", True):
             return False
         _ensure_loaded()
@@ -125,7 +125,7 @@ def is_available() -> bool:
 
 def vector_seed(question: str, *, top_k: int | None = None) -> list[str]:
     try:
-        from config import ActiveConfig
+        from backend.config import ActiveConfig
         if top_k is None:
             top_k = int(getattr(ActiveConfig, "GRAPHRAG_VECTOR_TOP_K", 8))
 
@@ -424,7 +424,7 @@ def retrieve_subgraph(
                 degradation_note="In-process graph not available — run scripts/build_graph.py.",
             )
 
-        from config import ActiveConfig
+        from backend.config import ActiveConfig
         if k_hops is None:
             k_hops = int(getattr(ActiveConfig, "GRAPHRAG_K_HOPS", 2))
         max_nodes = int(getattr(ActiveConfig, "GRAPHRAG_MAX_NODES", 120))

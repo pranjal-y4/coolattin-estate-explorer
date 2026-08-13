@@ -17,7 +17,7 @@ def run_townlands_ingest() -> int:
     )
     from backend.services import export_service
     from backend.models.census_models import Townland
-    from config import ActiveConfig
+    from backend.config import ActiveConfig
 
     log.info("townlands_ingest.start")
 
@@ -92,7 +92,7 @@ def run_townlands_ingest() -> int:
 
 
 if __name__ == "__main__":
-    from create_app import create_app
+    from backend.app import create_app
     app = create_app()
     with app.app_context():
         n = run_townlands_ingest()

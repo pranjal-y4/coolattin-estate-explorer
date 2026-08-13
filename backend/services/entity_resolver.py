@@ -175,7 +175,7 @@ def _load_aliases() -> dict[str, str]:
 
 
 def _build_catalog() -> list[dict]:
-    from extensions import get_db_conn
+    from backend.extensions import get_db_conn
 
     conn = get_db_conn()
     entries: list[dict] = []
@@ -357,7 +357,7 @@ def _resolve_townland(
     raw: str,
     min_confidence: float = _MIN_VECTOR_SCORE,
 ) -> EntityResolution:
-    from extensions import get_db_conn
+    from backend.extensions import get_db_conn
 
     raw_norm = _norm(raw)
     if not raw_norm:
@@ -471,7 +471,7 @@ def _resolve_townland(
 
 
 def _resolve_surname(raw: str) -> EntityResolution:
-    from extensions import get_db_conn
+    from backend.extensions import get_db_conn
 
     raw_norm = _norm(raw)
     if not raw_norm:

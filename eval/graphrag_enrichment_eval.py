@@ -237,7 +237,7 @@ def _auto_usefulness(result_on: "GraphRAGResult") -> int:  # type: ignore[name-d
 
 
 def _run_sql(sql: str) -> Any:
-    from extensions import get_db_conn
+    from backend.extensions import get_db_conn
     conn = get_db_conn()
     try:
         rows = conn.execute(sql).fetchall()
@@ -252,7 +252,7 @@ def run_case(case: GraphRAGCase) -> EnrichmentResult:
     from backend.services.graphrag import (
         is_available, retrieve_subgraph, reload,
     )
-    from config import ActiveConfig
+    from backend.config import ActiveConfig
 
     error: str | None = None
     sql_value_on: Any = None
@@ -474,7 +474,7 @@ def main() -> None:
     args = parser.parse_args()
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from create_app import create_app
+    from backend.app import create_app
     app = create_app()
     with app.app_context():
         print(f"GraphRAG enrichment eval ({len(GRAPHRAG_CASES)} cases)…\n")

@@ -19,7 +19,7 @@ def export_census(
         log.error("export_service.missing_openpyxl — install openpyxl to enable exports")
         raise
 
-    from config import ActiveConfig
+    from backend.config import ActiveConfig
     from backend.integrations.vrti_sparql import SPARQL_ENDPOINT
 
     exports_dir = ActiveConfig.EXPORTS_DIR / "census"
@@ -112,7 +112,7 @@ def export_townlands(townlands: list, extra_meta: Optional[dict] = None) -> str:
         log.error("export_service.missing_openpyxl")
         raise
 
-    from config import ActiveConfig
+    from backend.config import ActiveConfig
 
     exports_dir = ActiveConfig.EXPORTS_DIR / "townlands"
     exports_dir.mkdir(parents=True, exist_ok=True)

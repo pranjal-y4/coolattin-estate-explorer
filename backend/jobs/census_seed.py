@@ -7,7 +7,7 @@ from typing import Iterable, Optional
 
 from backend.models.census_models import CensusRecord
 from backend.services.townland_service import canonical_name
-from config import ActiveConfig
+from backend.config import ActiveConfig
 
 STANDARD_CENSUS_YEARS = [1841, 1851, 1861, 1871, 1881, 1891]
 
