@@ -1,7 +1,6 @@
 .env.local
 .env
 .git/
-.claude/
 venv/
 .venv/
 antenv/

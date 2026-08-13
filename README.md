@@ -1,415 +1,329 @@
 # Coolattin Estate Records Explorer
 
-youtube - 
-app - 
-do let me know what you think about this - 
+**A Traceable LLM-Assisted Analytics and Graph-Enrichment System for Nineteenth-Century Irish Estate Records**
 
-An interactive web application for exploring historical records from the **Coolattin Estate** in County Wicklow, Ireland (mid-19th century). Built as a Masters Dissertation project.
+Pranjal Yadav — MSc in Computer Science (Intelligent Systems), University of Dublin, Trinity College, 2026
+Supervisors: Professor Declan O'Sullivan and Dr Ciarán Wallace
 
-The application integrates tenancy, eviction, emigration, and census data from the [Virtual Record Treasury of Ireland (VRTI)](https://virtualtreasury.ie/) Knowledge Graph into a unified interface with an interactive map, analytics dashboards, and a natural-language Q&A system backed by an LLM.
-
-**Live deployment:** `coolattin-app.azurewebsites.net` (Azure App Service, Italy North) · **Academic freeze:** `v1.0-demo-freeze` (2026-06-10)
-
----
-
-## Features
-
-- **Interactive Map** — Leaflet.js map of Coolattin townland boundaries with population and clearances overlays; workhouse match cards on record markers
-- **Census Browser** — Population data 1841–1891 (from VRTI KG) plus estate survey years 1827–1868
-- **Analytics Dashboards** — KPI summaries and charts for emigration, evictions, workhouse, and tenancy datasets
-- **Ask (LLM Q&A)** — Natural-language questions answered via four fast lanes (rule-fill, verified templates, query memory, embedding retrieval), a 7-phase orchestrated pipeline, GraphRAG enrichment, multi-model synthesis, and PDF export
-- **KG Explore** — D3.js force graph of the 152-townland property graph; SQL-vs-SPARQL comparison scenarios
-- **Heritage Map** — NMS monuments and holy wells overlay
-- **Data Export** — Excel exports of census and townland data
-- **Workhouse Entity Resolution** — Phonetic blocking + 7-signal scored matching of workhouse admission records to unified estate records (140 confirmed links)
+- Repository: https://github.com/pranjal-y4/coolattin-estate-explorer
+- Deployment: https://coolattin-app.azurewebsites.net
+- Submission tag: `v1.0-dissertation` (commit `6f5fc4a01f6a53a18adb946c87818d38f99a7942`)
 
 ---
+
+## Overview
+
+Historical estate records are distributed across sources that differ in structure, terminology, geographic coverage and level of detail. The nineteenth-century Coolattin Estate collection exhibits these problems: it includes estate surveys, person records, population observations, clearance data, workhouse records and geospatial sources. Inconsistent names and the absence of stable historical identifiers make cross-source analysis difficult, while natural-language access introduces a need for answers that remain connected to the underlying evidence.
+
+This artefact is a townland-centred system for integrating, resolving and exploring those records. SQLite provides the principal relational data layer, with source values, missingness and provenance retained during integration. A deterministic entity-resolution pipeline uses bounded candidate generation and seven interpretable evidence signals to identify plausible links between workhouse mentions and estate records without altering the original datasets. Natural-language questions are handled through an LLM-assisted analytical pipeline that proposes candidate SQL, validates it against a read-only policy and executes it before constructing an answer from the returned rows. A local NetworkX property graph, selected linked data and geospatial layers provide separately identified contextual enrichment. The web interface combines search, maps, tables, visualisations and natural-language exploration for users without specialist database knowledge.
+
+The system is **not** a conventional document-RAG application. Structured SQL results remain the principal authority for counts, comparisons and other analytical answers. Virtual Record Treasury of Ireland (VRTI) data and the locally derived property graph supply supplementary geographic or relational context; they do not replace the relational result.
+
+## Research questions
+
+**Overall:** Using the nineteenth-century Coolattin Estate collection as a bounded case study, to what extent can heterogeneous historical records be integrated, resolved and enriched within a reproducible data layer that enables non-technical exploration and traceable, evidence-grounded natural-language analysis?
+
+| SRQ | Focus | Question |
+| --- | --- | --- |
+| SRQ1 | Data integration | How can fragmented Coolattin Estate sources be geospatially aligned and integrated into a reproducible townland-level data layer? |
+| SRQ2 | Entity resolution | How can entity-resolution methods address inconsistent place and person names, source identifiers and historical spelling variation while preserving uncertainty in the resulting links? |
+| SRQ3 | Traceable QA | To what extent can a natural-language Ask system produce traceable and verifiable answers grounded in structured database results? |
+| SRQ4 | Enrichment | How can geospatial and knowledge-graph enrichment add contextual information about administrative geography, connected records, population patterns and historic landscape features around a place? |
+| SRQ5 | Non-technical exploration | How effectively does the web interface support non-technical exploration of person records, townlands, census demographics, historic landscape features and the wider estate context? |
+
+SRQ1 and SRQ2 establish the integrated and reconciled data foundation. SRQ3 examines traceable access to it, SRQ4 evaluates contextual enrichment, and SRQ5 assesses the complete artefact with its intended non-technical users.
+
+## Contributions
+
+- **C1 — A provenance-aware, townland-centred integration model for heterogeneous historical records.** Townland is the principal integration key, but source-specific names and identifiers remain available rather than being replaced by the canonical representation. Cross-source references, field-level provenance and uncertain place relationships are represented explicitly through structures such as `townland_xref`, `field_provenance` and `match_review`.
+- **C2 — A traceable architecture for language-model-assisted analysis over historical data.** The pattern separates five responsibilities: natural-language interpretation, candidate query generation, controlled execution, contextual enrichment and generated explanation. It is not a new text-to-SQL algorithm; it is an evidence-oriented way of placing probabilistic generation around a structured analytical authority.
+- **C3 — Evaluated design guidance for uncertainty-aware linkage, contextual enrichment and non-technical historical exploration.** Candidate relationships retain supporting, conflicting and missing evidence with a confidence classification; source observations remain unchanged; the derived graph stays subordinate to identifiable source evidence.
+
+## Design principles
+
+| Principle | Design consequence |
+| --- | --- |
+| Deterministic factual path | Numerical claims derive from executed relational queries; prose presents rather than replaces the result. |
+| Authority-aware identity | Place and person identity use separate evidence models and retain uncertainty. |
+| End-to-end provenance | Source observations, canonical entities, derived links and generated output remain identifiable. |
+| Visible failure | Partial, unsupported and degraded states are represented explicitly. |
+| Read-oriented analytical access | Public analysis is limited to controlled, read-oriented execution. |
+| Layered accessibility | A readable result is shown first, with structured evidence and technical detail available for inspection. |
+
+The project decision heuristic is to preserve supported evidence before maximising answer completeness, and to prefer correctness and traceability over presentation convenience or latency when these objectives conflict.
 
 ## Architecture
 
-```
-Coolattin-app/
-├── app.py                  # Entry point
-├── create_app.py           # Flask application factory
-├── config.py               # Centralised configuration
-├── extensions.py           # DB singleton (sqlite3)
-│
-├── backend/
-│   ├── routes/             # Flask blueprints (one per URL prefix)
-│   ├── services/           # Business logic
-│   │   ├── ask_service.py  #   Orchestrated 7-phase pipeline + SSE streaming
-│   │   ├── graphrag.py     #   In-process property graph (49K nodes, 64K edges)
-│   │   ├── kg_service.py   #   Knowledge graph service layer
-│   │   ├── intent_router.py #  Intent classification (ANALYTICAL/RELATIONAL/…)
-│   │   ├── semantic_layer.py # Deterministic SQL + SPARQL compiler
-│   │   ├── subgraph_engine.py # KG traversal (VRTI + GraphDB)
-│   │   ├── embedding_index.py # Hybrid TF-IDF + dense retrieval (RRF)
-│   │   ├── identity_resolver.py # Three-layer identity model
-│   │   └── workhouse_entity_resolution.py # Workhouse ER pipeline
-│   ├── repositories/       # All SQL queries
-│   ├── models/             # Typed dataclasses
-│   ├── integrations/       # VRTI SPARQL + GraphDB SPARQL clients
-│   └── jobs/               # Data ingestion jobs
-│
-├── analytics/              # Pluggable analytics modules (KPI + chart data)
-│
-├── frontend/
-│   ├── templates/          # Jinja2 HTML (one per page)
-│   └── static/
-│       ├── css/            # Stylesheet
-│       ├── js/             # Vanilla JS (one file per page)
-│       ├── data/           # Static GeoJSON, CSV, seed JSON
-│       └── images/
-│
-├── data/seed/              # Canonical reference data (townland aliases, etc.)
-├── scripts/                # One-off data processing scripts (incl. build_graph.py)
-├── extra_datasets/         # NMS heritage open-data CSVs
-└── _archive/               # Deprecated code (reference only)
-```
-
-**Stack:** Python 3.12 · Flask · SQLite · NetworkX (in-process graph) · VRTI SPARQL · GraphDB SPARQL · OpenRouter/Claude/Ollama LLM · BAAI/bge-large-en-v1.5 · Vanilla JS · Leaflet.js · D3.js
-
----
-
-## Quick start
-
-### Prerequisites
-
-- Python 3.12+
-- (Optional) [Ollama](https://ollama.ai) for local offline LLM
-
-### Installation
-
-```bash
-# 1. Clone
-git clone <repo-url>
-cd Coolattin-app
-
-# 2. Create virtual environment
-python3 -m venv venv
-source venv/bin/activate      # Windows: venv\Scripts\activate
-
-# 3. Install Python dependencies
-pip install -r requirements.txt
-
-# 4. Configure environment
-cp .env.example .env.local
-# Edit .env.local — add your OPENROUTER_API_KEY for the Ask page
+Four logical layers organised by responsibility: **presentation**, **data**, **enrichment/resolution** and **question-answering orchestration**. Dashed components in the dissertation figures are retained in the codebase for legacy execution, comparison or optional deployment, and are not part of the final default Ask path.
 
-# 5. Run the server
-python3 app.py
-```
-
-Open [http://127.0.0.1:5001](http://127.0.0.1:5001).
-
-The SQLite database (`coolattin.db`) is created and schema-migrated automatically on first run. It is pre-populated in the repository snapshot.
-
----
-
-## Data ingestion
+### Technology stack
 
-The application fetches live data from the VRTI Knowledge Graph. To re-populate from scratch:
+One Python 3.12 application handles ingestion, entity resolution, graph construction, evaluation and web serving.
 
-```bash
-python3 -c "
-from create_app import create_app
-app = create_app()
-with app.app_context():
-    from backend.jobs.full_ingest import run_full_ingest
-    run_full_ingest()
-"
-```
+| Component | Version constraint | Role |
+| --- | --- | --- |
+| Flask + Jinja2 | Flask ≥ 3.1.2 | HTTP routing, templates, JSON and streamed responses |
+| Gunicorn | ≥ 22.0 | Azure WSGI server, 2 workers × 4 threads |
+| SQLite | Python `sqlite3` | Integrated records, provenance, resolution evidence, graph tables |
+| pandas / NumPy / openpyxl | ≥ 2.3 / ≥ 2.3 / ≥ 3.1.5 | Tabular ingestion and validation |
+| RapidFuzz / jellyfish | ≥ 3.14 / ≥ 1.0 | Fuzzy and phonetic comparison |
+| Shapely / RDFLib / NetworkX | ≥ 2.1 / ≥ 6.3 / ≥ 3.6 | Geometry, RDF inspection, in-process graph traversal |
+| Leaflet / Chart.js / D3 | 1.9.4 / 4.4.1 / v7 | Maps, charts, graph visualisation |
 
-Or trigger a refresh via the API while the server is running:
+Hand-written SQL is used instead of an ORM so that executed queries remain visible in logs, evaluation outputs and the Ask interface. VRTI, GraphDB, cloud embeddings and language-model providers remain optional or externally maintained.
 
-```
-GET /api/census/refresh
-```
+## Data integration (SRQ1)
 
-### GraphRAG graph build
+Estate GeoJSON, unified person CSV, workhouse Excel records, heritage GeoJSON and selected VRTI results are combined in one SQLite database. There is no single monolithic rebuild command: core townland and census records use explicit ingest jobs, person and heritage tables use fingerprint-controlled seeders, and workhouse linkage, graph construction and RDF uplift are separate offline operations.
 
-The Ask pipeline uses an in-process property graph for GraphRAG enrichment. Build it once after populating the database:
+Principal townland ingest stages: load estate townland GeoJSON → test VRTI availability → normalise names and create local base records → add VRTI geometry, hierarchy and identifiers → upsert the canonical townland → extract estate population and clearance observations → fetch the standard census series at county scope and restrict it to the estate catalogue → persist observations and refresh metadata.
 
-```bash
-python3 scripts/build_graph.py
-# Produces: 49,081 nodes · 64,342 edges · 28,078 BGE-embedded
-# Runtime: ~3–5 min (downloads BGE model ~1.3 GB on first run)
-```
+Key handling rules:
 
-The graph is stored in `graph_nodes` and `graph_edges` SQLite tables and loaded into a NetworkX graph in-process at startup.
+- Estate-survey and standard census observations remain separate series. Unrecorded fields stay `NULL` — a missing observation is not an observed value of zero.
+- VRTI WKT geometry is parsed, repaired via `make_valid()` then `buffer(0)`, and reduced to an interior representative point (not an arithmetic centroid, which can fall outside a concave polygon).
+- Coordinates are treated as WGS84; a candidate ordering is accepted only inside a broad Ireland bounding box (51.0 ≤ φ ≤ 55.5, −11.0 ≤ λ ≤ −5.0), otherwise rejected rather than silently stored.
+- Polygon overlap is measured through intersection over union.
+- The person/heritage seeding fingerprint is `F(D) = schema version ‖ file mtime ‖ file size` — a change indicator, not a cryptographic content hash.
 
----
+The RDF uplift is a downstream representation generated from SQLite, not an independent primary route. The verified snapshot contains **189,018 triples**: 13,707 `co:Person`, 13,707 `co:Event`, 4,225 `co:Townland`, 8,033 `co:CensusRecord`, 1,211 `co:Clearance`.
 
-## LLM / Ask page setup
+## Entity resolution (SRQ2)
 
-The Ask page at `/ask` answers natural-language questions about the historical data.
+Workhouse mentions are linked to estate records through symmetric normalisation, bounded candidate generation, seven-signal scoring and evidence-preserving persistence. Neither source dataset is modified.
 
-### OpenRouter (recommended — free tier available)
+**Normalisation:** Unicode NFKD decomposition, diacritic and combining-mark removal, quotation normalisation, restricted punctuation removal, whitespace collapse, uppercase conversion, plus bounded abbreviation and surname-prefix rules. Original transcriptions are retained.
 
-1. Get a free API key at [openrouter.ai](https://openrouter.ai)
-2. Add to `.env.local`:
+**Blocking:** phonetic-surname and place buckets, combined as a union so candidates survive where either surname or residence changed. Each pooled record must satisfy at least one admission strategy — exact normalised name, surname + forename initial, phonetic surname (Metaphone), fuzzy full name (token-sort ≥ 82), canonical/variant place, or compatible event year (≤ 10 years apart). At most **25 candidates** are retained per mention.
 
-```env
-ASK_LLM_PROVIDER=openrouter
-OPENROUTER_API_KEY=sk-or-...
-OPENROUTER_MODEL=openai/gpt-oss-20b:free
-```
+**Scoring:** seven signals summed to a raw score out of 60, then normalised to [0, 1].
 
-### Claude (highest-quality synthesis)
+| Signal | Max | Support | Missing/conflict |
+| --- | --- | --- | --- |
+| Full name | 10 | Similarity bands 10 / 7 / 4 / 0 | Lower similarity → 0 |
+| Surname | 10 | Exact 10; Metaphone 7 | No agreement → 0 |
+| Forename | 10 | Similarity bands 10 / 7 / 4 / 0 | Missing → neutral 5 |
+| Place | 10 | Exact canonical 10; contained variant 6 | Missing → 0; disagreement recorded as conflict |
+| Birth year | 5 | Diff ≤ 3 → 5; ≤ 8 → 3 | Missing → 0; diff > 20 → impossible |
+| Gender | 10 | Agreement 10 | Missing → neutral 5; disagreement is a conflict |
+| Timeline | 5 | Compatible progression 5 or 3 | Implausible progression can be impossible |
 
-```env
-ANTHROPIC_API_KEY=sk-ant-...
-ASK_SYNTHESIS_MODEL=claude
-LLM_ALLOW_PAID=true
-```
-
-### Ollama (local, offline fallback)
-
-```bash
-ollama serve
-ollama pull llama3.1:8b
-```
-
-```env
-ASK_LLM_PROVIDER=ollama
-OLLAMA_MODEL=llama3.1:8b
-```
-
-### How the Ask pipeline works
-
-The orchestrated pipeline (`ASK_USE_NEW_PIPELINE=true`, default) runs seven phases plus an in-process GraphRAG enrichment layer:
-
-**Pre-flight (no LLM, < 5 ms):**
-
-1. **Townland resolution** — fuzzy-matches the question to a canonical townland name using rapidfuzz (threshold 80) and the alias catalogue.
-2. **Question analysis** — extracts year, surname, radius; classifies `primary_intent`, `output_mode`, `scope` via regex; no LLM.
-
-**Four fast lanes (first match short-circuits all routing):**
-
-| Lane | Mechanism | Threshold |
-|---|---|---|
-| Rule-fill | 22-metric keyword match → deterministic SQL | confidence ≥ 0.80 |
-| Verified template | 83 pre-verified SQL templates scored by required/optional keywords | template in verified set |
-| Memory reuse | Approved question→SQL pairs from thumbs-up feedback | token_sort_ratio + cosine ≥ 0.55 |
-| Embedding fast lane | TF-IDF + RRF over templates + memory | cosine ≥ 0.68 AND all required keywords present |
-
-**Seven pipeline phases:**
-
-1. **Identity resolution** (`identity_resolver.py`) — resolves townland + person mentions to surrogate IDs; Jaro-Winkler + Metaphone phonetic blocking + geo/temporal scoring.
-2. **Semantic layer** (`semantic_layer.py`) — 22-metric slot-fill compiler; deterministic SQL + equivalent SPARQL (no LLM on fast path).
-3. **Subgraph engine** (`subgraph_engine.py`) — VRTI multi-hop SPARQL + GraphDB k=2 neighbourhood for RELATIONAL/HERITAGE questions.
-4. **Embedding retrieval** (`embedding_index.py`) — TF-IDF unigram+bigram cosine + RRF across templates, memory, and corpus chunks.
-5. **Intent routing** (`intent_router.py`) — classifies as ANALYTICAL / RELATIONAL / COMPARATIVE / FALLBACK (priority order).
-6. **Fusion** — cross-source discrepancy detection (SQLite vs GraphDB numeric results).
-7. **Multi-model synthesis** — LLM chain **Claude → Grok → OpenRouter → Ollama**; aggregates SQL + KG results into provenance-annotated answer with optional PDF export.
-
-**GraphRAG enrichment (parallel, non-blocking):**
-
-After SQL execution, the in-process property graph (`graphrag.py`) retrieves a k-hop subgraph around the resolved entity using BGE-large vector seeding. The linearised subgraph provides qualitative place/people context to the synthesis LLM. Graph enrichment never modifies SQL aggregates — it is additive only (validated: numeric delta = 0 across all 9 R-series evaluation cases).
-
-All SQL (template or LLM-generated) is validated as read-only before execution. Approved answers are stored in query memory and reused on semantically similar future questions. Grouped or statistical results can be rendered as a chart.
-
-**Workhouse entity resolution** is a separate subsystem (`workhouse_entity_resolution.py` + `entity_resolution/` package) that links workhouse admission records to unified estate records using deterministic normalisation, phonetic blocking, and 7-signal scored confidence bands (CONFIRMED ≥ 0.75 / POSSIBLE ≥ 0.50 / WEAK < 0.50). It does not use the Ask pipeline, pgvector, or the LLM.
-
----
-
-## Environment variables
-
-See [`.env.example`](.env.example) for the full documented list. Key variables:
-
-| Variable | Default | Description |
-|---|---|---|
-| `SECRET_KEY` | `dev-secret-...` | Flask session secret — change in production |
-| `FLASK_ENV` | `development` | `development` or `production` |
-| `DATABASE_PATH` | `coolattin.db` in repo root | SQLite file path; set to `/home/site/data/coolattin.db` on Azure |
-| `ASK_LLM_PROVIDER` | `auto` | `auto` / `openrouter` / `ollama` / `none` |
-| `OPENROUTER_API_KEY` | — | Required for cloud LLM |
-| `OPENROUTER_MODEL` | `openai/gpt-oss-20b:free` | OpenRouter model ID |
-| `ANTHROPIC_API_KEY` | — | Required for Claude synthesis (`ASK_SYNTHESIS_MODEL=claude`) |
-| `GROK_API_KEY` | — | Grok (xAI) API key — second in multi-model synthesis chain |
-| `ASK_SYNTHESIS_MODEL` | `claude` | Synthesis model: `claude` / `openrouter` / `ollama` |
-| `LLM_ALLOW_PAID` | `false` | Allow paid API calls (`true` required for Claude/Grok) |
-| `ASK_ALLOW_HEURISTIC_FALLBACK` | `0` | `0` = fail safely; `1` = allow heuristic SQL guessing |
-| `OLLAMA_MODEL` | — | Ollama model name |
-| `VRTI_REQUEST_TIMEOUT` | `30` | SPARQL endpoint timeout (seconds) |
-| `ASK_USE_NEW_PIPELINE` | `true` | `true` = orchestrated 7-phase pipeline; `false` = legacy path |
-| `EMBEDDING_PROVIDER` | `local` | `local` (BAAI/bge-large-en-v1.5) / `cohere` / `voyage` |
-| `COHERE_API_KEY` | — | Required when `EMBEDDING_PROVIDER=cohere` |
-| `VOYAGE_API_KEY` | — | Required when `EMBEDDING_PROVIDER=voyage` (recommended on Azure) |
-| `VOYAGE_MODEL` | `voyage-3` | Voyage AI model name |
-| `ADMIN_API_KEY` | — | Protects admin endpoints (`POST /api/census/refresh`); set in production |
-| `DATABASE_URL` | — | PostgreSQL connection string; enables pgvector backend for Ask retrieval |
-| `GRAPHDB_ENABLED` | `true` | Query local GraphDB alongside SQLite and VRTI |
-| `GRAPHDB_SPARQL_ENDPOINT` | `http://localhost:7200/...` | GraphDB SPARQL endpoint |
-| `GRAPHDB_REQUEST_TIMEOUT` | `15` | GraphDB query timeout (seconds) |
-| `GRAPHRAG_ENABLED` | `true` | In-process property-graph enrichment |
-| `GRAPHRAG_VECTOR_TOP_K` | `8` | Seed nodes per question (BGE vector search) |
-| `GRAPHRAG_K_HOPS` | `2` | BFS traversal depth from seed nodes |
-| `GRAPHRAG_MAX_NODES` | `120` | Max subgraph size per query |
-
----
-
-## API endpoints
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/` | Index / map page |
-| `GET` | `/census` | Census browser page |
-| `GET` | `/analytics` | Analytics dashboards |
-| `GET` | `/ask` | LLM Q&A page |
-| `GET` | `/heritage` | Heritage monuments page |
-| `GET` | `/kg-explore` | KG explore: force graph + SQL-vs-SPARQL comparison |
-| `POST` | `/api/ask/query` | SSE-streamed Q&A pipeline |
-| `GET` | `/api/ask/llm-status` | LLM provider health check |
-| `POST` | `/api/ask/feedback` | Save thumbs up/down feedback and approved query memory |
-| `GET` | `/api/ask/townland-suggest` | Fuzzy townland suggestions |
-| `GET` | `/api/ask/pdf/<name>` | Download PDF report |
-| `GET` | `/api/census/` | Census data (JSON) |
-| `GET` | `/api/census/refresh` | Trigger VRTI census refresh |
-| `GET` | `/api/townlands/list` | Townland list |
-| `GET` | `/api/map/config` | Map configuration + centroids |
-| `GET` | `/api/unified/analytics` | Analytics module results |
-| `GET` | `/api/unified/records` | Search unified person records |
-| `GET` | `/api/exports/census` | Download latest census Excel |
-| `GET` | `/api/kg/graph` | D3 force-graph data (152 townland nodes) |
-| `GET` | `/api/kg/scenarios` | SQL-vs-SPARQL comparison scenarios |
-| `POST` | `/api/kg/compare` | Execute SQL + SPARQL and return side-by-side results |
-
----
-
-## Evaluation results (v1.0-demo-freeze)
-
-Formal evaluation run on 2026-06-10 against 75 competency questions:
-
-| Metric | Value |
-|---|---|
-| Routing accuracy | 89.3% |
-| Aggregation correctness | 100.0% |
-| SQL execution success | 100.0% |
-| Template hit rate | 100.0% |
-| LLM calls required | 0 (all answers deterministic) |
-| p50 latency | 372 ms |
-| p90 latency | 2,095 ms |
-| GraphRAG numeric delta | 0/9 (enrichment never modifies aggregates) |
-
-Full results: [`docs/11_demo_freeze.md`](docs/11_demo_freeze.md) · [`eval_results/`](eval_results/)
-
----
-
-## Claude Code
-
-This project includes [Claude Code](https://claude.ai/code) configuration in `.claude/`:
-
-| File | Purpose |
-|---|---|
-| `.claude/settings.json` | Permissions + post-edit Python syntax hook |
-| `.claude/agents/data-ingest.md` | Subagent: run data ingestion pipeline |
-| `.claude/agents/analytics-qa.md` | Subagent: verify analytics output |
-| `.claude/agents/llm-debug.md` | Subagent: debug Ask/LLM pipeline |
-| `.claude/commands/ingest.md` | `/ingest` — populate database from VRTI |
-| `.claude/commands/serve.md` | `/serve` — start dev server |
-| `.claude/commands/reset-db.md` | `/reset-db` — wipe and re-ingest |
-| `.claude/commands/check.md` | `/check` — syntax check all Python files |
-| `CLAUDE.md` | Project context for AI-assisted development |
-
----
-
-## Data sources
-
-| Source | Description |
-|---|---|
-| [VRTI Knowledge Graph](https://virtualtreasury.ie/) | Townland metadata, census records 1841–1891 |
-| Coolattin Estate GeoJSON | 152 townland boundaries with estate survey data 1827–1868 |
-| `unified_processed.csv` | 13,707 person-level records (tenants, emigrants, evictees) |
-| [National Monuments Service](https://www.archaeology.ie/) | Heritage monuments open data (ring forts, holy wells) |
-| Workhouse admission records | Fuzzy-linked via ER pipeline (140 confirmed links) |
-| `data/seed/` | Canonical townland reference, name aliases, community summaries |
-
----
-
-## Deploy to Azure App Service
-
-This app runs on **Azure App Service (Linux)** at `coolattin-app.azurewebsites.net` (resource group `coolattin-rg2`, Italy North). It uses **SQLite** with WAL mode — one App Service instance with a persistent `DATABASE_PATH`.
-
-### CI/CD (push to main → auto-deploy)
-
-Every push to `main` triggers `.github/workflows/azure-deploy.yml`:
-
-1. Logs in to Azure via OIDC (managed identity `coolattin-gh-identity`, secrets `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID`)
-2. Replaces `requirements.txt` with `requirements-azure.txt` (strips `psycopg` and heavy ML packages not used on Azure)
-3. Zips the repo (excluding venv, docs, tests, source snapshots, eval results)
-4. Deploys via `az webapp deploy --type zip`; Azure Oryx builds the venv on the target machine
-5. Enforces the gunicorn startup command via `az webapp config set`
-
-The startup command runs **2 workers × 4 gthread threads** on the `$PORT` that Azure assigns:
-
-```
-gunicorn --bind=0.0.0.0:$PORT --timeout 600 --workers 2 --worker-class gthread --threads 4 app:app
-```
-
-### Files prepared for Azure
-
-| File | Purpose |
-|---|---|
-| `requirements-azure.txt` | Azure-safe deps (no `torch`, `sentence-transformers`, `psycopg`) |
-| `Procfile` | Oryx auto-detection fallback for gunicorn command |
-| `startup.sh` | Lazy `pip install` on first boot if antenv is absent; subsequent starts reuse antenv |
-| `.webappignore` | Excludes secrets, venv, docs, tests from `az webapp up` uploads |
-| `.github/workflows/azure-deploy.yml` | Active CI/CD pipeline (OIDC + Oryx zip deploy) |
-| `.github/workflows/main_coolattin-archive.yml` | Legacy workflow (superseded; left for reference) |
-
-### Required Azure App Service settings
-
-Set these in the Azure portal or via `az webapp config appsettings set`:
-
-```bash
-az webapp config appsettings set \
-  --resource-group coolattin-rg2 \
-  --name coolattin-app \
-  --settings \
-    SCM_DO_BUILD_DURING_DEPLOYMENT=true \
-    FLASK_ENV=production \
-    SECRET_KEY="<strong-random-secret>" \
-    ASK_LLM_PROVIDER=auto \
-    OPENROUTER_API_KEY="<your-openrouter-key>" \
-    OPENROUTER_MODEL="openai/gpt-oss-20b:free" \
-    ANTHROPIC_API_KEY="<your-anthropic-key>" \
-    ASK_SYNTHESIS_MODEL=claude \
-    LLM_ALLOW_PAID=true \
-    EMBEDDING_PROVIDER=voyage \
-    VOYAGE_API_KEY="<your-voyage-key>" \
-    GROK_API_KEY="<your-grok-key>" \
-    ADMIN_API_KEY="<strong-admin-secret>" \
-    GRAPHDB_ENABLED=true \
-    GRAPHDB_SPARQL_ENDPOINT="http://51.120.71.162:7200/repositories/coolattin" \
-    GRAPHDB_REQUEST_TIMEOUT=15 \
-    GRAPHRAG_ENABLED=true \
-    GRAPHRAG_VECTOR_TOP_K=8 \
-    GRAPHRAG_K_HOPS=2 \
-    GRAPHRAG_MAX_NODES=120 \
-    DATABASE_PATH="/home/site/wwwroot/coolattin.db"
-```
-
-> **Note on embeddings:** `torch` and `sentence-transformers` (~2 GB) are excluded from the Azure build to avoid pip timeout/OOM. Set `EMBEDDING_PROVIDER=voyage` (or `cohere`) and supply the corresponding API key. The local BAAI/bge model is available only when running locally.
-
-### Logs and troubleshooting
-
-```bash
-az webapp log tail --resource-group coolattin-rg2 --name coolattin-app
-```
-
-Common failures:
-- **`gunicorn: command not found`** — the startup command was reset. The CI workflow re-enforces it on each deploy via `az webapp config set`.
-- **SSE `No final result received`** — usually a single-worker deadlock. The startup command must use `--worker-class gthread --threads 4` to allow concurrent SSE connections.
-- **Missing packages** — confirm `SCM_DO_BUILD_DURING_DEPLOYMENT=true` is set so Oryx builds from `requirements.txt` on the target machine.
-- **BGE model absent** — expected on Azure; set `EMBEDDING_PROVIDER=voyage` instead.
-
----
-
-## Dissertation context
-
-This application was developed as part of a Masters dissertation examining digital humanities approaches to Irish Famine-era estate records at **Trinity College Dublin** (MSc Computer Science — Interactive Digital Media).
-
-**Candidate:** Pranjal Yadav · **Supervisors:** Dr Ciarán Wallace (VRTI) · Prof Declan O'Sullivan (CS) · **Submission:** 3 August 2026
-
-The Coolattin Estate (owned by the Fitzwilliam family) is notable for its large-scale assisted emigration programme during the Famine years 1847–1856. This system is the first computationally integrated interface for the Coolattin records, bringing tenancy, emigration, eviction, census, and heritage landscape data into a unified natural-language-queryable interface.
+Three parallel outputs are recorded: `evidence` (supporting comparisons), `conflicts` (present but incompatible values) and `missing_evidence` (fields that could not be compared).
+
+**Asymmetric conflict override:** an impossible birth-year or timeline conflict caps the score at 0.39, forcing the no-match band. No positive signal can force a match.
+
+**Confidence bands:** `CONFIRMED_MATCH` ≥ 0.75, `POSSIBLE_MATCH` ≥ 0.60, `WEAK_CANDIDATE` ≥ 0.40, `NO_MATCH` < 0.40. These are implementation bands, not calibrated probabilities or archival verification.
+
+**Sparse-record ceiling:** a record with perfect name evidence but no place, age or timeline data reaches at most 35/60 ≈ 0.583 and cannot enter the possible-match band. This protects precision at the cost of recall in the sparse sheet.
+
+Persistence tables: `source_mentions`, `entity_resolution_candidates`, `workhouse_unified_links`, `entity_resolution_decisions`.
+
+## Ask pipeline (SRQ3)
+
+The submitted code retains two implementations. The **default orchestrated path** (`ASK_USE_NEW_PIPELINE=true`) uses a fixed direct sequence with LLM-generated candidate SQL and local NetworkX GraphRAG. The **retained routed path** uses intent routing across deterministic rules, templates and query memory with remote graph operations; earlier evaluation artefacts describe that configuration.
+
+Default pipeline stages:
+
+1. Resolve place and person references → entities and warnings
+2. Generate candidate SQLite SQL → SQL and provider metadata
+3. Retrieve local graph context where possible → bounded neighbourhood
+4. Validate, repair and execute SQL → columns, rows and provenance
+5. Retrieve optional VRTI context → hierarchy and external metadata
+6. Assemble structured and contextual evidence → evidence payload
+7. Build deterministic answer and guarded synthesis → final response
+
+**SQL guard.** Rejects empty output, multiple statements, and anything not beginning with `SELECT` or `WITH`. Blocked keywords: `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `CREATE`, `ATTACH`, `DETACH`, `PRAGMA`, `REINDEX`, `VACUUM`, `TRUNCATE`, `REPLACE`. The guard is deliberately conservative — textual blocking also rejects the valid `REPLACE()` function and may reject a blocked word inside a quoted string. It is an application-level textual safeguard, not AST parsing or a formal proof of query safety.
+
+**Bounded repair layers:** syntax/safety rejection → one corrected candidate; semantic gap → semantically corrected query; SQLite runtime error → one repaired query. If all repairs fail, heuristic SQL is used *only* when `ASK_ALLOW_HEURISTIC_FALLBACK=true`. The default is `false`, so unresolved failure produces a diagnostic row rather than a fabricated count.
+
+**GraphRAG.** Materialised graph tables load into a NetworkX `MultiDiGraph` once per process. Exact canonical seeding is preferred (e.g. `townland:AGHOWLE LOWER`); otherwise a 1,024-dimensional question vector is ranked against normalised node vectors by exact matrix multiplication (not HNSW). The seed is expanded bidirectionally to at most two hops and pruned to at most 120 nodes and 200 edges before linearisation.
+
+**Numerical evidence gate.** Three-or-more-digit numeric tokens in generated prose must be a subset of the permitted tokens from the question and evidence payload. Failure triggers stricter regeneration, provider fallback, or rejection of the rewrite — in which case the deterministic answer is shown. This is visible degradation, not silent substitution.
+
+**Provider cascade:** Claude → Grok → OpenRouter → Ollama, with failover on rate limit, timeout, transport error, empty output or numerical-gate rejection.
+
+**Streaming.** The server emits SSE-style progress, terminal result and terminal error messages. The browser consumes the POST response through `fetch()` and a `ReadableStream`, because the standard `EventSource` API does not support a POST body. Streaming is stage-based rather than token-based.
+
+## Enrichment (SRQ4)
+
+Four context dimensions, produced by separate mechanisms and kept distinct from the executed SQLite rows:
+
+| Context | Mechanism |
+| --- | --- |
+| Administrative geography | Live SPARQL against the VRTI Virtuoso endpoint |
+| Connected records | Local NetworkX traversal (default) or live VRTI/GraphDB SPARQL (retained path) |
+| Population patterns | Bound-parameter SQL over `census_record` |
+| Historic landscape | Normalised townland-name equality in Ask; browser-side point-in-polygon and Haversine on the Historic Landscape page |
+
+The VRTI client uses a 30-second timeout with a five-minute process-local cooldown after failure (not shared between Gunicorn workers). Haversine distance uses R = 6371 km and, where a townland is represented by a centroid, is point-to-point rather than minimum distance to the polygon boundary. The Ask and browser heritage association methods can disagree; the system keeps them separate and does not reconcile disagreement in a dedicated quality table.
+
+Response fields separate factual from contextual evidence: `columns` / `rows` / `row_count` (primary), versus `kg_context`, `graphrag_context`, `subgraph_context`, `discrepancies` / `fusion`.
+
+## Web interface (SRQ5)
+
+Server-rendered Jinja2 templates with page-specific JavaScript controllers. Ordinary pages consume JSON; Ask consumes a streamed POST response.
+
+| Route | Template | Role |
+| --- | --- | --- |
+| `/` | `index.html` | Map, surname and townland filtering, family groups, record details |
+| `/census` | `census.html` | Population choropleth, year selection, townland detail |
+| `/heritage` | `heritage.html` | Historic-landscape containment and proximity exploration |
+| `/ask` | `ask.html` | Natural-language questions, streamed progress, traceable results |
+| `/about` | `about.html` | Project and source context |
+| `/info` | `info.html` | Narrative estate and clearance information |
+| `/kg-explore`, `/explore-knowledge` | `kg_explore.html` | D3 relationship exploration |
+
+The Ask result panel implements layered traceability in seven sections: answer and warnings → SQLite result → graph context → explainability (tables, filters, scope, strategy, sources) → generated queries → technical details → feedback.
+
+## Evaluation
+
+Automated evaluations were run on 3 August 2026 against the authoritative root-level `coolattin.db`.
+
+### SRQ1 — Data integration
+
+| Measure | Expected | Observed | Coverage |
+| --- | --- | --- | --- |
+| Unified estate records | 13,707 | 13,707 | 100% |
+| Workhouse source mentions | 8,214 | 8,214 | 100% |
+| Estate townlands processed | 152 | 152 | 100% |
+| Townlands with geometry or centroid | 152 | 151 | 99.3% |
+| Townlands with VRTI identifier | 152 | 132 | 86.8% |
+| Townlands with OSM identifier | 152 | 132 | 86.8% |
+| Townlands with OSI identifier | 152 | 83 | 54.6% |
+
+A read-only ingestion dry run reproduced `unified_record` and `source_mentions` exactly, but the live VRTI census query returned no rows: `census_record` would have fallen from 8,033 preserved rows to 1,462, and `clearances_record` differed by +20. A destructive rebuild was therefore deliberately not performed.
+
+### SRQ2 — Entity resolution
+
+35 curated reference pairs; 4 labelled `UNCERTAIN` and excluded, leaving 31 scored.
+
+| Measure | Result |
+| --- | --- |
+| True positives / False positives | 13 / 6 |
+| False negatives / True negatives | 0 / 12 |
+| Precision | 0.684 |
+| Recall | 1.000 |
+| F1-score | 0.813 |
+
+Blocking retained 13/13 known positives (pairs completeness 1.000) with a reduction ratio of 0.998. Recurring false-positive pattern: shared surname, townland and compatible temporal evidence with insufficient forename or gender evidence to reject.
+
+Place disambiguation preserved `COOLATTIN`, `COOLATTIN PARK` and `DEERPARK ED COOLATTIN` as distinct canonical entities, and seven distinct `BALLINACOR` names. Authority-identifier consistency was 146/150 (97.3%).
+
+### SRQ3 — Traceable question answering
+
+30-question single-pass benchmark across 13 categories; 18 questions were scalar-scorable.
+
+| Outcome | Count | Percentage |
+| --- | --- | --- |
+| Numerically correct | 15 | 83.3% |
+| Incorrect | 2 | 11.1% |
+| Partially correct comparison | 1 | 5.6% |
+
+All 30 runs retained the SQL-generation or diagnostic strategy, the generated/executed/diagnostic SQL, a deterministic answer and end-to-end elapsed time.
+
+Measured failures: `evic_01_total` counted 4,108 person records with an eviction flag rather than summing the 7,763 clearance observations; `geo_01_total_townlands` counted 516 distinct `townland_norm` text values instead of the 152 canonical estate townlands; `cmp_01_emigration_vs_kg` produced different SQL across two runs. One benchmark case also described `clearances_record` as knowledge-graph evidence, showing that trace presence and trace correctness require separate evaluation.
+
+Three questions deliberately requested unrepresented information. One returned an appropriate no-data response; the crop and religion questions returned genuine but semantically tangential records — substitution rather than fabrication.
+
+Latency: min 6.32 s, p50 17.45 s, mean 21.27 s, p90 42.62 s, p95 43.56 s, max 72.57 s. Long-tail latency was associated with regeneration and provider fallback rather than SQLite execution.
+
+### SRQ4 — Enrichment coverage
+
+| Context type | Available | Represented | Coverage | Relation |
+| --- | --- | --- | --- | --- |
+| Administrative geography | 152 townlands | 133 | 87.5% | `WITHIN` |
+| Workhouse relationships | 5,134 links | 140 | 2.7% | `LINKED_TO` (stale graph) |
+| Census observations | 8,033 | 8,033 | 100% | `HAS_OBSERVATION` |
+| Clearance observations | 1,211 | 1,211 | 100% | `HAS_OBSERVATION` |
+| Person-to-place | 13,707 persons | 9,095 | 66.4% | `LOCATED_IN` |
+| Landscape features | 366 | 0 | 0% | Not represented |
+
+The workhouse figure exposed a freshness problem: the graph had been built against an earlier entity-resolution state.
+
+### SRQ5 — Pilot usability
+
+Seven consenting adult participants (3 historical researchers/academics, 2 archivists/heritage professionals, 2 technical). 18 custom five-point statements, 126 valid item responses, overall mean **4.00/5**. Not the standard SUS, so no SUS score is reported.
+
+Highest: information sufficient for historical exploration 4.57; map/geospatial view 4.43; satisfaction 4.29; found relevant information 4.29; interface easy to understand 4.29. Lowest: Ask helped explore the archive 3.57; Ask answer understandable 3.14; Ask made the source of the answer clear 3.14.
+
+### Silent-degradation cases
+
+The evaluation's methodological finding is that successful execution is necessary but insufficient. Five components executed successfully while representing incomplete or misleading states: VRTI census retrieval returning zero rows, stale graph freshness, Ask semantic substitution, provenance mislabelling and provider fallback latency.
+
+## Scope and assumptions
+
+- **Geographic/temporal.** The principal Coolattin Estate, County Wicklow. Townland is the primary geographic unit. The 1842 survey was associated with 153 townlands. Estate population observations: 1827, 1839, 1848, 1850, 1860, 1868. Clearances: 1847–1856. Standard census: 1841, 1851, 1861, 1871, 1881, 1891. No values are interpolated for missing years.
+- **Evidential.** The unified estate file contains 13,707 person-level source records — source-derived mentions, not necessarily 13,707 distinct individuals. Absence from the data is not proof of non-existence; missing numerical values are not interpreted as zero.
+- **Identity.** `CONFIRMED_MATCH` and similar labels are algorithmic, not historical proof. Person nodes in the local graph represent record entries, not necessarily unique individuals.
+- **Analytical.** Ask is not a general question-answering system for Irish history. Public-facing interfaces are read-only with respect to the historical corpus.
+- **Enrichment.** The local property graph is derived from the integrated project data, so agreement between it and SQLite is not independent corroboration. Heritage proximity is a spatial association, not a documented historical relationship.
+- **Reproducibility.** Strongest for the preserved local snapshot, deterministic transformations, stored SQL and recorded result rows. LLM output varies across providers and versions; live VRTI enrichment varies with endpoint availability. The Python environment is documented but not hash-pinned, and no complete repeated clean-ingestion experiment was performed.
+
+## Reproduction
+
+The authoritative database is stored via Git LFS. There is no single command that rebuilds every artefact.
+
+1. Clone, `git checkout v1.0-dissertation`, `git lfs pull` to materialise `coolattin.db`, verify expected inputs
+2. Create a Python 3.12 environment and install the documented local requirements
+3. Provide non-secret configuration (database path, Flask settings, optional services)
+4. Create or migrate the core SQLite schema
+5. Run the explicit townland, census and clearance ingestion
+6. Seed the unified person and heritage tables
+7. Run the workhouse entity-resolution process where links are required
+8. Rebuild the local graph from the intended relational snapshot
+9. Regenerate the Turtle file where RDF or GraphDB comparison is required
+10. Start Flask and verify ordinary pages and the Ask route
+11. Execute the relevant evaluation inputs using the recorded configuration
+
+A successful schema initialisation does not establish that source tables, links or graph artefacts have been populated.
+
+### Submitted artefact state
+
+| Item | Value |
+| --- | --- |
+| Submission commit | `6f5fc4a01f6a53a18adb946c87818d38f99a7942` |
+| Tag | `v1.0-dissertation` |
+| Database | `coolattin.db` (repository root, Git LFS) |
+| Checksum | `e719a158bec8fe51b1160ed9370140579b3c64405ac34ca1465ecc49b1d765ea` |
+| Size | 188,264,448 bytes (179.54 MiB) |
+| Last data write | 10 August 2026, 08:40:17 IST; WAL checkpointed 11 August 2026, 14:51:38 IST |
+| Graph snapshot | Built 7 August 2026, 09:43:16 — 49,081 nodes, 69,302 edges, 3,501 communities, `BUILD CLEAN` |
+| Ask evaluation run | 3 August 2026, 23:48 IST; `ASK_USE_NEW_PIPELINE=true`; Anthropic `claude-sonnet-4-6`; GraphRAG enabled |
+
+The submitted database post-dates the evaluation run, and the graph was rebuilt between them. The preserved evaluation JSON and console trace are the primary records of that run; re-executing the harness against the submitted database may legitimately produce different results.
+
+### Critical runtime controls
+
+| Control | Default | Effect |
+| --- | --- | --- |
+| `ASK_USE_NEW_PIPELINE` | `true` | Selects the final orchestrated Ask path over the retained routed architecture |
+| `ASK_ALLOW_HEURISTIC_FALLBACK` | `false` | Prevents keyword-derived emergency SQL unless explicitly enabled |
+| `GRAPHRAG_ENABLED` | `true` | Enables local NetworkX retrieval when a suitable seed is available |
+| `GRAPHDB_ENABLED` | `true` | Makes GraphDB available to retained paths; does not activate numerical fusion in the direct route |
+| `ASK_LLM_PROVIDER` | `auto` | Selects or prioritises the candidate-SQL provider |
+
+Configuration precedence: process environment → `.env.local` → `.env` → code defaults. Azure Application Settings therefore override local files. Secrets live in App Service settings, not committed files.
+
+## Deployment
+
+A single Azure App Service application served by Gunicorn (2 workers × 4 threads). Flask, SQLite and the local NetworkX graph run inside the App Service process; VRTI, GraphDB and cloud model providers are accessed over the network. Deployment authenticates through OpenID Connect, selects the trimmed Azure requirements, packages the repository and deploys a ZIP; dependency installation is performed by Azure Oryx. The workflow does not provision a co-located GraphDB, pgvector service or Ollama process. Enabling a feature flag does not provision the corresponding external service.
+
+## Evaluation evidence
+
+| SRQ | Primary repository evidence |
+| --- | --- |
+| SRQ1 | `eval_plan/scripts/rq1_data_integration.py`; `eval_plan/evidence/RQ1_raw_output.txt` |
+| SRQ2 | `eval/er_gold.csv`; `eval_plan/scripts/rq2_entity_resolution.py`; `eval_plan/evidence/RQ2_raw_output.txt`; `eval_results/authority_id_consistency.md` |
+| SRQ3 | `eval_plan/scripts/rq3_full30.py`; `eval_plan/evidence/RQ3_full30_raw_output.json`; `eval_plan/evidence/RQ3_full30_console_output.txt`; `eval_plan/evidence/RQ3_pilot_raw_output.json` |
+| SRQ4 | `eval_plan/scripts/rq4_enrichment.py`; `eval_plan/evidence/RQ4_raw_output.txt` |
+| SRQ5 | Anonymised aggregate ratings and qualitative themes (participant-level raw data excluded from the public repository) |
+
+Credentials, API keys, local secrets and participant-level raw response data are excluded from the public repository and dissertation package.
+
+## Ethics
+
+Ethical approval was obtained; participant information, consent and eligibility gates, the pilot procedure and the questionnaire are preserved in Appendix D of the dissertation. Generative-AI tools were used in a limited and supervised capacity for language and clarity, and as an exploratory aid; all outputs were critically reviewed and independently verified by the author.
+
+## Limitations
+
+The artefact does not remove uncertainty from the historical material or replace archival interpretation. It provides an inspectable computational environment through which the available evidence, generated queries and candidate relationships can be examined. Findings are bounded by the Coolattin case study and are not presented as universally validated solutions for historical archives.

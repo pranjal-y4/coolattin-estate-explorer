@@ -36,7 +36,7 @@ jobs:
             -x "__pycache__/*" -x "*.pyc" \
             -x ".env.local" -x ".env" \
             -x "*.db-wal" -x "*.db-shm" -x "*.db-wal.bak" -x "*.db.bak" \
-            -x "node_modules/*" -x "exports/*" -x ".claude/*" \
+            -x "node_modules/*" -x "exports/*" \
             -x "eval_results/*" -x "*.zip" \
             -x "_archive/*" -x "docs/*" -x "eval/*" \
             -x "tests/*" -x "scripts/*" \

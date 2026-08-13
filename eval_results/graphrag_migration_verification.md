@@ -1,7 +1,7 @@
 # GraphRAG Migration Verification Report
 
 **Date:** 2026-06-09  
-**Auditor:** Claude Code (automated)  
+**Auditor:** Automated verification script  
 **Branch:** main  
 **DB:** coolattin.db (SQLite)
 
